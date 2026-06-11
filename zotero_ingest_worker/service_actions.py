@@ -35,6 +35,17 @@ def run_post_action(
     full_run_manager: FullRunManager,
 ) -> dict[str, Any]:
     config = apply_request_overrides(base_config, payload)
+
+    if path == "/api/zotero/pipeline/full-run/start":
+        return full_run_manager.start(payload)
+    if path == "/api/zotero/pipeline/full-run/status":
+        return full_run_manager.status(
+            _optional_str(payload.get("run_id")),
+            event_limit=_int_value(payload.get("event_limit"), 50),
+        )
+    if path == "/api/zotero/pipeline/full-run/stop":
+        return full_run_manager.stop(_optional_str(payload.get("run_id")))
+
     metadata_processor = ZoteroMetadataProcessor(config)
 
     if path == "/api/zotero/metadata/queue/summary":
@@ -147,15 +158,6 @@ def run_post_action(
         if not job_id:
             raise ValueError("metadata queue/cancel requires job_id.")
         return {"ok": True, "job": metadata_processor.state.cancel_metadata_job(job_id)}
-    if path == "/api/zotero/pipeline/full-run/start":
-        return full_run_manager.start(payload)
-    if path == "/api/zotero/pipeline/full-run/status":
-        return full_run_manager.status(
-            _optional_str(payload.get("run_id")),
-            event_limit=_int_value(payload.get("event_limit"), 50),
-        )
-    if path == "/api/zotero/pipeline/full-run/stop":
-        return full_run_manager.stop(_optional_str(payload.get("run_id")))
     raise ValueError(f"Unsupported POST action: {path}")
 
 
