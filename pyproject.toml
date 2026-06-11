@@ -1,0 +1,20 @@
+[project]
+name = "zotero-ingest-worker"
+version = "0.1.0"
+description = "Small Zotero ingest worker for metadata enrichment and HTML/PDF attachment discovery."
+requires-python = ">=3.11"
+dependencies = [
+  "cryptography>=3.1",
+  "playwright>=1.45",
+  "pypdf>=4.0",
+]
+
+[project.scripts]
+zotero-ingest-worker = "zotero_ingest_worker.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["zotero_ingest_worker*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+norecursedirs = ["data", "pytest-cache-files-*"]

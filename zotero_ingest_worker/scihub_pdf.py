@@ -1,0 +1,444 @@
+from __future__ import annotations
+
+import importlib.util
+import re
+import urllib.error
+import urllib.parse
+import urllib.request
+from dataclasses import dataclass
+from datetime import UTC, datetime
+from pathlib import Path
+from typing import Any
+
+from .config import DEFAULT_SCIHUB_MIRRORS, PROJECT_ROOT, WorkerConfig
+from .package_paths import ensure_local_package_paths
+
+ensure_local_package_paths()
+
+from zotero_metadata_enrichment import (  # type: ignore[import-not-found]
+    extract_doi_from_text as package_extract_doi_from_text,
+    normalize_doi as package_normalize_doi,
+)
+from zotero_metadata_enrichment.pdf_sources import (  # type: ignore[import-not-found]
+    assess_pdf_bytes_identity as package_assess_pdf_bytes_identity,
+)
+from zotero_metadata_enrichment.url_safety import (  # type: ignore[import-not-found]
+    validate_fetch_url as package_validate_fetch_url,
+)
+
+
+# Ported from NixWrk/Zotero_SciHub_module (src/scihubShared.ts).
+DEFAULT_SCIHUB_URL = "https://sci-hub.ru/"
+DEFAULT_SCIHUB_USER_AGENT = (
+    "Mozilla/5.0 (iPhone; CPU iPhone OS 11_3_1 like Mac OS X) "
+    "AppleWebKit/603.1.30 (KHTML, like Gecko) Version/10.0 Mobile/14E304 Safari/602.1"
+)
+PDF_NOT_AVAILABLE_MARKERS = (
+    "please try to search again using doi",
+    "статья не найдена в базе",
+)
+
+DEFAULT_DOWNLOAD_DIR = PROJECT_ROOT / "data" / "ingest" / "scihub_downloads"
+
+_PDF_TAG_RE = re.compile(r"""<[^>]*\bid\s*=\s*(?:"pdf"|'pdf'|pdf)[^>]*>""", re.IGNORECASE)
+_SRC_RE = re.compile(
+    r"""\bsrc\s*=\s*(?:"(?P<dq>[^"]+)"|'(?P<sq>[^']+)'|(?P<bare>[^\s>]+))""",
+    re.IGNORECASE,
+)
+# Current sci-hub markup no longer uses <embed id="pdf">; the PDF is a plain
+# href/src to a *.pdf (typically under /storage/ or /downloads/).
+_PDF_ATTR_RE = re.compile(
+    r"""(?:href|src)\s*=\s*(?:"([^"]+\.pdf[^"]*)"|'([^']+\.pdf[^']*)')""",
+    re.IGNORECASE,
+)
+_PDF_QUOTED_RE = re.compile(r"""["']([^"']+\.pdf(?:[?#][^"']*)?)["']""", re.IGNORECASE)
+
+
+class SciHubError(RuntimeError):
+    pass
+
+
+@dataclass(frozen=True)
+class SciHubResolveResult:
+    doi: str
+    scihub_url: str
+    pdf_url: str
+
+
+@dataclass(frozen=True)
+class SciHubPdfOptions:
+    item_key: str
+    doi: str = ""
+    data_dir: str = ""
+    output_dir: Path | None = None
+    mirrors: tuple[str, ...] = DEFAULT_SCIHUB_MIRRORS
+    user_agent: str = DEFAULT_SCIHUB_USER_AGENT
+    timeout_seconds: int = 60
+    max_bytes: int = 120_000_000
+    force_attach: bool = False
+
+
+def normalize_base_url(base_url: str) -> str:
+    base_url = (base_url or DEFAULT_SCIHUB_URL).strip()
+    return base_url if base_url.endswith("/") else f"{base_url}/"
+
+
+def normalize_doi_value(doi: str) -> str:
+    value = (doi or "").strip()
+    value = re.sub(r"^\s*doi:\s*", "", value, flags=re.IGNORECASE).strip()
+    return value
+
+
+def url_to_https(url: str) -> str:
+    safe_url = urllib.parse.urlparse(re.sub(r"^//", "https://", url.strip()))
+    return urllib.parse.urlunparse(safe_url._replace(scheme="https"))
+
+
+def extract_raw_pdf_url_from_html(html: str) -> str:
+    # 1) Legacy / mirror markup: an element with id="pdf" carrying the src.
+    tag_match = _PDF_TAG_RE.search(html)
+    if tag_match:
+        src_match = _SRC_RE.search(tag_match.group(0))
+        if src_match:
+            raw = (src_match.group("dq") or src_match.group("sq") or src_match.group("bare") or "").strip()
+            if raw:
+                return raw
+
+    # 2) Current sci-hub.ru markup: a href/src pointing at a *.pdf file.
+    candidates = [(m.group(1) or m.group(2)).strip() for m in _PDF_ATTR_RE.finditer(html)]
+    if not candidates:
+        candidates = [
+            m.group(1).strip()
+            for m in _PDF_QUOTED_RE.finditer(html)
+            if not m.group(1).strip().lower().startswith("data:")
+        ]
+    candidates = [c for c in candidates if c]
+    if not candidates:
+        return ""
+
+    def _score(url: str) -> int:
+        lowered = url.lower()
+        score = 0
+        if "/storage/" in lowered or "/downloads/" in lowered:
+            score += 2
+        if lowered.startswith(("//", "http", "/")):
+            score += 1
+        return score
+
+    return max(candidates, key=_score)
+
+
+def to_absolute_pdf_url(raw_pdf_url: str, *, base_url: str) -> str:
+    raw = raw_pdf_url.strip()
+    if not raw:
+        return ""
+    if raw.startswith("//"):
+        absolute = f"https:{raw}"
+    elif urllib.parse.urlparse(raw).scheme:
+        absolute = raw
+    else:
+        absolute = urllib.parse.urljoin(base_url, raw)
+    return url_to_https(absolute)
+
+
+def is_pdf_not_available_markup(html: str | None) -> bool:
+    if not html:
+        return True
+    lowered = html.casefold()
+    return any(marker in lowered for marker in PDF_NOT_AVAILABLE_MARKERS)
+
+
+def resolve_pdf_url(
+    doi: str,
+    *,
+    mirrors: tuple[str, ...] | list[str] | None = None,
+    user_agent: str = DEFAULT_SCIHUB_USER_AGENT,
+    timeout_seconds: int = 60,
+    max_bytes: int = 15_000_000,
+) -> SciHubResolveResult:
+    """Build the Sci-Hub request URL automatically from the DOI and resolve the
+    PDF link, trying each configured mirror until one responds with a link."""
+    normalized_doi = normalize_doi_value(doi)
+    if not normalized_doi:
+        raise SciHubError("A non-empty DOI is required for Sci-Hub resolution.")
+
+    mirror_list = [normalize_base_url(m) for m in (mirrors or DEFAULT_SCIHUB_MIRRORS) if str(m).strip()]
+    if not mirror_list:
+        mirror_list = [normalize_base_url(DEFAULT_SCIHUB_URL)]
+
+    errors: list[str] = []
+    for base_url in mirror_list:
+        try:
+            return _resolve_on_mirror(
+                normalized_doi,
+                base_url=base_url,
+                user_agent=user_agent,
+                timeout_seconds=timeout_seconds,
+                max_bytes=max_bytes,
+            )
+        except Exception as exc:  # noqa: BLE001 - try the next mirror on any failure
+            host = urllib.parse.urlparse(base_url).netloc or base_url
+            errors.append(f"{host}: {exc}")
+            continue
+    raise SciHubError(
+        f"All Sci-Hub mirrors failed for DOI {normalized_doi} ({'; '.join(errors)})."
+    )
+
+
+def _resolve_on_mirror(
+    normalized_doi: str,
+    *,
+    base_url: str,
+    user_agent: str,
+    timeout_seconds: int,
+    max_bytes: int,
+) -> SciHubResolveResult:
+    scihub_url = urllib.parse.urljoin(base_url, normalized_doi)
+
+    safety = package_validate_fetch_url(scihub_url)
+    if not safety.ok:
+        raise SciHubError(f"Unsafe Sci-Hub URL: {safety.reason}")
+
+    request = urllib.request.Request(
+        scihub_url,
+        headers={
+            "Accept": "text/html,application/xhtml+xml;q=0.9,*/*;q=0.1",
+            "User-Agent": user_agent,
+        },
+        method="GET",
+    )
+    with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
+        final_url = getattr(response, "url", scihub_url)
+        body = response.read(max_bytes + 1)
+    html = body.decode("utf-8", errors="replace")
+
+    if is_pdf_not_available_markup(html):
+        raise SciHubError(f"document not available on {urllib.parse.urlparse(base_url).netloc}")
+
+    raw_pdf_url = extract_raw_pdf_url_from_html(html)
+    if not raw_pdf_url:
+        raise SciHubError(f"no PDF link on {urllib.parse.urlparse(base_url).netloc}")
+
+    pdf_url = to_absolute_pdf_url(raw_pdf_url, base_url=final_url or scihub_url)
+    if not pdf_url:
+        raise SciHubError("could not normalize the PDF URL")
+
+    return SciHubResolveResult(doi=normalized_doi, scihub_url=scihub_url, pdf_url=pdf_url)
+
+
+def download_scihub_pdf(
+    doi: str,
+    *,
+    output_dir: Path,
+    mirrors: tuple[str, ...] | list[str] | None = None,
+    user_agent: str = DEFAULT_SCIHUB_USER_AGENT,
+    timeout_seconds: int = 60,
+    max_bytes: int = 120_000_000,
+    expected_title: str = "",
+) -> dict[str, Any]:
+    try:
+        resolved = resolve_pdf_url(
+            doi,
+            mirrors=mirrors,
+            user_agent=user_agent,
+            timeout_seconds=timeout_seconds,
+        )
+    except SciHubError as exc:
+        return {"ok": False, "status": "unresolved", "error": str(exc), "doi": doi}
+    except Exception as exc:  # noqa: BLE001 - surface transport errors as a status
+        return {"ok": False, "status": "resolve_error", "error": str(exc), "doi": doi}
+
+    safety = package_validate_fetch_url(resolved.pdf_url)
+    if not safety.ok:
+        return {
+            "ok": False,
+            "status": "unsafe_url",
+            "error": safety.reason,
+            "scihub_url": resolved.scihub_url,
+            "pdf_url": resolved.pdf_url,
+            "doi": resolved.doi,
+        }
+
+    request = urllib.request.Request(
+        resolved.pdf_url,
+        headers={"Accept": "application/pdf,*/*;q=0.1", "User-Agent": user_agent},
+        method="GET",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
+            final_url = getattr(response, "url", resolved.pdf_url)
+            content_type = str(response.headers.get("Content-Type") or "")
+            body = response.read(max_bytes + 1)
+    except urllib.error.HTTPError as exc:
+        return {
+            "ok": False,
+            "status": "http_error",
+            "error": f"HTTP {exc.code}",
+            "scihub_url": resolved.scihub_url,
+            "pdf_url": resolved.pdf_url,
+            "doi": resolved.doi,
+        }
+    except Exception as exc:  # noqa: BLE001
+        return {
+            "ok": False,
+            "status": "fetch_error",
+            "error": str(exc),
+            "scihub_url": resolved.scihub_url,
+            "pdf_url": resolved.pdf_url,
+            "doi": resolved.doi,
+        }
+
+    if len(body) > max_bytes:
+        return {
+            "ok": False,
+            "status": "too_large",
+            "size": len(body),
+            "scihub_url": resolved.scihub_url,
+            "pdf_url": resolved.pdf_url,
+            "doi": resolved.doi,
+        }
+    mime = content_type.split(";", 1)[0].strip().casefold()
+    if mime not in {"application/pdf", "application/x-pdf"} and not body.startswith(b"%PDF"):
+        return {
+            "ok": False,
+            "status": "non_pdf",
+            "content_type": content_type,
+            "size": len(body),
+            "scihub_url": resolved.scihub_url,
+            "pdf_url": resolved.pdf_url,
+            "doi": resolved.doi,
+        }
+
+    output_dir.mkdir(parents=True, exist_ok=True)
+    stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    output_path = output_dir / f"scihub_{stamp}_{_safe_doi(resolved.doi)}.pdf"
+    output_path.write_bytes(body)
+
+    identity = package_assess_pdf_bytes_identity(body, expected_title=expected_title)
+    needs_ocr = bool(identity.get("needs_ocr"))
+    if expected_title and not identity.get("ok") and not needs_ocr:
+        output_path.unlink(missing_ok=True)
+        return {
+            "ok": False,
+            "status": "identity_mismatch",
+            "content_type": content_type,
+            "size": len(body),
+            "final_url": final_url,
+            "scihub_url": resolved.scihub_url,
+            "pdf_url": resolved.pdf_url,
+            "doi": resolved.doi,
+            "identity": identity,
+        }
+    return {
+        "ok": True,
+        "status": "downloaded_needs_ocr" if needs_ocr else "downloaded",
+        "source": "scihub",
+        "kind": "pdf",
+        "url": resolved.pdf_url,
+        "final_url": final_url,
+        "content_type": content_type,
+        "size": len(body),
+        "output_path": str(output_path),
+        "scihub_url": resolved.scihub_url,
+        "pdf_url": resolved.pdf_url,
+        "doi": resolved.doi,
+        "identity": identity,
+    }
+
+
+def download_and_attach_scihub_pdf(
+    config: WorkerConfig,
+    options: SciHubPdfOptions,
+) -> dict[str, Any]:
+    module = _script_module()
+    try:
+        metadata, store = module.find_item(
+            config,
+            item_key=options.item_key,
+            data_dir=options.data_dir,
+        )
+    except Exception as exc:  # noqa: BLE001
+        return {"ok": False, "status": "item_not_found", "error": str(exc)}
+
+    inventory = store.item_full_text_inventory(metadata)
+    if inventory.get("has_pdf") and not options.force_attach:
+        return {
+            "ok": True,
+            "status": "parent_already_has_pdf",
+            "download": {"ok": True, "skipped": True, "reason": "parent_already_has_pdf"},
+            "inventory": inventory,
+        }
+
+    # The DOI is derived automatically from the item metadata when it was not
+    # supplied, so the request URL is always built inside the worker.
+    doi = normalize_doi_value(options.doi) or doi_from_metadata(metadata)
+    if not doi:
+        return {
+            "ok": False,
+            "status": "missing_doi",
+            "download": {"ok": False, "status": "missing_doi", "reason": "no_doi_for_item"},
+        }
+
+    download = download_scihub_pdf(
+        doi,
+        output_dir=options.output_dir or DEFAULT_DOWNLOAD_DIR,
+        mirrors=options.mirrors,
+        user_agent=options.user_agent,
+        timeout_seconds=max(1, int(options.timeout_seconds)),
+        max_bytes=options.max_bytes,
+        expected_title=metadata.title or "",
+    )
+    payload: dict[str, Any] = {
+        "ok": bool(download.get("ok")),
+        "status": download.get("status"),
+        "download": download,
+    }
+    if not download.get("ok"):
+        return payload
+
+    attach = module.attach_pdf_to_zotero_parent(
+        config,
+        item_key=options.item_key,
+        source_path=Path(str(download["output_path"])),
+        data_dir=options.data_dir,
+        force=options.force_attach,
+    )
+    payload["attach"] = attach
+    payload["ok"] = bool(attach.get("ok"))
+    payload["status"] = (
+        "attached"
+        if payload["ok"]
+        else str(attach.get("status") or attach.get("reason") or "attach_failed")
+    )
+    return payload
+
+
+def doi_from_metadata(metadata: Any) -> str:
+    """Best-effort automatic DOI extraction from a LocalItemMetadata object."""
+    fields = getattr(metadata, "fields", None)
+    if isinstance(fields, dict):
+        explicit = str(fields.get("DOI") or "").strip()
+        if explicit:
+            normalized = package_normalize_doi(explicit)
+            if normalized:
+                return normalized
+    parts: list[str] = [str(getattr(metadata, "title", "") or "")]
+    if isinstance(fields, dict):
+        parts.extend(str(value) for value in fields.values())
+    found = package_extract_doi_from_text(" ".join(part for part in parts if part)) or ""
+    return package_normalize_doi(found)
+
+
+def _safe_doi(doi: str) -> str:
+    cleaned = re.sub(r"[^A-Za-z0-9._-]+", "_", doi.strip())
+    return cleaned.strip("._-")[:80] or "document"
+
+
+def _script_module() -> Any:
+    script_path = PROJECT_ROOT / "scripts" / "researchgate_pdf_browser_download.py"
+    spec = importlib.util.spec_from_file_location("researchgate_pdf_browser_download", script_path)
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"Unable to load Zotero parent attach helper: {script_path}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
