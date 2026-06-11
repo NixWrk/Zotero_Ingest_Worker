@@ -7,7 +7,7 @@ from types import SimpleNamespace
 from typing import Any
 
 
-SCRIPT_PATH = Path(__file__).resolve().parents[1] / "scripts" / "researchgate_pdf_browser_download.py"
+SCRIPT_PATH = Path(__file__).resolve().parents[1] / "scripts" / "providers" / "researchgate_pdf_browser_download.py"
 SPEC = importlib.util.spec_from_file_location("researchgate_pdf_browser_download", SCRIPT_PATH)
 assert SPEC is not None and SPEC.loader is not None
 rg = importlib.util.module_from_spec(SPEC)

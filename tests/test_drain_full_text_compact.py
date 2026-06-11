@@ -4,8 +4,8 @@ import json
 import threading
 import time
 
-import scripts.drain_full_text_compact as drain_full_text_compact
-from scripts.drain_full_text_compact import compact_batch, summarize_job
+import scripts.drains.full_text_compact as drain_full_text_compact
+from scripts.drains.full_text_compact import compact_batch, summarize_job
 
 
 def test_compact_full_text_summary_uses_worker_status_and_accepted_html() -> None:

@@ -1,12 +1,8 @@
 from __future__ import annotations
 
 import asyncio
-import hashlib
-import json
 import os
-import re
 import shutil
-import socket
 import urllib.error
 import urllib.parse
 from dataclasses import replace as dataclass_replace
@@ -22,27 +18,7 @@ from zotero_metadata_enrichment import (  # type: ignore[import-not-found]
     MetadataCandidate,
     MetadataEnricher,
     discover_and_download_full_text,
-    build_metadata_diff as package_build_metadata_diff,
-    build_metadata_patch as package_build_metadata_patch,
-    extract_arxiv_id_from_text as package_extract_arxiv_id_from_text,
-    extract_doi_from_text as package_extract_doi_from_text,
-    normalize_arxiv_id as package_normalize_arxiv_id,
-    normalize_doi as package_normalize_doi,
 )
-from zotero_metadata_enrichment.providers.crossref import (  # type: ignore[import-not-found]
-    crossref_work_to_candidate as package_crossref_work_to_candidate,
-)
-from zotero_metadata_enrichment.providers.zotero_translation_server import (  # type: ignore[import-not-found]
-    zotero_translator_item_to_candidate as package_zotero_translator_item_to_candidate,
-)
-from zotero_metadata_enrichment.text import (  # type: ignore[import-not-found]
-    normalize_space as package_normalize_space,
-    title_match_score as package_title_match_score,
-)
-
-
-def metadata_job_owner() -> str:
-    return f"zotero-worker-metadata:{socket.gethostname()}:{os.getpid()}"
 
 from .arxiv_html import (
     ArxivHtmlJobService,
@@ -51,6 +27,11 @@ from .arxiv_html import (
     validate_arxiv_html,
 )
 from .config import WorkerConfig
+from .metadata_backlog_scanner import (
+    attachment_backlog_scan as scan_attachment_backlog,
+    full_text_backlog_scan as scan_full_text_backlog,
+    scihub_pdf_backlog_scan as scan_scihub_pdf_backlog,
+)
 from .full_text_attachment import (
     FullTextAttachmentService,
     _best_successful_html_download,
@@ -61,7 +42,6 @@ from .full_text_attachment import (
 from . import full_text_discovery
 from .full_text_inventory import (
     inventory_fingerprint,
-    should_skip_full_text_scan,
 )
 from .local_zotero import LocalAttachment, LocalItemMetadata, LocalZoteroStore
 from .local_attachment_sync import sync_parent_metadata_local
@@ -73,6 +53,42 @@ from .metadata_jobs import (
     METADATA_JOB_SCIHUB_PDF,
     metadata_enricher_config_kwargs,
     metadata_queue_key,
+)
+from .metadata_processor_helpers import (
+    build_metadata_diff,
+    build_metadata_patch,
+    crossref_work_to_candidate,
+    extract_arxiv_id_from_text,
+    extract_doi_from_text,
+    filter_metadata_diff_for_item_type,
+    first_full_text_output_path,
+    full_text_worker_status,
+    metadata_job_owner,
+    normalize_arxiv_id,
+    normalize_doi,
+    title_match_score,
+    zotero_translator_item_to_candidate,
+    _doi_for_scihub,
+    _enqueue_item_result,
+    _enqueue_result,
+    _first_researchgate_browser_fallback,
+    _first_successful_pdf_download,
+    _full_text_ocr_candidates,
+    _http_error_body,
+    _is_nonretryable_worker_error,
+    _merge_extra,
+    _metadata_haystack,
+    _normalize_identifier,
+    _patch_digest,
+    _researchgate_result_retryable,
+    _researchgate_url_from_job,
+    _safe_filename,
+    _scihub_doi_from_job,
+    _scihub_query_candidates,
+    _scihub_query_from_job,
+    _scihub_query_type_from_job,
+    _scihub_result_retryable,
+    _title_for_lookup,
 )
 from .relay_client import ZoteroRelayClient, relay_url_candidates as _relay_url_candidates
 from .researchgate_pdf import ResearchGatePdfOptions, download_and_attach_researchgate_pdf
@@ -113,7 +129,8 @@ class ZoteroMetadataProcessor:
         data_dir: str | None = None,
         collection: str | None = None,
     ) -> dict[str, Any]:
-        return self._backlog_scan(
+        return scan_attachment_backlog(
+            self,
             job_type=METADATA_JOB_ENRICH,
             max_items=max_items,
             limit=limit,
@@ -133,7 +150,8 @@ class ZoteroMetadataProcessor:
         data_dir: str | None = None,
         collection: str | None = None,
     ) -> dict[str, Any]:
-        return self._backlog_scan(
+        return scan_attachment_backlog(
+            self,
             job_type=METADATA_JOB_ARXIV_HTML,
             max_items=max_items,
             limit=limit,
@@ -153,7 +171,8 @@ class ZoteroMetadataProcessor:
         data_dir: str | None = None,
         collection: str | None = None,
     ) -> dict[str, Any]:
-        return self._full_text_backlog_scan(
+        return scan_full_text_backlog(
+            self,
             max_items=max_items,
             limit=limit,
             force=force,
@@ -172,7 +191,8 @@ class ZoteroMetadataProcessor:
         data_dir: str | None = None,
         collection: str | None = None,
     ) -> dict[str, Any]:
-        return self._scihub_pdf_backlog_scan(
+        return scan_scihub_pdf_backlog(
+            self,
             max_items=max_items,
             limit=limit,
             force=force,
@@ -180,130 +200,6 @@ class ZoteroMetadataProcessor:
             data_dir=data_dir,
             collection=collection,
         )
-
-    def _full_text_backlog_scan(
-        self,
-        *,
-        max_items: int | None,
-        limit: int | None,
-        force: bool,
-        library_id: str | None,
-        data_dir: str | None,
-        collection: str | None,
-    ) -> dict[str, Any]:
-        self.config.validate_for_scan()
-        scanned = 0
-        queued = 0
-        skipped = 0
-        results: list[dict[str, Any]] = []
-        effective_limit = limit if limit is not None and limit > 0 else None
-
-        for library_config in self._library_configs(library_id=library_id, data_dir=data_dir):
-            zotero = LocalZoteroStore(library_config)
-            scan_limit = max_items if max_items is not None else 1_000_000
-            for metadata in zotero.iter_regular_items(
-                max_items=scan_limit,
-                collection=collection,
-            ):
-                scanned += 1
-                inventory = zotero.item_full_text_inventory(metadata)
-                if should_skip_full_text_scan(inventory) and not force:
-                    result = _enqueue_item_result(
-                        metadata,
-                        "html_exists",
-                        message="Parent item already has source HTML and PDF attachments.",
-                        inventory=inventory,
-                    )
-                else:
-                    result = self._enqueue_parent_full_text_item(
-                        zotero=zotero,
-                        metadata=metadata,
-                        inventory=inventory,
-                        force=force,
-                        reason="full_text_backlog_scan",
-                    )
-                results.append(result)
-                job = result.get("job") or {}
-                if job.get("created") and job.get("status") == "queued":
-                    queued += 1
-                else:
-                    skipped += 1
-                if effective_limit is not None and queued >= effective_limit:
-                    break
-            if effective_limit is not None and queued >= effective_limit:
-                break
-
-        return {
-            "ok": True,
-            "mode": "full_text_backlog_scan",
-            "job_type": METADATA_JOB_FULL_TEXT,
-            "scanned": scanned,
-            "queued": queued,
-            "skipped": skipped,
-            "queue": self.state.metadata_queue_summary(job_type=METADATA_JOB_FULL_TEXT),
-            "results": results,
-        }
-
-    def _scihub_pdf_backlog_scan(
-        self,
-        *,
-        max_items: int | None,
-        limit: int | None,
-        force: bool,
-        library_id: str | None,
-        data_dir: str | None,
-        collection: str | None,
-    ) -> dict[str, Any]:
-        self.config.validate_for_scan()
-        scanned = 0
-        queued = 0
-        skipped = 0
-        results: list[dict[str, Any]] = []
-        effective_limit = limit if limit is not None and limit > 0 else None
-
-        for library_config in self._library_configs(library_id=library_id, data_dir=data_dir):
-            zotero = LocalZoteroStore(library_config)
-            scan_limit = max_items if max_items is not None else 1_000_000
-            for metadata in zotero.iter_regular_items(
-                max_items=scan_limit,
-                collection=collection,
-            ):
-                scanned += 1
-                inventory = zotero.item_full_text_inventory(metadata)
-                if inventory.get("has_pdf") and not force:
-                    result = _enqueue_item_result(
-                        metadata,
-                        "pdf_exists",
-                        message="Parent item already has a PDF attachment.",
-                        inventory=inventory,
-                    )
-                    skipped += 1
-                else:
-                    result = self._enqueue_scihub_pdf_jobs_for_item(
-                        metadata=metadata,
-                        inventory=inventory,
-                        reason="scihub_pdf_backlog_scan",
-                        force=force,
-                    )
-                    queued += int(result.get("queued") or 0)
-                    if not result.get("queued"):
-                        skipped += 1
-                results.append(result)
-                if effective_limit is not None and queued >= effective_limit:
-                    break
-            if effective_limit is not None and queued >= effective_limit:
-                break
-
-        return {
-            "ok": True,
-            "mode": "scihub_pdf_backlog_scan",
-            "job_type": METADATA_JOB_SCIHUB_PDF,
-            "scanned": scanned,
-            "queued": queued,
-            "skipped": skipped,
-            "queue": self.state.metadata_queue_summary(job_type=METADATA_JOB_SCIHUB_PDF),
-            "results": results,
-        }
 
     def drain_metadata_queue(
         self,
@@ -379,69 +275,6 @@ class ZoteroMetadataProcessor:
             require_relay=require_relay,
             policy=None,
         )
-
-    def _backlog_scan(
-        self,
-        *,
-        job_type: str,
-        max_items: int | None,
-        limit: int | None,
-        force: bool,
-        library_id: str | None,
-        data_dir: str | None,
-        collection: str | None,
-    ) -> dict[str, Any]:
-        self.config.validate_for_scan()
-        scanned = 0
-        queued = 0
-        skipped = 0
-        results: list[dict[str, Any]] = []
-        effective_limit = limit if limit is not None and limit > 0 else None
-
-        for library_config in self._library_configs(library_id=library_id, data_dir=data_dir):
-            zotero = LocalZoteroStore(library_config)
-            scan_limit = max_items if max_items is not None else max(
-                zotero.count_sqlite_pdf_attachments(),
-                1_000_000,
-            )
-            attachments = (
-                zotero.iter_collection_pdf_attachments(
-                    collection=collection,
-                    max_items=scan_limit,
-                )
-                if collection
-                else zotero.iter_pdf_attachments(max_items=scan_limit)
-            )
-            for attachment in attachments:
-                scanned += 1
-                result = self._enqueue_attachment(
-                    zotero=zotero,
-                    attachment=attachment,
-                    job_type=job_type,
-                    force=force,
-                    reason=f"{job_type}_backlog_scan",
-                )
-                results.append(result)
-                job = result.get("job") or {}
-                if job.get("created") and job.get("status") == "queued":
-                    queued += 1
-                else:
-                    skipped += 1
-                if effective_limit is not None and queued >= effective_limit:
-                    break
-            if effective_limit is not None and queued >= effective_limit:
-                break
-
-        return {
-            "ok": True,
-            "mode": f"{job_type}_backlog_scan",
-            "job_type": job_type,
-            "scanned": scanned,
-            "queued": queued,
-            "skipped": skipped,
-            "queue": self.state.metadata_queue_summary(job_type=job_type),
-            "results": results,
-        }
 
     def _enqueue_attachment(
         self,
@@ -1657,383 +1490,3 @@ class ZoteroMetadataProcessor:
 
     def _queue_key(self, job_type: str) -> str:
         return metadata_queue_key(self.config, job_type)
-
-
-def build_metadata_patch(
-    candidate: MetadataCandidate,
-    *,
-    current_fields: dict[str, str],
-    policy: str,
-) -> dict[str, str]:
-    return package_build_metadata_patch(candidate, current_fields=current_fields, policy=policy)
-
-
-def build_metadata_diff(
-    candidate: MetadataCandidate,
-    *,
-    current_fields: dict[str, str],
-    policy: str,
-) -> dict[str, Any]:
-    return package_build_metadata_diff(candidate, current_fields=current_fields, policy=policy)
-
-
-ITEM_TYPE_UNSUPPORTED_PATCH_FIELDS: dict[str, frozenset[str]] = {
-    "preprint": frozenset(
-        {
-            "ISSN",
-            "publicationTitle",
-            "journalAbbreviation",
-            "volume",
-            "issue",
-            "pages",
-            "series",
-            "seriesTitle",
-            "publisher",
-            "place",
-            "ISBN",
-            "edition",
-            "numPages",
-            "numberOfVolumes",
-            "bookTitle",
-            "institution",
-            "reportType",
-            "reportNumber",
-            "conferenceName",
-            "proceedingsTitle",
-            "websiteTitle",
-            "websiteType",
-        }
-    ),
-}
-
-
-def filter_metadata_diff_for_item_type(diff: dict[str, Any], *, item_type: str | None) -> dict[str, Any]:
-    unsupported = ITEM_TYPE_UNSUPPORTED_PATCH_FIELDS.get(str(item_type or "").strip())
-    if not unsupported:
-        return diff
-
-    patch = dict(diff.get("patch") or {})
-    skipped_fields = dict(diff.get("skipped_fields") or {})
-    removed = sorted(field for field in patch if field in unsupported)
-    if not removed:
-        return diff
-
-    for field in removed:
-        patch.pop(field, None)
-        skipped_fields[field] = f"field_not_valid_for_item_type:{item_type}"
-
-    updated = dict(diff)
-    updated["patch"] = patch
-    updated["skipped_fields"] = skipped_fields
-    updated["applied_fields"] = sorted(patch)
-    return updated
-
-
-def extract_doi_from_text(text: str) -> str | None:
-    return package_extract_doi_from_text(text)
-
-
-def normalize_doi(value: str) -> str:
-    return package_normalize_doi(value)
-
-
-def extract_arxiv_id_from_text(text: str) -> str | None:
-    return package_extract_arxiv_id_from_text(text)
-
-
-def normalize_arxiv_id(value: str) -> str:
-    return package_normalize_arxiv_id(value)
-
-
-def crossref_work_to_candidate(work: dict[str, Any], *, score: float) -> MetadataCandidate | None:
-    return package_crossref_work_to_candidate(work, score=score)
-
-
-def zotero_translator_item_to_candidate(
-    item: dict[str, Any],
-    *,
-    source: str,
-    identifier: str,
-    default_score: float,
-    expected_title: str = "",
-) -> MetadataCandidate | None:
-    return package_zotero_translator_item_to_candidate(
-        item,
-        source=source,
-        identifier=identifier,
-        default_score=default_score,
-        expected_title=expected_title,
-    )
-
-
-def title_match_score(left: str, right: str) -> float:
-    return package_title_match_score(left, right)
-
-
-def _metadata_haystack(
-    metadata: LocalItemMetadata | None,
-    attachment: LocalAttachment | None = None,
-) -> str:
-    parts: list[str] = []
-    if metadata is not None:
-        parts.extend(str(value) for value in metadata.fields.values() if value)
-        parts.extend(str(tag) for tag in metadata.tags)
-        for relation in metadata.relations:
-            parts.extend(str(value) for value in relation.values() if value)
-    if attachment is not None:
-        parts.extend([attachment.filename, str(attachment.zotero_path or ""), str(attachment.file_path)])
-    return "\n".join(parts)
-
-
-def _is_nonretryable_worker_error(exc: Exception) -> bool:
-    message = str(exc)
-    markers = (
-        "WEB_API_NOT_CONFIGURED",
-        "ZOTERO_API_KEY",
-        "ZOTERO_USER_ID",
-        "Parent item version is unavailable",
-        "ZOTERO_RELAY_URL is required",
-    )
-    return any(marker in message for marker in markers)
-
-
-def _title_for_lookup(
-    metadata: LocalItemMetadata | None,
-    attachment: LocalAttachment,
-) -> str:
-    if metadata is not None and metadata.title:
-        return _normalize_space(metadata.title)
-    return _normalize_space(Path(attachment.filename).stem)
-
-
-def _first_researchgate_browser_fallback(payload: dict[str, Any]) -> dict[str, Any] | None:
-    fallbacks = payload.get("browser_fallbacks")
-    if not isinstance(fallbacks, list):
-        return None
-    for item in fallbacks:
-        if not isinstance(item, dict):
-            continue
-        url = str(item.get("url") or "").strip()
-        if url and _is_researchgate_url(url):
-            return item
-    return None
-
-
-def _is_researchgate_url(url: str) -> bool:
-    try:
-        host = urllib.parse.urlparse(url).netloc.lower()
-    except ValueError:
-        return False
-    if "@" in host:
-        host = host.rsplit("@", 1)[-1]
-    host = host.split(":", 1)[0]
-    return host == "researchgate.net" or host.endswith(".researchgate.net")
-
-
-def _researchgate_url_from_job(job: dict[str, Any]) -> str:
-    queue_key = str(job.get("queue_key") or "")
-    marker = "|url="
-    if marker not in queue_key:
-        return ""
-    encoded = queue_key.rsplit(marker, 1)[-1]
-    return urllib.parse.unquote(encoded).strip()
-
-
-def _researchgate_result_retryable(result: dict[str, Any]) -> bool:
-    status = str(result.get("status") or "").strip()
-    if status in {"playwright_missing", "item_key_required_for_attach", "parent_already_has_pdf"}:
-        return False
-    return True
-
-
-def _first_successful_pdf_download(value: object) -> dict[str, Any] | None:
-    if not isinstance(value, list):
-        return None
-    for item in value:
-        if isinstance(item, dict) and item.get("ok") and str(item.get("output_path") or "").strip():
-            return item
-    return None
-
-
-def _doi_for_scihub(metadata: LocalItemMetadata) -> str:
-    for candidate in _scihub_query_candidates(metadata):
-        if candidate["type"] == "doi":
-            return str(candidate["query"])
-    return ""
-
-
-def _scihub_query_candidates(metadata: LocalItemMetadata) -> list[dict[str, str]]:
-    fields = getattr(metadata, "fields", None)
-    candidates: list[dict[str, str]] = []
-    seen: set[tuple[str, str]] = set()
-
-    def add(query_type: str, value: object) -> None:
-        text = _normalize_identifier(str(value or ""))
-        if not text:
-            return
-        key = (query_type, text.casefold())
-        if key in seen:
-            return
-        seen.add(key)
-        candidates.append({"type": query_type, "query": text})
-
-    if isinstance(fields, dict):
-        add("doi", normalize_doi(str(fields.get("DOI") or "")))
-        for key in ("PMID", "pmid"):
-            add("pmid", fields.get(key))
-        for key in ("PMCID", "pmcid"):
-            add("pmcid", fields.get(key))
-        for key in ("url", "URL"):
-            add("url", fields.get(key))
-        for key in ("archiveLocation", "archiveID"):
-            add("arxiv", fields.get(key))
-
-    haystack = _metadata_haystack(metadata)
-    add("doi", normalize_doi(extract_doi_from_text(haystack) or ""))
-    for pmcid in re.findall(r"\bPMC\d{4,12}\b", haystack, flags=re.IGNORECASE):
-        add("pmcid", pmcid.upper())
-    for match in re.findall(r"\bPMID\s*[:#]?\s*(\d{5,12})\b", haystack, flags=re.IGNORECASE):
-        add("pmid", match)
-    for match in re.findall(r"\bpubmed\.ncbi\.nlm\.nih\.gov/(\d{5,12})\b", haystack, flags=re.IGNORECASE):
-        add("pmid", match)
-    for match in re.findall(
-        r"\barxiv\s*[:/]\s*([a-z.-]+/\d{7}|\d{4}\.\d{4,5})(?:v\d+)?\b",
-        haystack,
-        flags=re.IGNORECASE,
-    ):
-        add("arxiv", match)
-    for match in re.findall(r"https?://[^\s<>()\"']+", haystack, flags=re.IGNORECASE):
-        add("url", match.rstrip(".,;]})"))
-    return candidates
-
-
-def _scihub_doi_from_job(job: dict[str, Any]) -> str:
-    return _scihub_query_from_job(job)
-
-
-def _scihub_query_from_job(job: dict[str, Any]) -> str:
-    queue_key = str(job.get("queue_key") or "")
-    marker = "|query="
-    if marker in queue_key:
-        encoded = queue_key.rsplit(marker, 1)[-1]
-        return urllib.parse.unquote(encoded).strip()
-    marker = "|doi="
-    if marker not in queue_key:
-        return ""
-    encoded = queue_key.rsplit(marker, 1)[-1]
-    return urllib.parse.unquote(encoded).strip()
-
-
-def _scihub_query_type_from_job(job: dict[str, Any]) -> str:
-    queue_key = str(job.get("queue_key") or "")
-    marker = "|query_type="
-    if marker not in queue_key:
-        return "doi"
-    encoded = queue_key.split(marker, 1)[-1].split("|", 1)[0]
-    return urllib.parse.unquote(encoded).strip() or "doi"
-
-
-def _normalize_identifier(value: str) -> str:
-    return _normalize_space(str(value or "").strip())
-
-
-def _scihub_result_retryable(result: dict[str, Any]) -> bool:
-    status = str(result.get("status") or "").strip()
-    if status in {
-        "parent_already_has_pdf",
-        "item_not_found",
-        "missing_doi",
-        "unresolved",
-        "non_pdf",
-        "identity_mismatch",
-        "unsafe_url",
-    }:
-        return False
-    return True
-
-
-def _enqueue_result(
-    attachment: LocalAttachment,
-    classification: str,
-    *,
-    message: str = "",
-    job: dict[str, Any] | None = None,
-    parent_metadata: LocalItemMetadata | None = None,
-    arxiv_id: str | None = None,
-) -> dict[str, Any]:
-    return {
-        "library_id": attachment.library_id,
-        "attachment_key": attachment.key,
-        "filename": attachment.filename,
-        "file_path": str(attachment.file_path),
-        "classification": classification,
-        "message": message,
-        "job": job,
-        "parent_metadata": parent_metadata.to_dict() if parent_metadata else None,
-        "arxiv_id": arxiv_id,
-    }
-
-
-def _enqueue_item_result(
-    metadata: LocalItemMetadata,
-    classification: str,
-    *,
-    message: str = "",
-    job: dict[str, Any] | None = None,
-    inventory: dict[str, object] | None = None,
-) -> dict[str, Any]:
-    return {
-        "library_id": metadata.library_id,
-        "parent_item_key": metadata.key,
-        "item_type": metadata.item_type,
-        "title": metadata.title,
-        "classification": classification,
-        "message": message,
-        "job": job,
-        "inventory": inventory or {},
-    }
-
-
-def _full_text_ocr_candidates(payload: dict[str, Any]) -> list[str]:
-    return full_text_discovery.full_text_ocr_candidates(payload)
-
-
-def _normalize_space(value: str) -> str:
-    return package_normalize_space(value)
-
-
-def _merge_extra(current: str, new_value: str) -> str:
-    current = str(current or "").strip()
-    new_value = str(new_value or "").strip()
-    if not current:
-        return new_value
-    current_lines = {line.strip().casefold() for line in current.splitlines() if line.strip()}
-    new_lines = [line.strip() for line in new_value.splitlines() if line.strip()]
-    additions = [line for line in new_lines if line.casefold() not in current_lines]
-    if not additions:
-        return current
-    return current.rstrip() + "\n" + "\n".join(additions)
-
-
-def _safe_filename(value: str) -> str:
-    value = re.sub(r"[<>:\"/\\|?*\x00-\x1f]+", "_", str(value or "document"))
-    value = re.sub(r"\s+", " ", value).strip(" .")
-    return value[:160] or "document"
-
-
-def _patch_digest(fields: dict[str, str]) -> str:
-    payload = json.dumps(fields, ensure_ascii=False, sort_keys=True)
-    return hashlib.sha1(payload.encode("utf-8")).hexdigest()[:16]
-
-
-def full_text_worker_status(payload: dict[str, Any]) -> str:
-    return full_text_discovery.full_text_worker_status(payload)
-
-
-def first_full_text_output_path(payload: dict[str, Any]) -> str | None:
-    return full_text_discovery.first_full_text_output_path(payload)
-
-
-def _http_error_body(exc: urllib.error.HTTPError) -> str:
-    raw = exc.read()
-    return raw.decode("utf-8", errors="replace")[:500] if raw else str(exc)

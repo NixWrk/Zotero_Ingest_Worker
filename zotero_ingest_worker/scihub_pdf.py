@@ -435,7 +435,7 @@ def _safe_doi(doi: str) -> str:
 
 
 def _script_module() -> Any:
-    script_path = PROJECT_ROOT / "scripts" / "researchgate_pdf_browser_download.py"
+    script_path = PROJECT_ROOT / "scripts" / "providers" / "researchgate_pdf_browser_download.py"
     spec = importlib.util.spec_from_file_location("researchgate_pdf_browser_download", script_path)
     if spec is None or spec.loader is None:
         raise RuntimeError(f"Unable to load Zotero parent attach helper: {script_path}")

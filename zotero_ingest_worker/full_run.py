@@ -2,10 +2,13 @@ from __future__ import annotations
 
 import threading
 import time
-from dataclasses import asdict, dataclass
+from dataclasses import asdict
 from typing import Any
 
 from .config import WorkerConfig
+from .full_run_options import FullRunOptions
+from .full_run_plan import next_ingest_action
+from .full_run_results import _result_failure_count, _result_message, _result_summary
 from .metadata_jobs import (
     METADATA_JOB_ARXIV_HTML,
     METADATA_JOB_ENRICH,
@@ -15,65 +18,6 @@ from .metadata_jobs import (
 )
 from .metadata_processor import ZoteroMetadataProcessor
 from .state import PipelineStateStore
-
-
-@dataclass(frozen=True)
-class FullRunOptions:
-    max_items: int | None = None
-    queue_limit: int | None = None
-    drain_limit: int = 1
-    poll_seconds: int = 60
-    intake_interval_seconds: int = 300
-    idle_cycles_to_complete: int = 2
-    stop_when_idle: bool = True
-    dry_run: bool = False
-    force: bool = False
-    require_relay: bool = True
-    metadata_backlog_intake: bool = True
-    arxiv_html_backlog_intake: bool = True
-    full_text_backlog_intake: bool = True
-    scihub_pdf_backlog_intake: bool = True
-    metadata_drain: bool = True
-    arxiv_html_drain: bool = True
-    full_text_drain: bool = True
-    researchgate_pdf_drain: bool = True
-    scihub_pdf_drain: bool = True
-
-    @classmethod
-    def from_payload(cls, payload: dict[str, Any]) -> "FullRunOptions":
-        metadata_backlog_intake = _bool(payload.get("metadata_backlog_intake"), True)
-        arxiv_html_backlog_intake = _bool(payload.get("arxiv_html_backlog_intake"), True)
-        full_text_backlog_intake = _bool(payload.get("full_text_backlog_intake"), True)
-        metadata_drain = _bool(payload.get("metadata_drain"), metadata_backlog_intake)
-        arxiv_html_drain = _bool(payload.get("arxiv_html_drain"), arxiv_html_backlog_intake)
-        full_text_drain = _bool(payload.get("full_text_drain"), full_text_backlog_intake)
-        researchgate_pdf_drain = _bool(payload.get("researchgate_pdf_drain"), full_text_drain)
-        scihub_pdf_drain = _bool(payload.get("scihub_pdf_drain"), full_text_drain)
-        scihub_pdf_backlog_intake = _bool(
-            payload.get("scihub_pdf_backlog_intake"),
-            scihub_pdf_drain,
-        )
-        return cls(
-            max_items=_optional_int(payload.get("max_items")),
-            queue_limit=_optional_int(payload.get("queue_limit") or payload.get("limit")),
-            drain_limit=max(_int(payload.get("drain_limit"), 1), 1),
-            poll_seconds=max(_int(payload.get("poll_seconds"), 60), 5),
-            intake_interval_seconds=max(_int(payload.get("intake_interval_seconds"), 300), 30),
-            idle_cycles_to_complete=max(_int(payload.get("idle_cycles_to_complete"), 2), 1),
-            stop_when_idle=_bool(payload.get("stop_when_idle"), True),
-            dry_run=_bool(payload.get("dry_run"), False),
-            force=_bool(payload.get("force"), False),
-            require_relay=_bool(payload.get("require_relay"), True),
-            metadata_backlog_intake=metadata_backlog_intake,
-            arxiv_html_backlog_intake=arxiv_html_backlog_intake,
-            full_text_backlog_intake=full_text_backlog_intake,
-            scihub_pdf_backlog_intake=scihub_pdf_backlog_intake,
-            metadata_drain=metadata_drain,
-            arxiv_html_drain=arxiv_html_drain,
-            full_text_drain=full_text_drain,
-            researchgate_pdf_drain=researchgate_pdf_drain,
-            scihub_pdf_drain=scihub_pdf_drain,
-        )
 
 
 class FullRunManager:
@@ -470,76 +414,12 @@ class FullRunManager:
         scihub_pdf_queue: dict[str, Any] | None = None,
         scihub_pdf_backlog_pending: bool = False,
     ) -> str | None:
-        metadata_queued = int((metadata_queue or {}).get("queued") or 0)
-        arxiv_html_queued = int((arxiv_html_queue or {}).get("queued") or 0)
-        full_text_queued = int((full_text_queue or {}).get("queued") or 0)
-        researchgate_pdf_queued = int((researchgate_pdf_queue or {}).get("queued") or 0)
-        scihub_pdf_queued = int((scihub_pdf_queue or {}).get("queued") or 0)
-        if options.metadata_drain and metadata_queued > 0:
-            return "metadata"
-        if options.full_text_drain and full_text_queued > 0:
-            return "full_text"
-        if options.researchgate_pdf_drain and researchgate_pdf_queued > 0:
-            return "researchgate_pdf"
-        if options.arxiv_html_drain and arxiv_html_queued > 0:
-            return "arxiv_html"
-        if scihub_pdf_backlog_pending:
-            return "scihub_pdf_backlog"
-        if options.scihub_pdf_drain and scihub_pdf_queued > 0:
-            return "scihub_pdf"
-        return None
-
-
-def _result_summary(result: dict[str, Any]) -> dict[str, Any]:
-    keys = (
-        "ok",
-        "mode",
-        "job_type",
-        "scanned",
-        "downloaded",
-        "queued",
-        "processed",
-        "failed",
-        "problem_documents",
-        "skipped",
-        "skipped_reason",
-        "recovered",
-        "recovered_expired_jobs",
-    )
-    return {key: result.get(key) for key in keys if key in result}
-
-
-def _result_failure_count(result: dict[str, Any]) -> int:
-    failed = int(result.get("failed") or 0)
-    problem_documents = int(result.get("problem_documents") or 0)
-    return failed + problem_documents
-
-
-def _result_message(result: dict[str, Any]) -> str:
-    summary = _result_summary(result)
-    return ", ".join(f"{key}={value}" for key, value in summary.items()) or "No summary."
-
-
-def _bool(value: Any, default: bool) -> bool:
-    if value is None or value == "":
-        return default
-    if isinstance(value, str):
-        return value.strip().lower() in {"1", "true", "yes", "on"}
-    if isinstance(value, list):
-        return bool(value)
-    return bool(value)
-
-
-def _int(value: Any, default: int) -> int:
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return default
-
-
-def _optional_int(value: Any) -> int | None:
-    try:
-        parsed = int(value)
-    except (TypeError, ValueError):
-        return None
-    return parsed if parsed > 0 else None
+        return next_ingest_action(
+            options,
+            metadata_queue=metadata_queue,
+            arxiv_html_queue=arxiv_html_queue,
+            full_text_queue=full_text_queue,
+            researchgate_pdf_queue=researchgate_pdf_queue,
+            scihub_pdf_queue=scihub_pdf_queue,
+            scihub_pdf_backlog_pending=scihub_pdf_backlog_pending,
+        )
