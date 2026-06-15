@@ -3,8 +3,10 @@ from __future__ import annotations
 import asyncio
 import os
 import shutil
+import threading
 import urllib.error
 import urllib.parse
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import replace as dataclass_replace
 from pathlib import Path
 from typing import Any
@@ -638,39 +640,34 @@ class ZoteroMetadataProcessor:
         owner = metadata_job_owner()
         lease_seconds = max(int(getattr(self.config, "metadata_job_lease_seconds", 900)), 60)
         effective_limit = limit if limit > 0 else 1_000_000
+        workers = self._drain_worker_count(limit=effective_limit)
 
-        while processed < effective_limit:
-            job = self.state.lease_next_metadata_job(
+        if workers == 1:
+            results = self._drain_leased_jobs_sequential(
                 job_type=job_type,
+                limit=effective_limit,
                 owner=owner,
                 lease_seconds=lease_seconds,
+                require_relay=require_relay,
+                policy=policy,
             )
-            if job is None:
-                break
-            if job_type == METADATA_JOB_ENRICH:
-                result = self._drain_enrich_job(
-                    job,
-                    require_relay=require_relay,
-                    policy=policy or self.config.metadata_policy,
-                )
-            elif job_type == METADATA_JOB_ARXIV_HTML:
-                result = self._drain_arxiv_html_job(job, require_relay=require_relay)
-            elif job_type == METADATA_JOB_FULL_TEXT:
-                result = self._drain_full_text_job(job)
-            elif job_type == METADATA_JOB_RESEARCHGATE_PDF:
-                result = self._drain_researchgate_pdf_job(job)
-            elif job_type == METADATA_JOB_SCIHUB_PDF:
-                result = self._drain_scihub_pdf_job(job)
-            else:
-                result = self.state.mark_metadata_job_failed(
-                    job_id=str(job["job_id"]),
-                    message=f"Unknown metadata job type: {job_type}",
-                    retryable=False,
-                )
-            results.append(result)
-            processed += 1
-            if result.get("status") in {"failed_retryable", "failed_final"}:
-                failed += 1
+        else:
+            results = self._drain_leased_jobs_parallel(
+                job_type=job_type,
+                limit=effective_limit,
+                workers=workers,
+                owner=owner,
+                lease_seconds=lease_seconds,
+                require_relay=require_relay,
+                policy=policy,
+            )
+
+        processed = len(results)
+        failed = sum(
+            1
+            for result in results
+            if result.get("status") in {"failed_retryable", "failed_final"}
+        )
 
         return {
             "ok": failed == 0,
@@ -679,9 +676,123 @@ class ZoteroMetadataProcessor:
             "processed": processed,
             "failed": failed,
             "recovered": recovered,
+            "workers": workers,
             "queue": self.state.metadata_queue_summary(job_type=job_type),
             "results": results,
         }
+
+    def _drain_worker_count(self, *, limit: int) -> int:
+        max_workers = max(int(getattr(self.config, "metadata_drain_max_workers", 1)), 1)
+        if limit <= 1:
+            return 1
+        return min(limit, max_workers)
+
+    def _drain_leased_jobs_sequential(
+        self,
+        *,
+        job_type: str,
+        limit: int,
+        owner: str,
+        lease_seconds: int,
+        require_relay: bool,
+        policy: str | None,
+    ) -> list[dict[str, Any]]:
+        results: list[dict[str, Any]] = []
+        while len(results) < limit:
+            job = self.state.lease_next_metadata_job(
+                job_type=job_type,
+                owner=owner,
+                lease_seconds=lease_seconds,
+            )
+            if job is None:
+                break
+            results.append(
+                self._drain_leased_job(
+                    job_type=job_type,
+                    job=job,
+                    require_relay=require_relay,
+                    policy=policy,
+                )
+            )
+        return results
+
+    def _drain_leased_jobs_parallel(
+        self,
+        *,
+        job_type: str,
+        limit: int,
+        workers: int,
+        owner: str,
+        lease_seconds: int,
+        require_relay: bool,
+        policy: str | None,
+    ) -> list[dict[str, Any]]:
+        counter_lock = threading.Lock()
+        leased_slots = 0
+
+        def worker(worker_index: int) -> list[dict[str, Any]]:
+            nonlocal leased_slots
+            processor = self._new_drain_worker_processor()
+            local_results: list[dict[str, Any]] = []
+            worker_owner = f"{owner}-{worker_index + 1}"
+            while True:
+                with counter_lock:
+                    if leased_slots >= limit:
+                        return local_results
+                    leased_slots += 1
+                job = processor.state.lease_next_metadata_job(
+                    job_type=job_type,
+                    owner=worker_owner,
+                    lease_seconds=lease_seconds,
+                )
+                if job is None:
+                    return local_results
+                local_results.append(
+                    processor._drain_leased_job(
+                        job_type=job_type,
+                        job=job,
+                        require_relay=require_relay,
+                        policy=policy,
+                    )
+                )
+
+        results: list[dict[str, Any]] = []
+        with ThreadPoolExecutor(max_workers=workers) as executor:
+            futures = [executor.submit(worker, index) for index in range(workers)]
+            for future in as_completed(futures):
+                results.extend(future.result())
+        return results
+
+    def _new_drain_worker_processor(self) -> "ZoteroMetadataProcessor":
+        return type(self)(self.config)
+
+    def _drain_leased_job(
+        self,
+        *,
+        job_type: str,
+        job: dict[str, Any],
+        require_relay: bool,
+        policy: str | None,
+    ) -> dict[str, Any]:
+        if job_type == METADATA_JOB_ENRICH:
+            return self._drain_enrich_job(
+                job,
+                require_relay=require_relay,
+                policy=policy or self.config.metadata_policy,
+            )
+        if job_type == METADATA_JOB_ARXIV_HTML:
+            return self._drain_arxiv_html_job(job, require_relay=require_relay)
+        if job_type == METADATA_JOB_FULL_TEXT:
+            return self._drain_full_text_job(job)
+        if job_type == METADATA_JOB_RESEARCHGATE_PDF:
+            return self._drain_researchgate_pdf_job(job)
+        if job_type == METADATA_JOB_SCIHUB_PDF:
+            return self._drain_scihub_pdf_job(job)
+        return self.state.mark_metadata_job_failed(
+            job_id=str(job["job_id"]),
+            message=f"Unknown metadata job type: {job_type}",
+            retryable=False,
+        )
 
     def _drain_enrich_job(
         self,

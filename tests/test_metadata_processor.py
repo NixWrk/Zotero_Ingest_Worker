@@ -2,11 +2,14 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import threading
+import time
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
 from zotero_ingest_worker.local_zotero import LocalZoteroStore
+from zotero_ingest_worker.metadata_jobs import METADATA_JOB_FULL_TEXT
 from zotero_ingest_worker.metadata_processor import (
     MetadataCandidate,
     _best_successful_html_download,
@@ -264,6 +267,67 @@ def test_metadata_enricher_config_maps_worker_settings() -> None:
     assert config.metadata_title_min_score == 0.91
     assert config.arxiv_search_min_score == 0.92
     assert config.extended_providers_enabled is True
+
+
+def test_metadata_drain_queue_uses_bounded_parallel_workers(monkeypatch: Any) -> None:
+    processor = ZoteroMetadataProcessor.__new__(ZoteroMetadataProcessor)
+    processor.config = SimpleNamespace(
+        metadata_drain_max_workers=3,
+        metadata_job_lease_seconds=60,
+        metadata_policy="emptyFieldsOnly",
+    )
+    processor._provider_events = []
+
+    class FakeState:
+        def __init__(self) -> None:
+            self.jobs = [{"job_id": f"job_{index}"} for index in range(5)]
+            self.owners: list[str] = []
+            self.lock = threading.Lock()
+
+        def list_metadata_jobs(self, **_kwargs: object) -> list[dict[str, object]]:
+            return list(self.jobs)
+
+        def metadata_queue_summary(self, **_kwargs: object) -> dict[str, object]:
+            return {"queued": len(self.jobs)}
+
+        def recover_expired_metadata_jobs(self, **_kwargs: object) -> int:
+            return 0
+
+        def lease_next_metadata_job(self, *, owner: str, **_kwargs: object) -> dict[str, object] | None:
+            with self.lock:
+                if not self.jobs:
+                    return None
+                self.owners.append(owner)
+                return self.jobs.pop(0)
+
+    fake_state = FakeState()
+    processor.state = fake_state
+
+    monkeypatch.setattr(
+        ZoteroMetadataProcessor,
+        "_new_drain_worker_processor",
+        lambda self: processor,
+    )
+
+    def fake_drain_leased_job(
+        self: ZoteroMetadataProcessor,
+        *,
+        job_type: str,
+        job: dict[str, object],
+        **_kwargs: object,
+    ) -> dict[str, object]:
+        assert job_type == METADATA_JOB_FULL_TEXT
+        time.sleep(0.02)
+        return {"job_id": job["job_id"], "status": "succeeded"}
+
+    monkeypatch.setattr(ZoteroMetadataProcessor, "_drain_leased_job", fake_drain_leased_job)
+
+    result = processor.drain_full_text_queue(limit=5)
+
+    assert result["processed"] == 5
+    assert result["failed"] == 0
+    assert result["workers"] == 3
+    assert len({owner.rsplit("-", 1)[-1] for owner in fake_state.owners}) >= 2
 
 
 def test_relay_url_candidates_add_localhost_for_compose_service_name() -> None:

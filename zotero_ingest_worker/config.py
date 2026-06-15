@@ -205,6 +205,7 @@ class WorkerConfig:
     metadata_policy: str
     metadata_title_min_score: float
     metadata_job_lease_seconds: int
+    metadata_drain_max_workers: int
     zotero_translation_server_url: str
     zotero_translation_server_timeout_seconds: int
 
@@ -379,6 +380,7 @@ def from_env(*, load_file: bool = True) -> WorkerConfig:
         or "emptyFieldsOnly",
         metadata_title_min_score=env_float("METADATA_TITLE_MIN_SCORE", 0.86),
         metadata_job_lease_seconds=env_int("METADATA_JOB_LEASE_SECONDS", 900),
+        metadata_drain_max_workers=max(env_int("METADATA_DRAIN_MAX_WORKERS", 1), 1),
         zotero_translation_server_url=os.environ.get("ZOTERO_TRANSLATION_SERVER_URL", "").rstrip("/"),
         zotero_translation_server_timeout_seconds=env_int(
             "ZOTERO_TRANSLATION_SERVER_TIMEOUT_SECONDS",
@@ -424,6 +426,10 @@ def apply_request_overrides(config: WorkerConfig, payload: dict[str, Any]) -> Wo
         updates["scan_limit"] = int(payload["limit"])
     if "max_items" in payload and payload["max_items"] is not None:
         updates["scan_max_items"] = int(payload["max_items"])
+    if "workers" in payload and payload["workers"] is not None:
+        updates["metadata_drain_max_workers"] = max(int(payload["workers"]), 1)
+    if "max_workers" in payload and payload["max_workers"] is not None:
+        updates["metadata_drain_max_workers"] = max(int(payload["max_workers"]), 1)
 
     zotero = payload.get("zotero") or {}
     if isinstance(zotero, dict):
