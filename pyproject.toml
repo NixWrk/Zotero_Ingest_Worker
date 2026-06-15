@@ -11,6 +11,7 @@ dependencies = [
 
 [project.scripts]
 zotero-ingest-worker = "zotero_ingest_worker.__main__:main"
+zotero-fulltext-worker = "zotero_ingest_worker.fulltext_main:main"
 
 [tool.setuptools.packages.find]
 include = ["zotero_ingest_worker*"]

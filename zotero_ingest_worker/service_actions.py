@@ -5,26 +5,10 @@ from typing import Any
 from .config import WorkerConfig, apply_request_overrides
 from .full_run import FullRunManager
 from .metadata_processor import ZoteroMetadataProcessor
-
-
-POST_ACTION_PATHS = frozenset(
-    {
-        "/api/zotero/metadata/queue/summary",
-        "/api/zotero/metadata/enrich/backlog-scan",
-        "/api/zotero/metadata/enrich/queue/drain",
-        "/api/zotero/arxiv-html/backlog-scan",
-        "/api/zotero/arxiv-html/queue/drain",
-        "/api/zotero/full-text/backlog-scan",
-        "/api/zotero/full-text/queue/drain",
-        "/api/zotero/scihub-pdf/backlog-scan",
-        "/api/zotero/researchgate-pdf/queue/drain",
-        "/api/zotero/scihub-pdf/queue/drain",
-        "/api/zotero/metadata/queue/retry",
-        "/api/zotero/metadata/queue/cancel",
-        "/api/zotero/pipeline/full-run/start",
-        "/api/zotero/pipeline/full-run/status",
-        "/api/zotero/pipeline/full-run/stop",
-    }
+from .worker_roles import (
+    POST_ACTION_PATHS,
+    ROLE_ALL,
+    ensure_role_allows_action,
 )
 
 
@@ -33,7 +17,10 @@ def run_post_action(
     base_config: WorkerConfig,
     payload: dict[str, Any],
     full_run_manager: FullRunManager,
+    *,
+    role: str = ROLE_ALL,
 ) -> dict[str, Any]:
+    ensure_role_allows_action(role, path, payload)
     config = apply_request_overrides(base_config, payload)
 
     if path == "/api/zotero/pipeline/full-run/start":

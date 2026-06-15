@@ -5,6 +5,8 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any
 
+from .worker_roles import ROLE_ALL, normalize_worker_role
+
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 
@@ -152,6 +154,7 @@ class WorkerConfig:
     worker_host: str
     worker_port: int
     worker_token: str
+    worker_role: str
 
     ingest_data_root: Path
     html_data_root: Path
@@ -310,6 +313,7 @@ def from_env(*, load_file: bool = True) -> WorkerConfig:
         worker_host=os.environ.get("ZOTERO_INGEST_HOST", os.environ.get("ZOTERO_WORKER_HOST", "0.0.0.0")),
         worker_port=env_int("ZOTERO_INGEST_PORT", env_int("ZOTERO_WORKER_PORT", 8765)),
         worker_token=os.environ.get("ZOTERO_INGEST_TOKEN", os.environ.get("ZOTERO_WORKER_TOKEN", "")),
+        worker_role=normalize_worker_role(os.environ.get("ZOTERO_INGEST_ROLE"), default=ROLE_ALL),
         ingest_data_root=ingest_data_root,
         html_data_root=env_first_path(
             ("INGEST_HTML_ROOT", "HTML_DATA_ROOT"),

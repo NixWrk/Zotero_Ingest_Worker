@@ -8,22 +8,36 @@ from urllib.parse import urlparse
 
 from .config import WorkerConfig, from_env
 from .full_run import FullRunManager
+from .metadata_jobs import METADATA_JOB_ENRICH, METADATA_JOB_FULL_TEXT
 from .metadata_processor import ZoteroMetadataProcessor
-from .service_actions import POST_ACTION_PATHS, run_post_action
+from .service_actions import run_post_action
+from .worker_roles import (
+    ROLE_FULLTEXT,
+    ROLE_METADATA,
+    normalize_worker_role,
+    post_action_paths_for_role,
+    role_mode_label,
+)
 
 
-def run_server(config: WorkerConfig | None = None) -> None:
+def run_server(config: WorkerConfig | None = None, *, role: str | None = None) -> None:
     cfg = config or from_env()
+    server_role = normalize_worker_role(role or cfg.worker_role)
     full_run_manager = FullRunManager(cfg)
-    handler = _build_handler(cfg, full_run_manager)
+    handler = _build_handler(cfg, full_run_manager, role=server_role)
     server = ThreadingHTTPServer((cfg.worker_host, cfg.worker_port), handler)
-    print(f"zotero-ingest-worker listening on http://{cfg.worker_host}:{cfg.worker_port}", flush=True)
     print(
         (
-            "ingest endpoints: "
-            "POST /api/zotero/metadata/enrich/backlog-scan, "
-            "POST /api/zotero/full-text/backlog-scan, "
-            "POST /api/zotero/pipeline/full-run/start"
+            f"zotero-ingest-worker listening on http://{cfg.worker_host}:{cfg.worker_port} "
+            f"as {role_mode_label(server_role)}"
+        ),
+        flush=True,
+    )
+    print(
+        (
+            "worker endpoints: "
+            + ", ".join(sorted(post_action_paths_for_role(server_role))[:6])
+            + (" ..." if len(post_action_paths_for_role(server_role)) > 6 else "")
         ),
         flush=True,
     )
@@ -35,7 +49,9 @@ def run_server(config: WorkerConfig | None = None) -> None:
         server.server_close()
 
 
-def _build_handler(base_config: WorkerConfig, full_run_manager: FullRunManager):
+def _build_handler(base_config: WorkerConfig, full_run_manager: FullRunManager, *, role: str):
+    post_action_paths = post_action_paths_for_role(role)
+
     class ZoteroIngestHandler(BaseHTTPRequestHandler):
         server_version = "ZoteroIngestHTTP/0.1"
 
@@ -47,7 +63,9 @@ def _build_handler(base_config: WorkerConfig, full_run_manager: FullRunManager):
                     {
                         "ok": True,
                         "service": "zotero-ingest-worker",
-                        "mode": "metadata-and-files",
+                        "mode": role_mode_label(role),
+                        "role": role,
+                        "post_action_paths": sorted(post_action_paths),
                         "zotero_discovery_roots": [
                             str(path) for path in base_config.zotero_discovery_roots
                         ],
@@ -61,7 +79,14 @@ def _build_handler(base_config: WorkerConfig, full_run_manager: FullRunManager):
                     self._send_json(HTTPStatus.UNAUTHORIZED, {"ok": False, "error": "Unauthorized."})
                     return
                 processor = ZoteroMetadataProcessor(base_config)
-                self._send_json(HTTPStatus.OK, processor.queue(statuses=None, limit=100))
+                self._send_json(
+                    HTTPStatus.OK,
+                    processor.queue(
+                        job_type=_default_queue_job_type(role),
+                        statuses=None,
+                        limit=100,
+                    ),
+                )
                 return
             if parsed.path == "/api/zotero/pipeline/full-run/status":
                 if not self._authorized():
@@ -73,7 +98,7 @@ def _build_handler(base_config: WorkerConfig, full_run_manager: FullRunManager):
 
         def do_POST(self) -> None:
             parsed = urlparse(self.path)
-            if parsed.path not in POST_ACTION_PATHS:
+            if parsed.path not in post_action_paths:
                 self._send_json(HTTPStatus.NOT_FOUND, {"ok": False, "error": "Not found."})
                 return
             if not self._authorized():
@@ -82,8 +107,16 @@ def _build_handler(base_config: WorkerConfig, full_run_manager: FullRunManager):
 
             try:
                 payload = self._read_json_body()
-                result = run_post_action(parsed.path, base_config, payload, full_run_manager)
+                result = run_post_action(
+                    parsed.path,
+                    base_config,
+                    payload,
+                    full_run_manager,
+                    role=role,
+                )
                 self._send_json(HTTPStatus.OK, result)
+            except PermissionError as exc:
+                self._send_json(HTTPStatus.FORBIDDEN, {"ok": False, "error": str(exc)})
             except Exception as exc:
                 self._send_json(HTTPStatus.INTERNAL_SERVER_ERROR, {"ok": False, "error": str(exc)})
 
@@ -118,3 +151,11 @@ def _build_handler(base_config: WorkerConfig, full_run_manager: FullRunManager):
             return
 
     return ZoteroIngestHandler
+
+
+def _default_queue_job_type(role: str) -> str | None:
+    if role == ROLE_METADATA:
+        return METADATA_JOB_ENRICH
+    if role == ROLE_FULLTEXT:
+        return METADATA_JOB_FULL_TEXT
+    return None

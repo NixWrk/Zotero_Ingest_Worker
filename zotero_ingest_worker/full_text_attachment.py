@@ -97,7 +97,7 @@ class FullTextAttachmentService:
         metadata: LocalItemMetadata,
         inventory: dict[str, object],
     ) -> dict[str, Any]:
-        source_path = Path(str(html.get("output_path") or ""))
+        source_path = _html_attachment_preferred_source_path(html)
         if not source_path.exists():
             return {"ok": False, "status": "local_source_missing", "sourcePath": str(source_path)}
         attachment_source_path, embedded_assets = _html_attachment_source_with_embedded_assets(source_path)
@@ -343,6 +343,18 @@ def _first_successful_download(value: object) -> dict[str, Any] | None:
     return None
 
 
+def _html_attachment_preferred_source_path(item: dict[str, Any]) -> Path:
+    standard_path = str(item.get("standard_article_html_path") or "").strip()
+    if standard_path:
+        return Path(standard_path)
+    standard_package = item.get("standard_package")
+    if isinstance(standard_package, dict):
+        package_path = str(standard_package.get("article_html_path") or "").strip()
+        if package_path:
+            return Path(package_path)
+    return Path(str(item.get("output_path") or ""))
+
+
 def _best_successful_html_download(value: object) -> dict[str, Any] | None:
     if not isinstance(value, list):
         return None
@@ -408,6 +420,10 @@ def _html_attachment_source_with_embedded_assets(source_path: Path) -> tuple[Pat
         return source_path, {"enabled": False, "reason": "not_html"}
 
     assets_dir = source_path.parent / f"{source_path.stem}_assets"
+    if not assets_dir.is_dir() and source_path.name == "article.html":
+        standard_assets_dir = source_path.parent / "assets"
+        if standard_assets_dir.is_dir():
+            assets_dir = standard_assets_dir
     if not assets_dir.is_dir():
         return source_path, {"enabled": False, "reason": "assets_dir_missing"}
 

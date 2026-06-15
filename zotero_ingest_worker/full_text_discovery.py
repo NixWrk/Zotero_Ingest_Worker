@@ -20,6 +20,7 @@ from zotero_metadata_enrichment.pdf_sources import (  # type: ignore[import-not-
     download_pdf_sources as package_download_pdf_sources,
 )
 
+from .article_standard import standardize_native_html_download
 from .full_text_article import (
     annotate_html_download_article_verdicts,
     arxiv_abs_ids_from_html_downloads,
@@ -89,6 +90,12 @@ class FullTextDiscoveryOrchestrator:
         payload["source_context"] = source_context
         payload["existing_full_text_inventory"] = inventory
         payload["browser_fallbacks"] = researchgate_browser_fallbacks(payload, inventory=inventory)
+        standardize_accepted_html_downloads(
+            payload,
+            metadata=metadata,
+            output_dir=output_dir,
+            source_context=source_context,
+        )
         summary = summarize_full_text_payload(payload)
         payload["ocr_candidates"] = list(summary.ocr_candidates)
         payload["ocr_required"] = bool(payload["ocr_candidates"])
@@ -254,6 +261,42 @@ def summarize_full_text_payload(payload: dict[str, Any]) -> FullTextPayloadSumma
         ocr_candidates=ocr_candidates,
         browser_fallbacks=browser_fallbacks,
     )
+
+
+def standardize_accepted_html_downloads(
+    payload: dict[str, Any],
+    *,
+    metadata: LocalItemMetadata,
+    output_dir: Path,
+    source_context: str,
+) -> list[dict[str, Any]]:
+    downloads = payload.get("html_downloads")
+    if not isinstance(downloads, list):
+        return []
+    annotate_html_download_article_verdicts(downloads)
+    standardized: list[dict[str, Any]] = []
+    package_root = output_dir / "article_packages"
+    for item in downloads:
+        if not isinstance(item, dict):
+            continue
+        verdict = item.get("article_verdict")
+        if not isinstance(verdict, dict) or verdict.get("ok") is not True:
+            continue
+        package = standardize_native_html_download(
+            item,
+            metadata=metadata,
+            package_root=package_root,
+            source_context=source_context,
+        )
+        item["standard_package"] = package
+        if package.get("ok"):
+            item["standard_article_html_path"] = package.get("article_html_path")
+        standardized.append(package)
+    payload["article_standard"] = {
+        "standardized": len(standardized),
+        "packages": standardized,
+    }
+    return standardized
 
 
 def full_text_ocr_candidates(payload: dict[str, Any]) -> list[str]:

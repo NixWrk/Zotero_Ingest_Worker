@@ -16,6 +16,7 @@ from .metadata_processor import (
 )
 from .service import run_server
 from .service_actions import run_post_action
+from .worker_roles import ROLE_METADATA, cli_command_role, normalize_worker_role, role_mode_label
 
 
 CLI_POST_ACTIONS = {
@@ -35,7 +36,7 @@ CLI_POST_ACTIONS = {
 }
 
 
-def main(argv: list[str] | None = None) -> int:
+def main(argv: list[str] | None = None, *, default_role: str = ROLE_METADATA) -> int:
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
     parser = argparse.ArgumentParser(prog="zotero-ingest-worker")
@@ -44,6 +45,12 @@ def main(argv: list[str] | None = None) -> int:
     serve_parser = subparsers.add_parser("serve", help="Run the local HTTP bridge for the orchestrator.")
     serve_parser.add_argument("--host", default=None)
     serve_parser.add_argument("--port", type=int, default=None)
+    serve_parser.add_argument(
+        "--role",
+        choices=("metadata", "fulltext", "all"),
+        default=None,
+        help="Expose only metadata, only native full-text, or legacy combined endpoints.",
+    )
 
     metadata_queue_parser = subparsers.add_parser(
         "metadata-queue",
@@ -148,6 +155,7 @@ def main(argv: list[str] | None = None) -> int:
 
     args = parser.parse_args(argv)
     config = from_env()
+    default_role = normalize_worker_role(default_role)
 
     if args.command == "serve":
         updates = {}
@@ -155,10 +163,13 @@ def main(argv: list[str] | None = None) -> int:
             updates["worker_host"] = args.host
         if args.port:
             updates["worker_port"] = args.port
-        run_server(replace(config, **updates) if updates else config)
+        role = normalize_worker_role(args.role or _configured_role_value(), default=default_role)
+        updates["worker_role"] = role
+        run_server(replace(config, **updates), role=role)
         return 0
 
     if args.command == "check-config":
+        role = normalize_worker_role(_configured_role_value(), default=default_role)
         config.validate_for_scan()
         _print_json(
             {
@@ -185,6 +196,8 @@ def main(argv: list[str] | None = None) -> int:
                     config.metadata_semantic_scholar_api_key
                 ),
                 "metadata_core_api_key_configured": bool(config.metadata_core_api_key),
+                "worker_role": role,
+                "worker_mode": role_mode_label(role),
                 "arxiv_html_root": str(config.arxiv_html_root),
                 "arxiv_html_attach": config.arxiv_html_attach,
                 "arxiv_search_min_score": config.arxiv_search_min_score,
@@ -194,7 +207,12 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 0
 
-    shared_result = _run_shared_cli_action(args.command, args, config)
+    shared_result = _run_shared_cli_action(
+        args.command,
+        args,
+        config,
+        role=cli_command_role(args.command),
+    )
     if shared_result is not None:
         _print_json(shared_result)
         return 0
@@ -228,6 +246,8 @@ def _run_shared_cli_action(
     command: str | None,
     args: argparse.Namespace,
     config: WorkerConfig,
+    *,
+    role: str,
 ) -> dict[str, object] | None:
     if command not in CLI_POST_ACTIONS:
         return None
@@ -237,6 +257,7 @@ def _run_shared_cli_action(
         config,
         payload,
         FullRunManager(config),
+        role=role,
     )
 
 
@@ -300,6 +321,12 @@ def _backlog_payload(args: argparse.Namespace) -> dict[str, object]:
 
 def _print_json(payload: object) -> None:
     print(json.dumps(payload, ensure_ascii=False, indent=2))
+
+
+def _configured_role_value() -> str | None:
+    import os
+
+    return os.environ.get("ZOTERO_INGEST_ROLE")
 
 
 if __name__ == "__main__":

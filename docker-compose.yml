@@ -16,6 +16,7 @@ services:
       ZOTERO_INGEST_HOST: "0.0.0.0"
       ZOTERO_INGEST_PORT: "8765"
       ZOTERO_INGEST_TOKEN: ""
+      ZOTERO_INGEST_ROLE: "metadata"
       INGEST_DATA_ROOT: "/data/ingest"
       INGEST_HTML_ROOT: "/data/html"
       METADATA_PATCH_POLICY: "${METADATA_PATCH_POLICY:-emptyFieldsOnly}"
@@ -50,6 +51,7 @@ services:
       ZFR_TOKEN: "${ZFR_TOKEN:-}"
       ZOTERO_RELAY_REPLACE_STRATEGY: "${ZOTERO_RELAY_REPLACE_STRATEGY:-}"
       ZOTERO_REQUEST_TIMEOUT_SECONDS: "${ZOTERO_REQUEST_TIMEOUT_SECONDS:-300}"
+    command: ["zotero-ingest-worker", "serve", "--host", "0.0.0.0", "--port", "8765", "--role", "metadata"]
     healthcheck:
       test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8765/health', timeout=3).read()"]
       interval: 30s
@@ -57,6 +59,82 @@ services:
       retries: 3
     ports:
       - "127.0.0.1:8765:8765"
+    volumes:
+      - type: bind
+        source: C:/PC/Zotero
+        target: /zotero_roots/pc_zotero
+      - type: bind
+        source: C:/Users/ELVIS_NIX/Zotero
+        target: /zotero_roots/user_zotero
+      - type: bind
+        source: D:/Elvis_projects/zotero-ingest-worker/data/ingest
+        target: /data/ingest
+      - type: bind
+        source: D:/Elvis_projects/zotero-ingest-worker/data/html
+        target: /data/html
+    networks:
+      - zotero-automation
+
+  zotero-fulltext-worker:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: zotero-ingest-worker:latest
+    container_name: zotero-fulltext-worker
+    restart: unless-stopped
+    environment:
+      ZOTERO_DATA_DIRS: ""
+      ZOTERO_DISCOVERY_ROOTS: "/zotero_roots"
+      ZOTERO_DISCOVERY_MAX_DEPTH: "4"
+      ZOTERO_AUTO_DISCOVER: "1"
+      ZOTERO_PATH_PREFIX_MAP: "C:\\PC\\Zotero=/zotero_roots/pc_zotero;C:\\Users\\ELVIS_NIX\\Zotero=/zotero_roots/user_zotero"
+      ZOTERO_STORAGE_DIR: ""
+      ZOTERO_INGEST_HOST: "0.0.0.0"
+      ZOTERO_INGEST_PORT: "8765"
+      ZOTERO_INGEST_TOKEN: ""
+      ZOTERO_INGEST_ROLE: "fulltext"
+      INGEST_DATA_ROOT: "/data/ingest"
+      INGEST_HTML_ROOT: "/data/html"
+      METADATA_PATCH_POLICY: "${METADATA_PATCH_POLICY:-emptyFieldsOnly}"
+      METADATA_TITLE_MIN_SCORE: "${METADATA_TITLE_MIN_SCORE:-0.86}"
+      METADATA_JOB_LEASE_SECONDS: "${METADATA_JOB_LEASE_SECONDS:-900}"
+      METADATA_REQUEST_TIMEOUT_SECONDS: "${METADATA_REQUEST_TIMEOUT_SECONDS:-60}"
+      METADATA_EXTENDED_PROVIDERS_ENABLED: "${METADATA_EXTENDED_PROVIDERS_ENABLED:-1}"
+      METADATA_CROSSREF_EMAIL: "${METADATA_CROSSREF_EMAIL:-}"
+      METADATA_UNPAYWALL_EMAIL: "${METADATA_UNPAYWALL_EMAIL:-}"
+      METADATA_OPENALEX_API_KEY: "${METADATA_OPENALEX_API_KEY:-}"
+      METADATA_SEMANTIC_SCHOLAR_API_KEY: "${METADATA_SEMANTIC_SCHOLAR_API_KEY:-}"
+      METADATA_CORE_API_KEY: "${METADATA_CORE_API_KEY:-}"
+      METADATA_USER_AGENT: "${METADATA_USER_AGENT:-zotero-fulltext-worker/0.1}"
+      ZOTERO_TRANSLATION_SERVER_URL: "${ZOTERO_TRANSLATION_SERVER_URL:-http://zotero-translation-server:1969}"
+      ZOTERO_TRANSLATION_SERVER_TIMEOUT_SECONDS: "${ZOTERO_TRANSLATION_SERVER_TIMEOUT_SECONDS:-60}"
+      ARXIV_HTML_ROOT: "/data/html/arxiv"
+      ARXIV_HTML_ATTACH: "${ARXIV_HTML_ATTACH:-1}"
+      ARXIV_HTML_FETCH_TIMEOUT_SECONDS: "${ARXIV_HTML_FETCH_TIMEOUT_SECONDS:-120}"
+      ARXIV_HTML_MIN_TEXT_CHARS: "${ARXIV_HTML_MIN_TEXT_CHARS:-200}"
+      ARXIV_SEARCH_MIN_SCORE: "${ARXIV_SEARCH_MIN_SCORE:-0.88}"
+      SCIHUB_ENABLED: "${SCIHUB_ENABLED:-1}"
+      SCIHUB_BASE_URL: "${SCIHUB_BASE_URL:-https://sci-hub.ru/}"
+      SCIHUB_MIRRORS: "${SCIHUB_MIRRORS:-}"
+      SCIHUB_REQUEST_TIMEOUT_SECONDS: "${SCIHUB_REQUEST_TIMEOUT_SECONDS:-60}"
+      PDF_TEXT_MIN_CHARS: "80"
+      PDF_TEXT_CHECK_PAGES: "5"
+      ZOTERO_SCAN_LIMIT: "5"
+      ZOTERO_SCAN_MAX_ITEMS: "2000"
+      ZOTERO_RETRY_FAILED: "0"
+      ZOTERO_RELAY_URL: "${ZOTERO_RELAY_URL:-}"
+      ZOTERO_RELAY_TOKEN: "${ZOTERO_RELAY_TOKEN:-}"
+      ZFR_TOKEN: "${ZFR_TOKEN:-}"
+      ZOTERO_RELAY_REPLACE_STRATEGY: "${ZOTERO_RELAY_REPLACE_STRATEGY:-}"
+      ZOTERO_REQUEST_TIMEOUT_SECONDS: "${ZOTERO_REQUEST_TIMEOUT_SECONDS:-300}"
+    command: ["zotero-fulltext-worker", "serve", "--host", "0.0.0.0", "--port", "8765", "--role", "fulltext"]
+    healthcheck:
+      test: ["CMD", "python", "-c", "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8765/health', timeout=3).read()"]
+      interval: 30s
+      timeout: 5s
+      retries: 3
+    ports:
+      - "127.0.0.1:8766:8765"
     volumes:
       - type: bind
         source: C:/PC/Zotero
