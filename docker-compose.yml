@@ -49,6 +49,7 @@ services:
       ZOTERO_RELAY_URL: "${ZOTERO_RELAY_URL:-}"
       ZOTERO_RELAY_TOKEN: "${ZOTERO_RELAY_TOKEN:-}"
       ZFR_TOKEN: "${ZFR_TOKEN:-}"
+      ZFR_LIBRARY_BINDINGS: "${ZFR_LIBRARY_BINDINGS:-[]}"
       ZOTERO_RELAY_REPLACE_STRATEGY: "${ZOTERO_RELAY_REPLACE_STRATEGY:-}"
       ZOTERO_REQUEST_TIMEOUT_SECONDS: "${ZOTERO_REQUEST_TIMEOUT_SECONDS:-300}"
     command: ["zotero-ingest-worker", "serve", "--host", "0.0.0.0", "--port", "8765", "--role", "metadata"]
@@ -125,6 +126,7 @@ services:
       ZOTERO_RELAY_URL: "${ZOTERO_RELAY_URL:-}"
       ZOTERO_RELAY_TOKEN: "${ZOTERO_RELAY_TOKEN:-}"
       ZFR_TOKEN: "${ZFR_TOKEN:-}"
+      ZFR_LIBRARY_BINDINGS: "${ZFR_LIBRARY_BINDINGS:-[]}"
       ZOTERO_RELAY_REPLACE_STRATEGY: "${ZOTERO_RELAY_REPLACE_STRATEGY:-}"
       ZOTERO_REQUEST_TIMEOUT_SECONDS: "${ZOTERO_REQUEST_TIMEOUT_SECONDS:-300}"
     command: ["zotero-fulltext-worker", "serve", "--host", "0.0.0.0", "--port", "8765", "--role", "fulltext"]

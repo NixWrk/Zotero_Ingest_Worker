@@ -735,12 +735,63 @@ def test_scihub_backlog_scan_queues_identifier_queries_when_html_exists_but_pdf_
     queued_jobs = processor.state.list_metadata_jobs(job_type="scihub_pdf", limit=20)
     queue_keys = [str(job["queue_key"]) for job in queued_jobs]
 
-    assert result["queued"] >= 3
+    assert result["queued"] == 1
+    assert len(queued_jobs) == 1
     assert result["results"][0]["inventory"]["has_html"] is True
     assert result["results"][0]["inventory"]["has_pdf"] is False
-    assert any("|query_type=doi|query=10.1000%2Fexample" in key for key in queue_keys)
-    assert any("|query_type=pmid|query=31044789" in key for key in queue_keys)
-    assert any("|query_type=pmcid|query=PMC1234567" in key for key in queue_keys)
+    assert any("|query_list=" in key for key in queue_keys)
+    assert any("doi:10.1000%2Fexample" in key for key in queue_keys)
+    assert any("pmid:31044789" in key for key in queue_keys)
+    assert any("pmcid:PMC1234567" in key for key in queue_keys)
+
+
+def test_scihub_drain_grouped_job_tries_next_identifier(
+    monkeypatch: Any,
+    tmp_path: Path,
+) -> None:
+    data_dir = _write_full_text_fixture(tmp_path, with_pdf=False)
+    _add_full_text_html_attachment(data_dir)
+    connection = sqlite3.connect(data_dir / "zotero.sqlite")
+    try:
+        connection.executescript(
+            """
+            insert into fields values (3, 'extra');
+            insert into itemDataValues values (3, 'PMID: 31044789; PMCID: PMC1234567');
+            insert into itemData values (10, 3, 3);
+            """
+        )
+        connection.commit()
+    finally:
+        connection.close()
+    config = _metadata_processor_test_config(tmp_path, data_dir)
+    processor = ZoteroMetadataProcessor(config)
+    processor._library_configs = lambda **_kwargs: [config]  # type: ignore[method-assign]
+    processor.scihub_pdf_backlog_scan(limit=10)
+    calls: list[str] = []
+
+    def fake_download_and_attach_scihub_pdf(config: Any, options: Any) -> dict[str, Any]:
+        calls.append(str(options.doi))
+        if len(calls) == 1:
+            return {"ok": False, "status": "unresolved", "error": "not found"}
+        return {
+            "ok": True,
+            "status": "attached",
+            "download": {"ok": True, "output_path": str(tmp_path / "scihub.pdf")},
+            "attach": {"ok": True},
+        }
+
+    monkeypatch.setattr(
+        "zotero_ingest_worker.metadata_processor.download_and_attach_scihub_pdf",
+        fake_download_and_attach_scihub_pdf,
+    )
+
+    result = processor.drain_scihub_pdf_queue(limit=1, require_relay=False)
+
+    assert result["ok"] is True
+    assert calls[0] == "10.1000/example"
+    assert calls[1] in {"31044789", "PMC1234567"}
+    stored = json.loads(result["results"][0]["result_json"])
+    assert [attempt["query"] for attempt in stored["attempts"][:2]] == calls[:2]
 
 
 def test_full_text_backlog_scan_dedupes_parent_when_sqlite_mtime_changes(tmp_path: Path) -> None:
@@ -1460,4 +1511,8 @@ def _metadata_processor_test_config(tmp_path: Path, data_dir: Path) -> SimpleNam
         arxiv_search_min_score=0.88,
         metadata_policy="emptyFieldsOnly",
         metadata_extended_providers_enabled=False,
+        scihub_enabled=True,
+        scihub_mirrors=("https://sci-hub.test/",),
+        scihub_user_agent="test-agent",
+        scihub_request_timeout_seconds=1,
     )

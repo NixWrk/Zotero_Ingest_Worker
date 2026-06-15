@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 import os
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -64,6 +65,39 @@ def env_path_list(name: str) -> tuple[Path, ...]:
     if not value:
         return ()
     return tuple(Path(part.strip()) for part in value.split(";") if part.strip())
+
+
+def env_zfr_library_data_dirs(
+    *,
+    path_prefix_map: tuple[tuple[str, str], ...] = (),
+) -> tuple[Path, ...]:
+    value = os.environ.get("ZFR_LIBRARY_BINDINGS", "").strip()
+    if not value:
+        return ()
+    try:
+        bindings = json.loads(value)
+    except json.JSONDecodeError as exc:
+        raise ValueError("Invalid ZFR_LIBRARY_BINDINGS JSON.") from exc
+    if not isinstance(bindings, list):
+        raise ValueError("Invalid ZFR_LIBRARY_BINDINGS: expected a JSON list.")
+
+    result: list[Path] = []
+    for binding in bindings:
+        if not isinstance(binding, dict):
+            continue
+        candidates: list[Path] = []
+        data_dir = str(binding.get("dataDir") or "").strip()
+        host_data_dir = str(binding.get("hostDataDir") or "").strip()
+        if data_dir:
+            candidates.append(Path(data_dir))
+        if host_data_dir:
+            candidates.append(_translate_prefix_path(host_data_dir, path_prefix_map))
+            candidates.append(Path(host_data_dir))
+        for candidate in candidates:
+            if is_zotero_data_dir(candidate.expanduser()):
+                result.append(candidate)
+                break
+    return unique_paths(tuple(result))
 
 
 def env_string_prefix_map(name: str) -> tuple[tuple[str, str], ...]:
@@ -278,6 +312,8 @@ def from_env(*, load_file: bool = True) -> WorkerConfig:
     discovery_roots = env_path_list("ZOTERO_DISCOVERY_ROOTS") or default_discovery_roots()
     discovery_max_depth = env_int("ZOTERO_DISCOVERY_MAX_DEPTH", 4)
     auto_discover = env_bool("ZOTERO_AUTO_DISCOVER", True)
+    zotero_path_prefix_map = env_string_prefix_map("ZOTERO_PATH_PREFIX_MAP")
+    binding_data_dirs = env_zfr_library_data_dirs(path_prefix_map=zotero_path_prefix_map)
     discovered_data_dirs = (
         discover_zotero_data_dirs(discovery_roots, max_depth=discovery_max_depth)
         if auto_discover
@@ -285,6 +321,8 @@ def from_env(*, load_file: bool = True) -> WorkerConfig:
     )
     if explicit_data_dirs:
         data_dirs = unique_paths(explicit_data_dirs)
+    elif binding_data_dirs:
+        data_dirs = binding_data_dirs
     else:
         data_dirs = discovered_data_dirs
     if not data_dirs and is_zotero_data_dir(primary_data_dir):
@@ -304,7 +342,7 @@ def from_env(*, load_file: bool = True) -> WorkerConfig:
         zotero_data_dirs=data_dirs,
         zotero_discovery_roots=discovery_roots,
         zotero_discovery_max_depth=discovery_max_depth,
-        zotero_path_prefix_map=env_string_prefix_map("ZOTERO_PATH_PREFIX_MAP"),
+        zotero_path_prefix_map=zotero_path_prefix_map,
         zotero_storage_dir=(
             env_path("ZOTERO_STORAGE_DIR", Path())
             if os.environ.get("ZOTERO_STORAGE_DIR")
@@ -402,3 +440,18 @@ def apply_request_overrides(config: WorkerConfig, payload: dict[str, Any]) -> Wo
 
 def _normalize_prefix_path(value: str) -> str:
     return value.strip().replace("\\", "/").rstrip("/")
+
+
+def _translate_prefix_path(
+    raw_path: str,
+    path_prefix_map: tuple[tuple[str, str], ...],
+) -> Path:
+    normalized_raw = _normalize_prefix_path(raw_path)
+    for source_prefix, target_prefix in path_prefix_map:
+        normalized_source = _normalize_prefix_path(source_prefix)
+        if normalized_raw == normalized_source:
+            return Path(target_prefix)
+        if normalized_raw.startswith(f"{normalized_source}/"):
+            relative = normalized_raw[len(normalized_source) + 1 :]
+            return Path(target_prefix) / Path(*relative.split("/"))
+    return Path(raw_path)

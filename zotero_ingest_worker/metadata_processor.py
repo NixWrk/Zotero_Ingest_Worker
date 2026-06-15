@@ -69,6 +69,7 @@ from .metadata_processor_helpers import (
     title_match_score,
     zotero_translator_item_to_candidate,
     _doi_for_scihub,
+    _encode_scihub_query_candidates,
     _enqueue_item_result,
     _enqueue_result,
     _first_researchgate_browser_fallback,
@@ -86,6 +87,7 @@ from .metadata_processor_helpers import (
     _scihub_doi_from_job,
     _scihub_query_candidates,
     _scihub_query_from_job,
+    _scihub_queries_from_job,
     _scihub_query_type_from_job,
     _scihub_result_retryable,
     _title_for_lookup,
@@ -493,21 +495,14 @@ class ZoteroMetadataProcessor:
                 inventory=inventory,
             )
 
-        jobs: list[dict[str, Any]] = []
-        queued = 0
-        for candidate in candidates:
-            enqueue = self._enqueue_scihub_pdf_query_job(
-                metadata=metadata,
-                query=str(candidate["query"]),
-                query_type=str(candidate["type"]),
-                reason=reason,
-                force=force,
-            )
-            if enqueue is None:
-                continue
-            jobs.append(enqueue)
-            if enqueue.get("classification") == "queued":
-                queued += 1
+        enqueue = self._enqueue_scihub_pdf_query_job(
+            metadata=metadata,
+            candidates=candidates,
+            reason=reason,
+            force=force,
+        )
+        jobs = [enqueue] if enqueue is not None else []
+        queued = 1 if enqueue is not None and enqueue.get("classification") == "queued" else 0
 
         classification = "queued" if queued else "already_known"
         return _enqueue_item_result(
@@ -526,21 +521,26 @@ class ZoteroMetadataProcessor:
         self,
         *,
         metadata: LocalItemMetadata,
-        query: str,
-        query_type: str,
+        candidates: list[dict[str, str]],
         reason: str,
         force: bool,
     ) -> dict[str, Any] | None:
-        query = _normalize_identifier(query)
-        if not query:
+        candidates = [
+            {
+                "type": _normalize_identifier(str(candidate.get("type") or "")),
+                "query": _normalize_identifier(str(candidate.get("query") or "")),
+            }
+            for candidate in candidates
+        ]
+        candidates = [candidate for candidate in candidates if candidate["type"] and candidate["query"]]
+        if not candidates:
             return None
 
         source_path = Path(metadata.data_dir) / "zotero.sqlite"
         signature = FileSignature.from_path(source_path)
         queue_key = (
             f"{self._queue_key(METADATA_JOB_SCIHUB_PDF)}"
-            f"|query_type={urllib.parse.quote(query_type, safe='')}"
-            f"|query={urllib.parse.quote(query, safe='')}"
+            f"|query_list={_encode_scihub_query_candidates(candidates)}"
         )
         if metadata.version is not None:
             existing = self.state.get_metadata_job_by_parent_scope(
@@ -556,8 +556,7 @@ class ZoteroMetadataProcessor:
                 return {
                     "classification": "already_known",
                     "job": existing,
-                    "query": query,
-                    "query_type": query_type,
+                    "queries": candidates,
                 }
         job = self.state.enqueue_metadata_job(
             job_type=METADATA_JOB_SCIHUB_PDF,
@@ -576,8 +575,7 @@ class ZoteroMetadataProcessor:
         return {
             "classification": "queued" if job.get("created") else "already_known",
             "job": job,
-            "query": query,
-            "query_type": query_type,
+            "queries": candidates,
         }
 
     def _drain_queue(
@@ -921,10 +919,12 @@ class ZoteroMetadataProcessor:
     def _drain_scihub_pdf_job(self, job: dict[str, Any]) -> dict[str, Any]:
         job_id = str(job["job_id"])
         try:
-            # The query may be a DOI, PMID, PMCID, URL, or other identifier.
-            # When it is absent the adapter derives the best DOI from metadata.
-            query = _scihub_query_from_job(job)
-            query_type = _scihub_query_type_from_job(job)
+            # Each job may carry several DOI/PMID/PMCID/URL candidates. They
+            # are tried sequentially inside one parent-scoped job so the queue
+            # does not fan out into duplicate fallback tasks.
+            queries = _scihub_queries_from_job(job)
+            if not queries:
+                queries = [{"type": _scihub_query_type_from_job(job), "query": _scihub_query_from_job(job)}]
             item_key = str(job.get("parent_item_key") or job.get("attachment_key") or "").strip()
             if not item_key:
                 return self.state.mark_metadata_job_skipped(
@@ -932,43 +932,58 @@ class ZoteroMetadataProcessor:
                     message="Sci-Hub PDF job has no parent item key.",
                     result={
                         "reason": "missing_parent_item_key",
-                        "query": query,
-                        "query_type": query_type,
+                        "queries": queries,
                         "job": job,
                     },
                 )
-            result = download_and_attach_scihub_pdf(
-                self.config,
-                SciHubPdfOptions(
-                    doi=query,
-                    item_key=item_key,
-                    data_dir=str(job.get("data_dir") or ""),
-                    # Download under the shared OCR data root so the file is
-                    # visible to zotero-file-relay (see shared_relay_path).
-                    output_dir=Path(self.config.ingest_data_root) / "scihub_downloads",
-                    mirrors=tuple(self.config.scihub_mirrors),
-                    user_agent=self.config.scihub_user_agent,
-                    timeout_seconds=self.config.scihub_request_timeout_seconds,
-                ),
-            )
-            result["query"] = query
-            result["query_type"] = query_type
-            if result.get("ok"):
-                download = result.get("download")
-                output_path = None
-                if isinstance(download, dict):
-                    output_path = str(download.get("output_path") or "").strip() or None
-                return self.state.mark_metadata_job_succeeded(
-                    job_id=job_id,
-                    message=f"Sci-Hub PDF job finished with status {result.get('status')}.",
-                    result=result,
-                    output_path=output_path,
-                    relay_result=result.get("attach") if isinstance(result.get("attach"), dict) else None,
+
+            attempts: list[dict[str, Any]] = []
+            for candidate in queries:
+                query = _normalize_identifier(str(candidate.get("query") or ""))
+                query_type = _normalize_identifier(str(candidate.get("type") or "")) or "doi"
+                # The query may be a DOI, PMID, PMCID, URL, or other identifier.
+                # When it is absent the adapter derives the best DOI from metadata.
+                result = download_and_attach_scihub_pdf(
+                    self.config,
+                    SciHubPdfOptions(
+                        doi=query,
+                        item_key=item_key,
+                        data_dir=str(job.get("data_dir") or ""),
+                        # Download under the shared OCR data root so the file is
+                        # visible to zotero-file-relay (see shared_relay_path).
+                        output_dir=Path(self.config.ingest_data_root) / "scihub_downloads",
+                        mirrors=tuple(self.config.scihub_mirrors),
+                        user_agent=self.config.scihub_user_agent,
+                        timeout_seconds=self.config.scihub_request_timeout_seconds,
+                    ),
                 )
+                result["query"] = query
+                result["query_type"] = query_type
+                attempts.append(dict(result))
+                if result.get("ok"):
+                    success_result = dict(result)
+                    success_result["attempts"] = attempts
+                    download = result.get("download")
+                    output_path = None
+                    if isinstance(download, dict):
+                        output_path = str(download.get("output_path") or "").strip() or None
+                    return self.state.mark_metadata_job_succeeded(
+                        job_id=job_id,
+                        message=f"Sci-Hub PDF job finished with status {result.get('status')}.",
+                        result=success_result,
+                        output_path=output_path,
+                        relay_result=success_result.get("attach")
+                        if isinstance(success_result.get("attach"), dict)
+                        else None,
+                    )
+
+            result = dict(attempts[-1]) if attempts else {"ok": False, "status": "missing_query"}
+            result["ok"] = False
+            result["attempts"] = attempts
             return self.state.mark_metadata_job_failed(
                 job_id=job_id,
                 message=str(result.get("error") or result.get("status") or "Sci-Hub PDF download failed."),
-                retryable=_scihub_result_retryable(result),
+                retryable=any(_scihub_result_retryable(attempt) for attempt in attempts),
             )
         except Exception as exc:
             return self.state.mark_metadata_job_failed(

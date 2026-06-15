@@ -290,6 +290,43 @@ def _scihub_query_candidates(metadata: LocalItemMetadata) -> list[dict[str, str]
     return candidates
 
 
+def _encode_scihub_query_candidates(candidates: list[dict[str, str]]) -> str:
+    parts: list[str] = []
+    for candidate in candidates:
+        query_type = _normalize_identifier(str(candidate.get("type") or ""))
+        query = _normalize_identifier(str(candidate.get("query") or ""))
+        if not query_type or not query:
+            continue
+        parts.append(
+            f"{urllib.parse.quote(query_type, safe='')}"
+            f":{urllib.parse.quote(query, safe='')}"
+        )
+    return ",".join(parts)
+
+
+def _scihub_queries_from_job(job: dict[str, Any]) -> list[dict[str, str]]:
+    queue_key = str(job.get("queue_key") or "")
+    marker = "|query_list="
+    if marker in queue_key:
+        encoded = queue_key.rsplit(marker, 1)[-1]
+        queries: list[dict[str, str]] = []
+        for part in encoded.split(","):
+            if not part or ":" not in part:
+                continue
+            raw_type, raw_query = part.split(":", 1)
+            query_type = urllib.parse.unquote(raw_type).strip() or "doi"
+            query = urllib.parse.unquote(raw_query).strip()
+            if query:
+                queries.append({"type": query_type, "query": query})
+        if queries:
+            return queries
+
+    query = _scihub_query_from_job(job)
+    if not query:
+        return []
+    return [{"type": _scihub_query_type_from_job(job), "query": query}]
+
+
 def _scihub_doi_from_job(job: dict[str, Any]) -> str:
     return _scihub_query_from_job(job)
 
