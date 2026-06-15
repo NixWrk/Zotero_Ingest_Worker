@@ -191,6 +191,7 @@ def test_metadata_diff_filters_runtime_invalid_fields_for_other_item_types() -> 
     report = filter_metadata_diff_for_item_type(diff, item_type="report")
     webpage = filter_metadata_diff_for_item_type(diff, item_type="webpage")
     conference = filter_metadata_diff_for_item_type(diff, item_type="conferencePaper")
+    document = filter_metadata_diff_for_item_type(diff, item_type="document")
 
     assert "numPages" not in book_section["patch"]
     assert book_section["patch"]["bookTitle"] == "Proceedings Book"
@@ -201,6 +202,8 @@ def test_metadata_diff_filters_runtime_invalid_fields_for_other_item_types() -> 
     assert "pages" not in webpage["patch"]
     assert "bookTitle" not in conference["patch"]
     assert conference["patch"]["title"] == "A Better Title"
+    assert "pages" not in document["patch"]
+    assert document["patch"]["title"] == "A Better Title"
 
 
 def test_zotero_translator_item_maps_translation_server_payload() -> None:

@@ -187,6 +187,11 @@ ITEM_TYPE_UNSUPPORTED_PATCH_FIELDS: dict[str, frozenset[str]] = {
             "libraryCatalog",
         }
     ),
+    "document": frozenset(
+        {
+            "pages",
+        }
+    ),
 }
 
 
