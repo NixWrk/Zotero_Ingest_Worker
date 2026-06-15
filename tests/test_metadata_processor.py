@@ -147,6 +147,8 @@ def test_metadata_diff_filters_fields_not_valid_for_preprints() -> None:
             "ISSN": "1234-5678",
             "publicationTitle": "Journal of Preprints",
             "volume": "12",
+            "ISBN": "978-1-2345-6789-0",
+            "websiteTitle": "Publisher landing page",
         },
         raw={},
     )
@@ -160,7 +162,14 @@ def test_metadata_diff_filters_fields_not_valid_for_preprints() -> None:
     assert preprint["skipped_fields"]["ISSN"] == "field_not_valid_for_item_type:preprint"
     assert preprint["skipped_fields"]["publicationTitle"] == "field_not_valid_for_item_type:preprint"
     assert preprint["skipped_fields"]["volume"] == "field_not_valid_for_item_type:preprint"
-    assert journal["patch"] == diff["patch"]
+    assert journal["patch"] == {
+        "DOI": "10.48550/arXiv.2401.01234",
+        "ISSN": "1234-5678",
+        "publicationTitle": "Journal of Preprints",
+        "volume": "12",
+    }
+    assert journal["skipped_fields"]["ISBN"] == "field_not_valid_for_item_type:journalArticle"
+    assert journal["skipped_fields"]["websiteTitle"] == "field_not_valid_for_item_type:journalArticle"
 
 
 def test_zotero_translator_item_maps_translation_server_payload() -> None:

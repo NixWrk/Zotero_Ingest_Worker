@@ -87,6 +87,24 @@ ITEM_TYPE_UNSUPPORTED_PATCH_FIELDS: dict[str, frozenset[str]] = {
             "websiteType",
         }
     ),
+    "journalArticle": frozenset(
+        {
+            "ISBN",
+            "edition",
+            "numPages",
+            "numberOfVolumes",
+            "bookTitle",
+            "institution",
+            "reportType",
+            "reportNumber",
+            "conferenceName",
+            "proceedingsTitle",
+            "websiteTitle",
+            "websiteType",
+            "publisher",
+            "place",
+        }
+    ),
 }
 
 
