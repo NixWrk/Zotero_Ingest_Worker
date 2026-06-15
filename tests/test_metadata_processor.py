@@ -172,6 +172,37 @@ def test_metadata_diff_filters_fields_not_valid_for_preprints() -> None:
     assert journal["skipped_fields"]["websiteTitle"] == "field_not_valid_for_item_type:journalArticle"
 
 
+def test_metadata_diff_filters_runtime_invalid_fields_for_other_item_types() -> None:
+    diff = {
+        "patch": {
+            "title": "A Better Title",
+            "numPages": "12",
+            "publisher": "Publisher",
+            "ISSN": "1234-5678",
+            "libraryCatalog": "Crossref",
+            "pages": "1-2",
+            "bookTitle": "Proceedings Book",
+        },
+        "skipped_fields": {},
+        "applied_fields": [],
+    }
+
+    book_section = filter_metadata_diff_for_item_type(diff, item_type="bookSection")
+    report = filter_metadata_diff_for_item_type(diff, item_type="report")
+    webpage = filter_metadata_diff_for_item_type(diff, item_type="webpage")
+    conference = filter_metadata_diff_for_item_type(diff, item_type="conferencePaper")
+
+    assert "numPages" not in book_section["patch"]
+    assert book_section["patch"]["bookTitle"] == "Proceedings Book"
+    assert "publisher" not in report["patch"]
+    assert report["patch"]["pages"] == "1-2"
+    assert "ISSN" not in webpage["patch"]
+    assert "libraryCatalog" not in webpage["patch"]
+    assert "pages" not in webpage["patch"]
+    assert "bookTitle" not in conference["patch"]
+    assert conference["patch"]["title"] == "A Better Title"
+
+
 def test_zotero_translator_item_maps_translation_server_payload() -> None:
     item = {
         "itemType": "journalArticle",

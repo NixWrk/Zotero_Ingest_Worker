@@ -105,6 +105,88 @@ ITEM_TYPE_UNSUPPORTED_PATCH_FIELDS: dict[str, frozenset[str]] = {
             "place",
         }
     ),
+    "bookSection": frozenset(
+        {
+            "ISSN",
+            "publicationTitle",
+            "journalAbbreviation",
+            "volume",
+            "issue",
+            "numPages",
+            "numberOfVolumes",
+            "institution",
+            "reportType",
+            "reportNumber",
+            "conferenceName",
+            "proceedingsTitle",
+            "websiteTitle",
+            "websiteType",
+        }
+    ),
+    "conferencePaper": frozenset(
+        {
+            "ISSN",
+            "publicationTitle",
+            "journalAbbreviation",
+            "volume",
+            "issue",
+            "ISBN",
+            "edition",
+            "numPages",
+            "numberOfVolumes",
+            "bookTitle",
+            "institution",
+            "reportType",
+            "reportNumber",
+            "websiteTitle",
+            "websiteType",
+        }
+    ),
+    "report": frozenset(
+        {
+            "ISSN",
+            "publicationTitle",
+            "journalAbbreviation",
+            "volume",
+            "issue",
+            "ISBN",
+            "edition",
+            "numPages",
+            "numberOfVolumes",
+            "bookTitle",
+            "conferenceName",
+            "proceedingsTitle",
+            "publisher",
+            "websiteTitle",
+            "websiteType",
+        }
+    ),
+    "webpage": frozenset(
+        {
+            "DOI",
+            "ISSN",
+            "publicationTitle",
+            "journalAbbreviation",
+            "volume",
+            "issue",
+            "pages",
+            "series",
+            "seriesTitle",
+            "publisher",
+            "place",
+            "ISBN",
+            "edition",
+            "numPages",
+            "numberOfVolumes",
+            "bookTitle",
+            "institution",
+            "reportType",
+            "reportNumber",
+            "conferenceName",
+            "proceedingsTitle",
+            "libraryCatalog",
+        }
+    ),
 }
 
 
