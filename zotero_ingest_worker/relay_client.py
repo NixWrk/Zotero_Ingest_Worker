@@ -226,11 +226,11 @@ class ZoteroRelayClient:
             payload={
                 "fields": fields,
                 "policy": policy,
-                "expectedVersion": int(metadata.version or 0),
+                "expectedVersion": 0,
                 "libraryId": attachment.library_id,
                 "deduplicationKey": (
                     f"metadata-enrich:{attachment.state_key}:{metadata.key}:"
-                    f"{metadata.version}:{patch_digest}:{policy}"
+                    f"refresh:{patch_digest}:{policy}"
                 ),
             },
             error_label="zotero-file-relay metadata patch",

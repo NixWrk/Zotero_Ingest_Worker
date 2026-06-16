@@ -426,6 +426,8 @@ def test_metadata_patch_relay_payload_includes_library_id(monkeypatch: Any) -> N
     assert result == {"ok": True}
     assert captured["path"] == "/attachments/PDF1234/parent/metadata"
     assert captured["payload"]["libraryId"] == "Zotero_Test_Data_abcd1234"  # type: ignore[index]
+    assert captured["payload"]["expectedVersion"] == 0  # type: ignore[index]
+    assert "refresh:" in captured["payload"]["deduplicationKey"]  # type: ignore[index]
 
 
 def test_arxiv_html_filename_uses_distinct_suffix() -> None:
