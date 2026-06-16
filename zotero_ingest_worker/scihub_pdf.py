@@ -12,6 +12,7 @@ from typing import Any
 
 from .config import DEFAULT_SCIHUB_MIRRORS, PROJECT_ROOT, WorkerConfig
 from .package_paths import ensure_local_package_paths
+from .provider_scripts import provider_script_path
 
 ensure_local_package_paths()
 
@@ -435,7 +436,7 @@ def _safe_doi(doi: str) -> str:
 
 
 def _script_module() -> Any:
-    script_path = PROJECT_ROOT / "scripts" / "providers" / "researchgate_pdf_browser_download.py"
+    script_path = provider_script_path("researchgate_pdf_browser_download.py", package_root=PROJECT_ROOT)
     spec = importlib.util.spec_from_file_location("researchgate_pdf_browser_download", script_path)
     if spec is None or spec.loader is None:
         raise RuntimeError(f"Unable to load Zotero parent attach helper: {script_path}")

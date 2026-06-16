@@ -6,6 +6,7 @@ from pathlib import Path
 from typing import Any, Awaitable, Callable
 
 from .config import WorkerConfig
+from .provider_scripts import provider_script_path
 
 
 DownloadResearchGatePdf = Callable[..., Awaitable[dict[str, Any]]]
@@ -98,7 +99,7 @@ async def download_and_attach_researchgate_pdf(
 
 
 def _script_module() -> Any:
-    script_path = Path(__file__).resolve().parents[1] / "scripts" / "providers" / "researchgate_pdf_browser_download.py"
+    script_path = provider_script_path("researchgate_pdf_browser_download.py")
     spec = importlib.util.spec_from_file_location("researchgate_pdf_browser_download", script_path)
     if spec is None or spec.loader is None:
         raise RuntimeError(f"Unable to load ResearchGate browser script: {script_path}")
