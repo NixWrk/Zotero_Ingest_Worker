@@ -16,6 +16,7 @@ RUN --mount=type=cache,target=/root/.cache/pip \
     pip install --upgrade pip \
     && pip install \
         "cryptography>=3.1" \
+        "mini-racer>=0.12" \
         "playwright>=1.45" \
         "pypdf>=4.0"
 
@@ -31,6 +32,7 @@ RUN --mount=type=cache,target=/root/.cache/pip \
         ./repositories/zotero-arxiv-html-ingest
 
 COPY zotero_ingest_worker ./zotero_ingest_worker
+COPY zoteropdf2md ./zoteropdf2md
 COPY scripts ./scripts
 
 RUN --mount=type=cache,target=/root/.cache/pip \

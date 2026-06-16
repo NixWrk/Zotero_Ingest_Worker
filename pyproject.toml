@@ -5,6 +5,7 @@ description = "Small Zotero ingest worker for metadata enrichment and HTML/PDF a
 requires-python = ">=3.11"
 dependencies = [
   "cryptography>=3.1",
+  "mini-racer>=0.12",
   "playwright>=1.45",
   "pypdf>=4.0",
 ]
@@ -12,9 +13,22 @@ dependencies = [
 [project.scripts]
 zotero-ingest-worker = "zotero_ingest_worker.__main__:main"
 zotero-fulltext-worker = "zotero_ingest_worker.fulltext_main:main"
+zotero-article-polish = "zoteropdf2md.web_polish.cli:main"
+pdf-html-polish-web = "zoteropdf2md.web_polish.cli:main"
+pdf-html-polish-web-arxiv = "zoteropdf2md.web_polish.cli:main_arxiv"
+pdf-html-polish-web-pmc = "zoteropdf2md.web_polish.cli:main_pmc"
+pdf-html-polish-web-taylor-francis = "zoteropdf2md.web_polish.cli:main_taylor_francis"
+pdf-html-polish-web-springer-nature = "zoteropdf2md.web_polish.cli:main_springer_nature"
+pdf-html-polish-web-iop = "zoteropdf2md.web_polish.cli:main_iop"
+pdf-html-polish-web-researchgate = "zoteropdf2md.web_polish.cli:main_researchgate"
+pdf-html-polish-web-ojs = "zoteropdf2md.web_polish.cli:main_ojs"
+pdf-html-polish-web-sciendo = "zoteropdf2md.web_polish.cli:main_sciendo"
 
 [tool.setuptools.packages.find]
-include = ["zotero_ingest_worker*"]
+include = ["zotero_ingest_worker*", "zoteropdf2md*"]
+
+[tool.setuptools.package-data]
+zoteropdf2md = ["assets/katex/*"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

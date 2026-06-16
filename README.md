@@ -39,6 +39,17 @@ text length, local images, internal links, bibliography anchors, math strategy,
 remote assets, and provenance. The Zotero HTML attachment uses the standardized
 `article.html`; local assets are embedded into the attachment copy.
 
+The same image also exposes `zotero-article-polish`, which applies the shared
+web article-standard polish to existing source HTML before the main Zotero
+worker sends it to language detection or translation:
+
+```powershell
+zotero-article-polish input.html output.html
+```
+
+The main Zotero worker runs that CLI from `zotero-ingest-worker:latest` with the
+ingest repository mounted as `/ingest_worker_repo`.
+
 ## Main Commands
 
 ```powershell
