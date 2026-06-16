@@ -401,6 +401,129 @@ def sync_parent_attachment_local(
     }
 
 
+def sync_ensured_parent_local(
+    *,
+    attachment: LocalAttachment,
+    relay_result: dict[str, Any],
+) -> dict[str, Any]:
+    parent_key = str(relay_result.get("parentItemKey") or "").strip()
+    if not parent_key:
+        return {"ok": False, "reason": "missing_parent_key"}
+
+    sqlite_path = attachment.data_dir / "zotero.sqlite"
+    if not sqlite_path.exists():
+        return {
+            "ok": True,
+            "updated": False,
+            "reason": "sqlite_missing",
+            "parentKey": parent_key,
+            "sqlite_path": str(sqlite_path),
+        }
+
+    parent_created = relay_result.get("parentCreated")
+    parent_data = parent_created if isinstance(parent_created, dict) else {}
+    pdf_parent_patch = relay_result.get("pdfParentPatch")
+    pdf_patch_data = pdf_parent_patch if isinstance(pdf_parent_patch, dict) else {}
+    parent_title = str(parent_data.get("title") or Path(attachment.filename).stem or "Untitled PDF")
+    parent_type = str(parent_data.get("itemType") or "document")
+    parent_version = _optional_int(parent_data.get("version"))
+    pdf_version = _optional_int(pdf_patch_data.get("newVersion"))
+    collection_keys = [
+        str(value).strip()
+        for value in (parent_data.get("collections") or [])
+        if str(value).strip()
+    ]
+
+    connection = sqlite3.connect(str(sqlite_path), timeout=30)
+    connection.row_factory = sqlite3.Row
+    try:
+        attachment_item_id = attachment.item_id
+        attachment_inserted = False
+        if attachment_item_id is None:
+            row = connection.execute(
+                "select itemID from items where key = ? limit 1",
+                (attachment.key,),
+            ).fetchone()
+            attachment_item_id = int(row["itemID"]) if row is not None else None
+
+        parent_row = connection.execute(
+            "select itemID from items where key = ? limit 1",
+            (parent_key,),
+        ).fetchone()
+        parent_inserted = False
+        if parent_row is None:
+            parent_item_id = _insert_parent_item(
+                connection,
+                source_item_id=attachment_item_id,
+                parent_key=parent_key,
+                parent_type=parent_type,
+                parent_title=parent_title,
+                parent_version=parent_version,
+            )
+            parent_inserted = True
+        else:
+            parent_item_id = int(parent_row["itemID"])
+
+        if attachment_item_id is None:
+            attachment_item_id = _insert_attachment_item(
+                connection,
+                attachment=attachment,
+                parent_item_id=parent_item_id,
+                version=pdf_version,
+            )
+            attachment_inserted = True
+        else:
+            connection.execute(
+                "update itemAttachments set parentItemID = ? where itemID = ?",
+                (parent_item_id, attachment_item_id),
+            )
+        item_columns = _table_columns(connection, "items")
+        if pdf_version is not None and "version" in item_columns:
+            assignments = ["version = ?"]
+            values: list[object] = [pdf_version]
+            if "synced" in item_columns:
+                assignments.append("synced = 1")
+            connection.execute(
+                f"update items set {', '.join(assignments)} where itemID = ?",
+                (*values, attachment_item_id),
+            )
+
+        field_id = _field_id(connection, "title")
+        if field_id is not None:
+            value_id = _item_data_value_id(connection, parent_title)
+            _upsert_item_data(
+                connection,
+                item_id=parent_item_id,
+                field_id=field_id,
+                value_id=value_id,
+            )
+
+        collection_sync = _sync_parent_collections(
+            connection,
+            parent_item_id=parent_item_id,
+            attachment_item_id=attachment_item_id,
+            collection_keys=collection_keys,
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    return {
+        "ok": True,
+        "updated": True,
+        "sqlite_path": str(sqlite_path),
+        "attachmentKey": attachment.key,
+        "attachmentItemId": attachment_item_id,
+        "parentKey": parent_key,
+        "parentItemId": parent_item_id,
+        "parentInserted": parent_inserted,
+        "attachmentInserted": attachment_inserted,
+        "parentVersion": parent_version,
+        "pdfVersion": pdf_version,
+        "collections": collection_sync,
+    }
+
+
 def sync_parent_metadata_local(
     *,
     metadata: LocalItemMetadata,
@@ -553,6 +676,173 @@ def _upsert_item_data(
         "update itemData set valueID = ? where itemID = ? and fieldID = ?",
         (value_id, item_id, field_id),
     )
+
+
+def _insert_parent_item(
+    connection: sqlite3.Connection,
+    *,
+    source_item_id: int | None,
+    parent_key: str,
+    parent_type: str,
+    parent_title: str,
+    parent_version: int | None,
+) -> int:
+    item_columns = _table_columns(connection, "items")
+    type_row = connection.execute(
+        "select itemTypeID from itemTypes where typeName = ? limit 1",
+        (parent_type,),
+    ).fetchone()
+    if type_row is None and parent_type != "document":
+        type_row = connection.execute(
+            "select itemTypeID from itemTypes where typeName = 'document' limit 1",
+        ).fetchone()
+    if type_row is None:
+        type_row = connection.execute(
+            "select itemTypeID from itemTypes where typeName not in ('attachment', 'note', 'annotation') limit 1",
+        ).fetchone()
+    if type_row is None:
+        raise RuntimeError("No suitable Zotero parent item type is available in local SQLite.")
+
+    pdf_row = connection.execute(
+        "select * from items where itemID = ? limit 1",
+        (source_item_id,),
+    ).fetchone() if source_item_id is not None else None
+    values: dict[str, object] = {
+        "itemTypeID": int(type_row["itemTypeID"]),
+        "key": parent_key,
+    }
+    now = datetime.now(UTC)
+    sqlite_timestamp = now.strftime("%Y-%m-%d %H:%M:%S")
+    for column in ("dateAdded", "dateModified", "clientDateModified"):
+        if column in item_columns:
+            values[column] = sqlite_timestamp
+    if "libraryID" in item_columns and pdf_row is not None and "libraryID" in pdf_row.keys():
+        values["libraryID"] = pdf_row["libraryID"]
+    elif "libraryID" in item_columns:
+        library_row = connection.execute(
+            "select libraryID from items where libraryID is not null limit 1",
+        ).fetchone()
+        if library_row is not None:
+            values["libraryID"] = library_row["libraryID"]
+    if "version" in item_columns and parent_version is not None:
+        values["version"] = parent_version
+    if "synced" in item_columns:
+        values["synced"] = 1
+
+    columns = [column for column in values if column in item_columns]
+    placeholders = ", ".join("?" for _ in columns)
+    cursor = connection.execute(
+        f"insert into items ({', '.join(columns)}) values ({placeholders})",
+        tuple(values[column] for column in columns),
+    )
+    return int(cursor.lastrowid)
+
+
+def _insert_attachment_item(
+    connection: sqlite3.Connection,
+    *,
+    attachment: LocalAttachment,
+    parent_item_id: int,
+    version: int | None,
+) -> int:
+    item_columns = _table_columns(connection, "items")
+    attachment_type = connection.execute(
+        "select itemTypeID from itemTypes where typeName = 'attachment' limit 1",
+    ).fetchone()
+    if attachment_type is None:
+        raise RuntimeError("No Zotero attachment item type is available in local SQLite.")
+    parent_row = connection.execute(
+        "select * from items where itemID = ? limit 1",
+        (parent_item_id,),
+    ).fetchone()
+    now = datetime.now(UTC)
+    sqlite_timestamp = now.strftime("%Y-%m-%d %H:%M:%S")
+    item_values: dict[str, object] = {
+        "itemTypeID": int(attachment_type["itemTypeID"]),
+        "key": attachment.key,
+    }
+    for column in ("dateAdded", "dateModified", "clientDateModified"):
+        if column in item_columns:
+            item_values[column] = sqlite_timestamp
+    if "libraryID" in item_columns and parent_row is not None and "libraryID" in parent_row.keys():
+        item_values["libraryID"] = parent_row["libraryID"]
+    if "version" in item_columns and version is not None:
+        item_values["version"] = version
+    if "synced" in item_columns:
+        item_values["synced"] = 1
+
+    item_insert_columns = [column for column in item_values if column in item_columns]
+    cursor = connection.execute(
+        (
+            f"insert into items ({', '.join(item_insert_columns)}) "
+            f"values ({', '.join('?' for _ in item_insert_columns)})"
+        ),
+        tuple(item_values[column] for column in item_insert_columns),
+    )
+    item_id = int(cursor.lastrowid)
+
+    attachment_columns = _table_columns(connection, "itemAttachments")
+    attachment_values: dict[str, object] = {
+        "itemID": item_id,
+        "parentItemID": parent_item_id,
+        "linkMode": attachment.link_mode if attachment.link_mode is not None else 0,
+        "contentType": attachment.content_type or "application/pdf",
+        "path": attachment.zotero_path or f"storage:{attachment.filename}",
+        "syncState": 2,
+    }
+    insert_columns = [column for column in attachment_values if column in attachment_columns]
+    connection.execute(
+        (
+            f"insert into itemAttachments ({', '.join(insert_columns)}) "
+            f"values ({', '.join('?' for _ in insert_columns)})"
+        ),
+        tuple(attachment_values[column] for column in insert_columns),
+    )
+    return item_id
+
+
+def _sync_parent_collections(
+    connection: sqlite3.Connection,
+    *,
+    parent_item_id: int,
+    attachment_item_id: int,
+    collection_keys: list[str],
+) -> dict[str, Any]:
+    if (
+        not collection_keys
+        or not _table_exists(connection, "collections")
+        or not _table_exists(connection, "collectionItems")
+    ):
+        return {"updated": False, "reason": "no_collections"}
+    rows = connection.execute(
+        f"select collectionID from collections where key in ({', '.join('?' for _ in collection_keys)})",
+        tuple(collection_keys),
+    ).fetchall()
+    collection_ids = [int(row["collectionID"]) for row in rows]
+    added = 0
+    removed = 0
+    for collection_id in collection_ids:
+        existing = connection.execute(
+            "select 1 from collectionItems where collectionID = ? and itemID = ? limit 1",
+            (collection_id, parent_item_id),
+        ).fetchone()
+        if existing is None:
+            connection.execute(
+                "insert into collectionItems (collectionID, itemID) values (?, ?)",
+                (collection_id, parent_item_id),
+            )
+            added += 1
+        cursor = connection.execute(
+            "delete from collectionItems where collectionID = ? and itemID = ?",
+            (collection_id, attachment_item_id),
+        )
+        removed += cursor.rowcount if cursor.rowcount is not None else 0
+    return {
+        "updated": bool(added or removed),
+        "addedToParent": added,
+        "removedFromAttachment": removed,
+        "collectionIds": collection_ids,
+    }
 
 
 def _read_item_field_values(connection: sqlite3.Connection, item_id: int) -> dict[str, str]:

@@ -8,7 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
-from zotero_ingest_worker.local_zotero import LocalZoteroStore
+from zotero_ingest_worker.local_zotero import LocalAttachment, LocalZoteroStore
 from zotero_ingest_worker.metadata_jobs import METADATA_JOB_FULL_TEXT
 from zotero_ingest_worker.metadata_processor import (
     MetadataCandidate,
@@ -428,6 +428,263 @@ def test_metadata_patch_relay_payload_includes_library_id(monkeypatch: Any) -> N
     assert captured["payload"]["libraryId"] == "Zotero_Test_Data_abcd1234"  # type: ignore[index]
     assert captured["payload"]["expectedVersion"] == 0  # type: ignore[index]
     assert "refresh:" in captured["payload"]["deduplicationKey"]  # type: ignore[index]
+
+
+def test_metadata_drain_ensures_parent_for_standalone_pdf(
+    monkeypatch: Any,
+    tmp_path: Path,
+) -> None:
+    pdf = tmp_path / "paper.pdf"
+    pdf.write_bytes(b"%PDF")
+    attachment = LocalAttachment(
+        library_id="LIB1",
+        data_dir=tmp_path,
+        storage_dir=tmp_path,
+        key="PDF1234",
+        item_id=20,
+        parent_item_id=None,
+        date_modified=None,
+        link_mode=0,
+        content_type="application/pdf",
+        zotero_path="storage:paper.pdf",
+        file_path=pdf,
+    )
+    processor = ZoteroMetadataProcessor.__new__(ZoteroMetadataProcessor)
+    processor.config = SimpleNamespace(
+        zotero_relay_url="http://relay",
+        zotero_parent_preflight_enabled=True,
+        metadata_policy="emptyFieldsOnly",
+    )
+    processor._provider_events = []
+    captured: dict[str, Any] = {}
+
+    class FakeState:
+        def mark_metadata_job_succeeded(self, **kwargs: Any) -> dict[str, Any]:
+            captured["succeeded"] = kwargs
+            return {"status": "succeeded", **kwargs}
+
+        def mark_metadata_job_skipped(self, **kwargs: Any) -> dict[str, Any]:
+            raise AssertionError(f"metadata job should not be skipped: {kwargs}")
+
+        def mark_metadata_job_failed(self, **kwargs: Any) -> dict[str, Any]:
+            raise AssertionError(f"metadata job should not fail: {kwargs}")
+
+    class FakeZotero:
+        def get_parent_metadata_for_attachment(
+            self,
+            checked: LocalAttachment,
+        ) -> None:
+            assert checked.key == "PDF1234"
+            return None
+
+    processor.state = FakeState()
+    monkeypatch.setattr(processor, "_attachment_for_job", lambda _job: attachment)
+    monkeypatch.setattr(processor, "_config_for_job", lambda _job: processor.config)
+    monkeypatch.setattr(
+        "zotero_ingest_worker.metadata_processor.LocalZoteroStore",
+        lambda _config: FakeZotero(),
+    )
+    monkeypatch.setattr(
+        processor,
+        "_ensure_parent_via_relay",
+        lambda checked: {
+            "ok": True,
+            "parentItemKey": "ITEM1234",
+            "parentCreated": {
+                "key": "ITEM1234",
+                "title": "paper",
+                "itemType": "document",
+                "version": 9,
+            },
+        },
+    )
+    monkeypatch.setattr(
+        processor,
+        "_lookup_metadata_candidate",
+        lambda **_kwargs: MetadataCandidate(
+            source="crossref",
+            identifier="10.1000/example",
+            score=1.0,
+            fields={"title": "Better Paper", "DOI": "10.1000/example"},
+            raw={},
+        ),
+    )
+
+    def fake_patch_parent_metadata_via_relay(**kwargs: Any) -> dict[str, Any]:
+        captured["patch_call"] = kwargs
+        return {"ok": True, "appliedFields": ["DOI"], "newVersion": 10}
+
+    monkeypatch.setattr(
+        processor,
+        "_patch_parent_metadata_via_relay",
+        fake_patch_parent_metadata_via_relay,
+    )
+
+    result = processor._drain_enrich_job(
+        {
+            "job_id": "job1",
+            "attachment_key": "PDF1234",
+            "data_dir": str(tmp_path),
+            "source_path": str(pdf),
+            "source_size": pdf.stat().st_size,
+            "source_mtime_ns": pdf.stat().st_mtime_ns,
+        },
+        require_relay=True,
+        policy="emptyFieldsOnly",
+    )
+
+    assert result["status"] == "succeeded"
+    patch_call = captured["patch_call"]
+    assert patch_call["attachment"].parent_key == "ITEM1234"
+    assert patch_call["metadata"].key == "ITEM1234"
+    assert patch_call["fields"] == {"DOI": "10.1000/example"}
+    stored = captured["succeeded"]["result"]
+    assert stored["parent_item_key"] == "ITEM1234"
+    assert stored["parent_preflight"]["parentCreated"]["key"] == "ITEM1234"
+    assert stored["local_metadata"]["reason"] == "parent_not_in_local_sqlite"
+
+
+def test_parent_preflight_syncs_standalone_pdf_to_local_sqlite(
+    monkeypatch: Any,
+    tmp_path: Path,
+) -> None:
+    data_dir = _write_full_text_fixture(tmp_path, with_pdf=False)
+    (data_dir / "storage" / "PDF1234").mkdir()
+    (data_dir / "storage" / "PDF1234" / "paper.pdf").write_bytes(b"%PDF")
+    connection = sqlite3.connect(data_dir / "zotero.sqlite")
+    try:
+        connection.executescript(
+            """
+            insert into itemTypes values (3, 'document');
+            insert into items values (20, 2, '2026-01-02', 'PDF1234', 1);
+            insert into itemAttachments values (20, null, 0, 'application/pdf', 'storage:paper.pdf');
+            """
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    config = _metadata_processor_test_config(tmp_path, data_dir)
+    config.zotero_relay_url = "http://relay"
+    processor = ZoteroMetadataProcessor(config)
+    zotero = LocalZoteroStore(config)
+    attachment = zotero.get_attachment("PDF1234")
+
+    assert attachment.parent_key is None
+    monkeypatch.setattr(
+        processor,
+        "_ensure_parent_via_relay",
+        lambda checked: {
+            "ok": True,
+            "parentItemKey": "ITEMNEW1",
+            "parentCreated": {
+                "key": "ITEMNEW1",
+                "title": "Standalone paper",
+                "itemType": "document",
+                "version": 11,
+                "collections": [],
+            },
+            "pdfParentPatch": {
+                "ok": True,
+                "pdfKey": checked.key,
+                "parentItemKey": "ITEMNEW1",
+                "oldVersion": 1,
+                "newVersion": 12,
+            },
+            "alreadyHadParent": False,
+        },
+    )
+
+    updated_attachment, metadata, preflight = processor._ensure_parent_metadata_context(
+        zotero=zotero,
+        attachment=attachment,
+    )
+
+    assert metadata is not None
+    assert metadata.key == "ITEMNEW1"
+    assert metadata.item_id > 0
+    assert metadata.item_type == "document"
+    assert metadata.title == "Standalone paper"
+    assert updated_attachment.parent_key == "ITEMNEW1"
+    assert updated_attachment.parent_item_id == metadata.item_id
+    assert preflight["local_sync"]["parentInserted"] is True
+
+    refreshed = zotero.get_attachment("PDF1234")
+    assert refreshed.parent_key == "ITEMNEW1"
+    assert refreshed.parent_item_id == metadata.item_id
+
+
+def test_parent_preflight_syncs_storage_only_pdf_to_local_sqlite(
+    monkeypatch: Any,
+    tmp_path: Path,
+) -> None:
+    data_dir = _write_full_text_fixture(tmp_path, with_pdf=False)
+    connection = sqlite3.connect(data_dir / "zotero.sqlite")
+    try:
+        connection.execute("insert into itemTypes values (3, 'document')")
+        connection.commit()
+    finally:
+        connection.close()
+    storage_dir = data_dir / "storage" / "PDFONLY1"
+    storage_dir.mkdir()
+    pdf = storage_dir / "paper.pdf"
+    pdf.write_bytes(b"%PDF")
+
+    config = _metadata_processor_test_config(tmp_path, data_dir)
+    config.zotero_relay_url = "http://relay"
+    processor = ZoteroMetadataProcessor(config)
+    zotero = LocalZoteroStore(config)
+    attachment = LocalAttachment(
+        library_id=zotero.library_id,
+        data_dir=data_dir,
+        storage_dir=data_dir / "storage",
+        key="PDFONLY1",
+        item_id=None,
+        parent_item_id=None,
+        date_modified=None,
+        link_mode=None,
+        content_type="application/pdf",
+        zotero_path="storage:paper.pdf",
+        file_path=pdf,
+    )
+    monkeypatch.setattr(
+        processor,
+        "_ensure_parent_via_relay",
+        lambda checked: {
+            "ok": True,
+            "parentItemKey": "ITEMNEW2",
+            "parentCreated": {
+                "key": "ITEMNEW2",
+                "title": "Storage-only paper",
+                "itemType": "document",
+                "version": 21,
+                "collections": [],
+            },
+            "pdfParentPatch": {
+                "ok": True,
+                "pdfKey": checked.key,
+                "parentItemKey": "ITEMNEW2",
+                "oldVersion": 1,
+                "newVersion": 22,
+            },
+            "alreadyHadParent": False,
+        },
+    )
+
+    updated_attachment, metadata, preflight = processor._ensure_parent_metadata_context(
+        zotero=zotero,
+        attachment=attachment,
+    )
+
+    assert metadata is not None
+    assert metadata.key == "ITEMNEW2"
+    assert updated_attachment.parent_item_id == metadata.item_id
+    assert preflight["local_sync"]["attachmentInserted"] is True
+
+    refreshed = zotero.get_attachment("PDFONLY1")
+    assert refreshed.item_id is not None
+    assert refreshed.parent_key == "ITEMNEW2"
+    assert refreshed.parent_item_id == metadata.item_id
 
 
 def test_arxiv_html_filename_uses_distinct_suffix() -> None:

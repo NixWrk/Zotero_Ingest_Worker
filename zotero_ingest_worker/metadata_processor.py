@@ -46,7 +46,7 @@ from .full_text_inventory import (
     inventory_fingerprint,
 )
 from .local_zotero import LocalAttachment, LocalItemMetadata, LocalZoteroStore
-from .local_attachment_sync import sync_parent_metadata_local
+from .local_attachment_sync import sync_ensured_parent_local, sync_parent_metadata_local
 from .metadata_jobs import (
     METADATA_JOB_ARXIV_HTML,
     METADATA_JOB_ENRICH,
@@ -805,12 +805,19 @@ class ZoteroMetadataProcessor:
         try:
             attachment = self._attachment_for_job(job)
             zotero = LocalZoteroStore(self._config_for_job(job))
-            metadata = zotero.get_parent_metadata_for_attachment(attachment)
+            attachment, metadata, parent_preflight = self._ensure_parent_metadata_context(
+                zotero=zotero,
+                attachment=attachment,
+            )
             if metadata is None:
                 return self.state.mark_metadata_job_skipped(
                     job_id=job_id,
                     message="PDF attachment has no parent item to patch.",
-                    result={"reason": "no_parent_item", "attachment": attachment.to_dict()},
+                    result={
+                        "reason": "no_parent_item",
+                        "attachment": attachment.to_dict(),
+                        "parent_preflight": parent_preflight,
+                    },
                 )
 
             self._provider_events = []
@@ -822,6 +829,7 @@ class ZoteroMetadataProcessor:
                     result={
                         "reason": "no_confident_candidate",
                         "metadata": metadata.to_dict(),
+                        "parent_preflight": parent_preflight,
                         "provider_events": list(self._provider_events),
                     },
                 )
@@ -837,10 +845,11 @@ class ZoteroMetadataProcessor:
                         "candidate": candidate.to_dict(),
                         "diff": diff,
                         "policy": policy,
+                        "parent_preflight": parent_preflight,
                         "provider_events": list(self._provider_events),
                     },
                 )
-            if metadata.version is None:
+            if metadata.version is None and not getattr(self.config, "zotero_relay_url", ""):
                 return self.state.mark_metadata_job_failed(
                     job_id=job_id,
                     message="Parent item version is unavailable; cannot safely PATCH Zotero metadata.",
@@ -859,18 +868,26 @@ class ZoteroMetadataProcessor:
                 raise RuntimeError("ZOTERO_RELAY_URL is required before metadata can be written back.")
             local_metadata: dict[str, Any] | None = None
             if relay_result is not None and relay_result.get("ok"):
-                try:
-                    local_metadata = sync_parent_metadata_local(
-                        metadata=metadata,
-                        fields=patch,
-                        relay_result=relay_result,
-                    )
-                except Exception as exc:
+                if metadata.item_id <= 0:
                     local_metadata = {
-                        "ok": False,
-                        "error": str(exc),
+                        "ok": True,
+                        "updated": False,
+                        "reason": "parent_not_in_local_sqlite",
                         "item_key": metadata.key,
                     }
+                else:
+                    try:
+                        local_metadata = sync_parent_metadata_local(
+                            metadata=metadata,
+                            fields=patch,
+                            relay_result=relay_result,
+                        )
+                    except Exception as exc:
+                        local_metadata = {
+                            "ok": False,
+                            "error": str(exc),
+                            "item_key": metadata.key,
+                        }
 
             result = {
                 "attachment_key": attachment.key,
@@ -880,6 +897,7 @@ class ZoteroMetadataProcessor:
                 "diff": diff,
                 "patch": patch,
                 "policy": policy,
+                "parent_preflight": parent_preflight,
                 "provider_events": list(self._provider_events),
                 "relay": relay_result,
                 "local_metadata": local_metadata,
@@ -1270,16 +1288,144 @@ class ZoteroMetadataProcessor:
             )
 
         attachment = self._attachment_for_job(job)
-        metadata = zotero.get_parent_metadata_for_attachment(attachment)
+        attachment, metadata, _parent_preflight = self._ensure_parent_metadata_context(
+            zotero=zotero,
+            attachment=attachment,
+        )
         if metadata is None:
             return None
+        inventory = (
+            zotero.item_full_text_inventory(metadata)
+            if metadata.item_id > 0
+            else self._synthetic_pdf_inventory_for_attachment(attachment)
+        )
         return (
             attachment,
             metadata,
-            zotero.item_full_text_inventory(metadata),
+            inventory,
             source_path if source_path.exists() else attachment.file_path,
             "attachment",
         )
+
+    def _ensure_parent_metadata_context(
+        self,
+        *,
+        zotero: LocalZoteroStore,
+        attachment: LocalAttachment,
+    ) -> tuple[LocalAttachment, LocalItemMetadata | None, dict[str, Any] | None]:
+        metadata = zotero.get_parent_metadata_for_attachment(attachment)
+        if metadata is not None:
+            return attachment, metadata, None
+        if not getattr(self.config, "zotero_parent_preflight_enabled", True):
+            return attachment, None, {"ok": True, "skipped": True, "reason": "disabled"}
+        if not getattr(self.config, "zotero_relay_url", ""):
+            return attachment, None, {"ok": True, "skipped": True, "reason": "relay_not_configured"}
+
+        parent_preflight = self._ensure_parent_via_relay(attachment)
+        parent_key = str(parent_preflight.get("parentItemKey") or "").strip()
+        if not parent_key:
+            return attachment, None, parent_preflight
+        parent_preflight = self._sync_ensured_parent_locally(
+            attachment=attachment,
+            parent_preflight=parent_preflight,
+        )
+        attachment = dataclass_replace(attachment, parent_key=parent_key)
+        local_sync = parent_preflight.get("local_sync")
+        if isinstance(local_sync, dict) and local_sync.get("parentItemId"):
+            attachment = dataclass_replace(
+                attachment,
+                parent_item_id=int(local_sync["parentItemId"]),
+            )
+        metadata = zotero.get_parent_metadata_for_attachment(attachment)
+        if metadata is not None:
+            return attachment, metadata, parent_preflight
+        return (
+            attachment,
+            self._synthetic_parent_metadata_from_preflight(
+                attachment=attachment,
+                parent_key=parent_key,
+                parent_preflight=parent_preflight,
+            ),
+            parent_preflight,
+        )
+
+    def _ensure_parent_via_relay(self, attachment: LocalAttachment) -> dict[str, Any]:
+        return ZoteroRelayClient(self.config).ensure_parent(attachment)
+
+    def _sync_ensured_parent_locally(
+        self,
+        *,
+        attachment: LocalAttachment,
+        parent_preflight: dict[str, Any],
+    ) -> dict[str, Any]:
+        try:
+            local_sync = sync_ensured_parent_local(
+                attachment=attachment,
+                relay_result=parent_preflight,
+            )
+        except Exception as exc:
+            local_sync = {
+                "ok": False,
+                "reason": "local_parent_sync_failed",
+                "error": f"{type(exc).__name__}: {exc}",
+            }
+        return {**parent_preflight, "local_sync": local_sync}
+
+    def _synthetic_parent_metadata_from_preflight(
+        self,
+        *,
+        attachment: LocalAttachment,
+        parent_key: str,
+        parent_preflight: dict[str, Any],
+    ) -> LocalItemMetadata:
+        parent_created = parent_preflight.get("parentCreated")
+        parent_payload = parent_created if isinstance(parent_created, dict) else {}
+        title = str(parent_payload.get("title") or Path(attachment.filename).stem or "Untitled PDF")
+        return LocalItemMetadata(
+            library_id=attachment.library_id,
+            data_dir=attachment.data_dir,
+            key=parent_key,
+            item_id=0,
+            version=_optional_int(parent_payload.get("version")),
+            item_type=str(parent_payload.get("itemType") or "document"),
+            date_modified=None,
+            fields={"title": title},
+            creators=[],
+            tags=[],
+            collections=[],
+            relations=[],
+        )
+
+    def _synthetic_pdf_inventory_for_attachment(
+        self,
+        attachment: LocalAttachment,
+    ) -> dict[str, object]:
+        exists = _safe_path_exists(attachment.file_path)
+        return {
+            "pdf_count": 1,
+            "html_count": 0,
+            "source_html_count": 0,
+            "generated_html_count": 0,
+            "unknown_html_count": 0,
+            "missing_file_count": 0 if exists else 1,
+            "has_pdf": True,
+            "has_html": False,
+            "has_source_html": False,
+            "attachments": [
+                {
+                    "key": attachment.key,
+                    "content_type": attachment.content_type or "application/pdf",
+                    "path": attachment.zotero_path or str(attachment.file_path),
+                    "title": attachment.filename,
+                    "file_path": str(attachment.file_path),
+                    "exists": exists,
+                    "is_pdf": True,
+                    "is_html": False,
+                    "is_source_html": False,
+                    "is_generated_html": False,
+                }
+            ],
+        }
 
     def _synthetic_attachment_for_item(
         self,
@@ -1616,3 +1762,17 @@ class ZoteroMetadataProcessor:
 
     def _queue_key(self, job_type: str) -> str:
         return metadata_queue_key(self.config, job_type)
+
+
+def _optional_int(value: object) -> int | None:
+    try:
+        return int(value) if value is not None and str(value).strip() else None
+    except (TypeError, ValueError):
+        return None
+
+
+def _safe_path_exists(path: Path) -> bool:
+    try:
+        return path.exists()
+    except OSError:
+        return False
