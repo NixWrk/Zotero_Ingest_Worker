@@ -61,6 +61,7 @@ CRITICAL_ISSUES = {
     "image_missing_src",
     "image_relative_missing_file",
     "image_bad_data_url",
+    "latexml_figure_render_error",
     "script_tags_present",
     "table_without_rows",
     "springer_table_placeholder",
@@ -106,6 +107,7 @@ class HtmlMetrics:
     image_empty_alt: int = 0
     figures: int = 0
     figure_without_media_warning: int = 0
+    latexml_figure_render_error: int = 0
     tables: int = 0
     table_rows: int = 0
     table_cells: int = 0
@@ -129,6 +131,7 @@ class HtmlMetrics:
             "image_empty_alt": self.image_empty_alt,
             "figures": self.figures,
             "figure_without_media_warning": self.figure_without_media_warning,
+            "latexml_figure_render_error": self.latexml_figure_render_error,
             "tables": self.tables,
             "table_rows": self.table_rows,
             "table_cells": self.table_cells,
@@ -189,6 +192,8 @@ class ArticleHtmlAuditParser(HTMLParser):
         if tag_name == "figure":
             self.metrics.figures += 1
             self._figure_stack.append(_figure_tag_has_intrinsic_content(attr_map))
+        elif self._figure_stack and "ltx_error" in attr_map.get("class", "").casefold():
+            self.metrics.latexml_figure_render_error += 1
         elif tag_name in {"audio", "canvas", "embed", "iframe", "img", "math", "object", "picture", "svg", "video"}:
             self._mark_current_figure_has_media()
 
@@ -570,6 +575,8 @@ def _audit_html_file(
             issues.append("image_relative_missing_file")
         if counts["image_bad_data_url"]:
             issues.append("image_bad_data_url")
+        if counts["latexml_figure_render_error"]:
+            issues.append("latexml_figure_render_error")
         if counts["scripts"]:
             issues.append("script_tags_present")
         if counts["table_without_rows"]:

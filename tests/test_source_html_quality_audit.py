@@ -189,6 +189,27 @@ def test_source_html_audit_accepts_video_figure_boxes(tmp_path: Path) -> None:
     assert report["summary"]["warning_counts"] == {}
 
 
+def test_source_html_audit_flags_latexml_render_errors_inside_figures(tmp_path: Path) -> None:
+    data_dir = tmp_path / "Zotero_Test"
+    html = GOOD_HTML.replace(
+        '<figure><img alt="Plot" src="data:image/png;base64,iVBORw0KGgo="/></figure>',
+        '<figure class="ltx_figure"><span class="ltx_ERROR undefined">{forest}</span><p>raw tree code</p></figure>',
+    )
+    _write_html_attachment(
+        data_dir,
+        key="LTXERR12",
+        parent_key="PARENT1",
+        title="LaTeXML Error Figure [source HTML]",
+        html=html,
+    )
+
+    report = run_audit(zotero_data_dirs=(data_dir,), state_db=None)
+
+    assert report["summary"]["issue_counts"]["latexml_figure_render_error"] == 1
+    assert report["summary"]["critical_records"] == 1
+    assert "latexml_figure_render_error" in report["critical_records"][0]["issues"]
+
+
 def test_source_html_audit_does_not_flag_jobs_when_state_has_no_source_jobs(tmp_path: Path) -> None:
     data_dir = tmp_path / "Zotero_Test"
     _write_html_attachment(
