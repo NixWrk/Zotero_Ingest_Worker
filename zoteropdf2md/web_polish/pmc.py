@@ -83,7 +83,10 @@ def _rewrite_float_path_links(html: str) -> str:
 
 
 def _float_target_for_href(href: str, ids: set[str]) -> str | None:
-    parsed = urllib.parse.urlsplit(href)
+    try:
+        parsed = urllib.parse.urlsplit(href)
+    except ValueError:
+        return None
     path = urllib.parse.unquote(parsed.path)
     figure_match = _FIGURE_PATH_RE.search(path)
     if figure_match is not None:

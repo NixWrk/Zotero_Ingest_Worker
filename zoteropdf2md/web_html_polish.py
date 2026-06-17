@@ -95,6 +95,7 @@ _ROOT_RELATIVE_URL_ATTR_RE = re.compile(
 )
 _TITLE_RE = re.compile(r"<title\b[^>]*>(?P<title>[\s\S]*?)</title>", re.IGNORECASE)
 _META_TAG_RE = re.compile(r"<meta\b(?P<attrs>[^>]*)>", re.IGNORECASE | re.DOTALL)
+_MAX_LOCAL_ASSET_REFERENCE_LENGTH = 4096
 _H1_RE = re.compile(r"<h1\b", re.IGNORECASE)
 
 
@@ -281,6 +282,8 @@ def inline_local_images_from_web_html_document(html: str, *, base_dir: Path) -> 
         prefix = match.group("prefix")
         quote = match.group("quote")
         srcset = unescape(match.group("srcset")).strip()
+        if "data:" in srcset.lower():
+            return match.group(0)
         next_entries: list[str] = []
         changed = False
         for raw_entry in srcset.split(","):
@@ -355,6 +358,8 @@ def inline_remote_images_from_web_html_document(
         prefix = match.group("prefix")
         quote = match.group("quote")
         srcset = unescape(match.group("srcset")).strip()
+        if "data:" in srcset.lower():
+            return match.group(0)
         next_entries: list[str] = []
         changed = False
         for raw_entry in srcset.split(","):
@@ -710,6 +715,8 @@ def _is_nonlocal_image_src(src_value: str) -> bool:
 
 def _resolve_local_asset(src_value: str, *, base_dir: Path) -> Path | None:
     clean_src = src_value.split("?", 1)[0].split("#", 1)[0]
+    if len(clean_src) > _MAX_LOCAL_ASSET_REFERENCE_LENGTH:
+        return None
     decoded = urllib.parse.unquote(clean_src)
     if not decoded:
         return None
@@ -721,7 +728,11 @@ def _resolve_local_asset(src_value: str, *, base_dir: Path) -> Path | None:
         candidate.relative_to(base_dir)
     except ValueError:
         return None
-    if not candidate.is_file():
+    try:
+        is_file = candidate.is_file()
+    except OSError:
+        return None
+    if not is_file:
         return None
     return candidate
 

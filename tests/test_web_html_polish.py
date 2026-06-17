@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import pytest
 
 from zoteropdf2md.html_links import (
@@ -20,6 +22,7 @@ from zoteropdf2md.web_html_polish import (
     canonicalize_same_document_links,
     count_same_document_absolute_fragment_links,
     detect_web_html_kind,
+    inline_local_images_from_web_html_document,
     inline_remote_images_from_web_html_document,
     polish_web_html_file,
     polish_web_html_document,
@@ -302,6 +305,25 @@ def test_polish_web_html_document_extracts_pmc_article() -> None:
     assert 'href="#FIG1"' in result.html
     assert 'href="#T1"' in result.html
     assert 'href="https://example.org/outside"' in result.html
+
+
+def test_pmc_polish_ignores_invalid_float_href() -> None:
+    html = f"""
+    <html><body>
+      <main id="main-content">
+        <article class="pmc-article" id="article">
+          <h1>PMC Article</h1>
+          <section id="sec1"><p>{" ".join([LONG_PARAGRAPH] * 20)}</p></section>
+          <a href="https://[broken/figure/fig1/">broken figure href</a>
+          <figure id="FIG1"><figcaption>Figure 1.</figcaption></figure>
+        </article>
+      </main>
+    </body></html>
+    """
+
+    result = polish_web_html_document(html, source_url="https://pmc.ncbi.nlm.nih.gov/articles/PMC8911527/")
+
+    assert 'href="https://[broken/figure/fig1/"' in result.html
 
 
 def test_polish_web_html_document_extracts_taylor_francis_nlm_fulltext() -> None:
@@ -755,6 +777,19 @@ def test_polish_web_html_file_inlines_local_srcset_images(tmp_path) -> None:
 
     assert result.inlined_images == 1
     assert 'srcset="data:image/png;base64,' in result.html
+
+
+def test_inline_local_images_skips_inline_data_srcset() -> None:
+    payload = "UklGR" + ("A" * 5000)
+    html = (
+        '<html><body><picture><source srcset="data:image/webp;base64,'
+        f'{payload} 1x"></picture></body></html>'
+    )
+
+    result = inline_local_images_from_web_html_document(html, base_dir=Path("."))
+
+    assert result.inlined_images == 0
+    assert "data:image/webp;base64," in result.html
 
 
 def test_generic_canonicalizer_infers_repeated_non_arxiv_self_links() -> None:
