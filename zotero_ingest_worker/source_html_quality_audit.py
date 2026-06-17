@@ -30,6 +30,26 @@ SOURCE_HTML_RE = re.compile(r"\[\s*source\s+html\s*\]|\bsource\s+html\b", re.IGN
 GENERATED_HTML_RE = re.compile(r"\[(?:[a-z]{2,12}|mixed|unknown) html\]\.html?$", re.IGNORECASE)
 SPRINGER_TABLE_PLACEHOLDER_RE = re.compile(r"/tables/\d+\b", re.IGNORECASE)
 LOCAL_HTML_SUFFIXES = {".html", ".htm"}
+SUPPLEMENTARY_RESOURCE_SUFFIXES = {
+    ".bib",
+    ".csv",
+    ".doc",
+    ".docx",
+    ".m4v",
+    ".mov",
+    ".mp4",
+    ".mpeg",
+    ".mpg",
+    ".pdf",
+    ".ppt",
+    ".pptx",
+    ".qt",
+    ".txt",
+    ".webm",
+    ".xls",
+    ".xlsx",
+    ".zip",
+}
 
 CRITICAL_ISSUES = {
     "missing_zotero_attachment_record",
@@ -163,11 +183,13 @@ class ArticleHtmlAuditParser(HTMLParser):
                 parsed = urlsplit_or_none(href)
                 if parsed is not None and parsed.scheme in {"http", "https"} and parsed.fragment:
                     self.metrics.absolute_fragment_links += 1
+                if _looks_like_supplementary_resource_href(href):
+                    self._mark_current_figure_has_media()
 
         if tag_name == "figure":
             self.metrics.figures += 1
-            self._figure_stack.append(False)
-        elif tag_name in {"img", "picture", "svg", "math", "canvas"}:
+            self._figure_stack.append(_figure_tag_has_intrinsic_content(attr_map))
+        elif tag_name in {"audio", "canvas", "embed", "iframe", "img", "math", "object", "picture", "svg", "video"}:
             self._mark_current_figure_has_media()
 
         if tag_name == "img":
@@ -277,8 +299,8 @@ class ArticleHtmlAuditParser(HTMLParser):
                 self.metrics.image_bad_data_url += 1
 
     def _mark_current_figure_has_media(self) -> None:
-        if self._figure_stack:
-            self._figure_stack[-1] = True
+        for index in range(len(self._figure_stack)):
+            self._figure_stack[index] = True
 
 
 def run_audit(
@@ -753,6 +775,26 @@ def _resolve_relative_asset(src: str, *, base_dir: Path) -> Path | None:
     if decoded.startswith("/"):
         decoded = decoded.lstrip("/")
     return base_dir / Path(*[part for part in decoded.split("/") if part])
+
+
+def _figure_tag_has_intrinsic_content(attr_map: dict[str, str]) -> bool:
+    class_value = attr_map.get("class", "").casefold()
+    return "ltx_table" in class_value or "ltx_lstlisting" in class_value
+
+
+def _looks_like_supplementary_resource_href(href: str) -> bool:
+    parsed = urlsplit_or_none(href)
+    if parsed is None:
+        return False
+    path = parsed.path or href.split("?", 1)[0].split("#", 1)[0]
+    suffix = Path(urllib.parse.unquote(path)).suffix.casefold()
+    if suffix in SUPPLEMENTARY_RESOURCE_SUFFIXES:
+        return True
+    lowered = href.casefold()
+    return any(
+        f"{suffix}?" in lowered or f"{suffix}#" in lowered
+        for suffix in SUPPLEMENTARY_RESOURCE_SUFFIXES
+    )
 
 
 def _safe_resolve_key(path: Path) -> str:

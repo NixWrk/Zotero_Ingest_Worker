@@ -92,6 +92,10 @@ _SRCSET_RE = re.compile(
 )
 _IMG_OPEN_RE = re.compile(r"<img\b(?P<attrs>[^>]*)>", re.IGNORECASE | re.DOTALL)
 _EMPTY_TABLE_RE = re.compile(r"<table\b[^>]*>\s*</table>", re.IGNORECASE)
+_EMPTY_FIGURE_SHELL_RE = re.compile(
+    r"<figure\b[^>]*>\s*(?:<div\b[^>]*>\s*<a\b[^>]*>\s*Open\s+in\s+a\s+new\s+tab\s*</a>\s*</div>\s*)?</figure>",
+    re.IGNORECASE | re.DOTALL,
+)
 _ROOT_RELATIVE_URL_ATTR_RE = re.compile(
     r"(?P<prefix>(?<![\w:-])(?P<name>href|src|action|poster)\s*=\s*)"
     r"(?P<quote>['\"])(?P<url>.*?)(?P=quote)",
@@ -101,6 +105,8 @@ _TITLE_RE = re.compile(r"<title\b[^>]*>(?P<title>[\s\S]*?)</title>", re.IGNORECA
 _META_TAG_RE = re.compile(r"<meta\b(?P<attrs>[^>]*)>", re.IGNORECASE | re.DOTALL)
 _MAX_LOCAL_ASSET_REFERENCE_LENGTH = 4096
 _H1_RE = re.compile(r"<h1\b", re.IGNORECASE)
+_LTX_EQUATION_ROW_RE = re.compile(r"<tr\b(?P<attrs>[^>]*)>(?P<body>[\s\S]*?)</tr>", re.IGNORECASE)
+_TD_OPEN_RE = re.compile(r"<td\b(?P<attrs>[^>]*)>", re.IGNORECASE | re.DOTALL)
 
 
 def detect_web_html_kind(html: str, *, source_url: str | None = None) -> WebHtmlKind:
@@ -229,8 +235,10 @@ def polish_web_html_document(
                 source_url=source_url,
             ),
         )
+        article_html = normalize_latexml_equation_alignment(article_html)
     article_html = repair_empty_image_sources(article_html)
     article_html = remove_empty_tables(article_html)
+    article_html = remove_empty_figure_shells(article_html)
     article_html = remove_unresolved_local_fragment_hrefs(article_html)
     wrapped = _wrap_web_article_html(
         article_html,
@@ -768,6 +776,56 @@ def remove_empty_tables(html: str) -> str:
         previous = cleaned
         cleaned = _EMPTY_TABLE_RE.sub("", cleaned)
     return cleaned
+
+
+def remove_empty_figure_shells(html: str) -> str:
+    previous = None
+    cleaned = html
+    while cleaned != previous:
+        previous = cleaned
+        cleaned = _EMPTY_FIGURE_SHELL_RE.sub("", cleaned)
+    return cleaned
+
+
+def normalize_latexml_equation_alignment(html: str) -> str:
+    """Center single-cell LaTeXML equation rows while preserving aligned systems."""
+
+    def replace_row(match: re.Match[str]) -> str:
+        row_attrs = match.group("attrs") or ""
+        row_class = _attr_value(row_attrs, "class") or ""
+        if "ltx_equation" not in row_class.split():
+            return match.group(0)
+
+        body = match.group("body") or ""
+        content_cells: list[re.Match[str]] = []
+        for cell_match in _TD_OPEN_RE.finditer(body):
+            cell_class = _attr_value(cell_match.group("attrs") or "", "class") or ""
+            class_tokens = set(cell_class.split())
+            if class_tokens & {
+                "ltx_eqn_center_padleft",
+                "ltx_eqn_center_padright",
+                "ltx_eqn_eqno",
+            }:
+                continue
+            content_cells.append(cell_match)
+
+        if len(content_cells) != 1:
+            return match.group(0)
+
+        cell_match = content_cells[0]
+        open_tag = cell_match.group(0)
+        cell_class = _attr_value(cell_match.group("attrs") or "", "class") or ""
+        if "z2m-ltx-single-equation-cell" in cell_class.split():
+            return match.group(0)
+        updated_open_tag = _set_attr_value(
+            open_tag,
+            "class",
+            f"{cell_class} z2m-ltx-single-equation-cell".strip(),
+        )
+        updated_body = body[: cell_match.start()] + updated_open_tag + body[cell_match.end() :]
+        return f"<tr{row_attrs}>{updated_body}</tr>"
+
+    return _LTX_EQUATION_ROW_RE.sub(replace_row, html)
 
 
 def _extract_source_specific_article_fragment(

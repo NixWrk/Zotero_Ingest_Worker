@@ -139,9 +139,45 @@ figure.ltx_table table {
   max-width: 100%;
   margin: 0 auto;
 }
+table.ltx_equation,
+table.ltx_equationgroup {
+  width: 100%;
+  max-width: 100%;
+  margin: 1em 0;
+  border: 0;
+  border-collapse: collapse;
+  background: transparent;
+}
+table.ltx_equation td,
+table.ltx_equation th,
+table.ltx_equationgroup td,
+table.ltx_equationgroup th {
+  border: 0;
+  padding: 0.15em 0.35em;
+  background: transparent;
+  vertical-align: middle;
+}
+table.ltx_equation .ltx_eqn_center_padleft,
+table.ltx_equation .ltx_eqn_center_padright,
+table.ltx_equationgroup .ltx_eqn_center_padleft,
+table.ltx_equationgroup .ltx_eqn_center_padright {
+  width: 1%;
+  padding: 0;
+}
+table.ltx_equation .ltx_eqn_eqno,
+table.ltx_equationgroup .ltx_eqn_eqno {
+  width: 1%;
+  padding-left: 0.75em;
+  white-space: nowrap;
+  text-align: right;
+}
 .ltx_align_center { text-align: center; }
 .ltx_align_left { text-align: left; }
 .ltx_align_right { text-align: right; }
+table.ltx_equation .z2m-ltx-single-equation-cell,
+table.ltx_equationgroup .z2m-ltx-single-equation-cell {
+  text-align: center;
+}
 #web-doc :target {
   outline: 3px solid #f59e0b;
   outline-offset: 4px;

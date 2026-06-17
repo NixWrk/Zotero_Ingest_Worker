@@ -244,6 +244,47 @@ def test_polish_web_html_document_extracts_arxiv_latexml_article() -> None:
     assert ".off-screen, .sr-only" in result.html
 
 
+def test_polish_web_html_document_normalizes_latexml_equation_layout() -> None:
+    html = f"""
+    <html>
+      <head><title>Equation Article</title></head>
+      <body>
+        <div class="ltx_page_main">
+          <section id="S1">
+            <h1>Equation Article</h1>
+            <p>{" ".join([LONG_PARAGRAPH] * 18)}</p>
+            <table class="ltx_equationgroup ltx_eqn_align ltx_eqn_table" id="A1.EGx1">
+              <tbody><tr class="ltx_equation ltx_eqn_row ltx_align_baseline">
+                <td class="ltx_eqn_cell ltx_eqn_center_padleft"></td>
+                <td class="ltx_td ltx_align_right ltx_eqn_cell"><math><mi>x</mi><mo>=</mo><mn>1</mn></math></td>
+                <td class="ltx_eqn_cell ltx_eqn_center_padright"></td>
+                <td class="ltx_eqn_cell ltx_eqn_eqno ltx_align_middle ltx_align_right">(1)</td>
+              </tr></tbody>
+            </table>
+            <table class="ltx_equationgroup ltx_eqn_align ltx_eqn_table" id="A1.EGx2">
+              <tbody><tr class="ltx_equation ltx_eqn_row ltx_align_baseline">
+                <td class="ltx_eqn_cell ltx_eqn_center_padleft"></td>
+                <td class="ltx_td ltx_align_right ltx_eqn_cell"><math><mi>x</mi></math></td>
+                <td class="ltx_td ltx_align_left ltx_eqn_cell"><math><mo>=</mo><mn>1</mn></math></td>
+                <td class="ltx_eqn_cell ltx_eqn_center_padright"></td>
+                <td class="ltx_eqn_cell ltx_eqn_eqno ltx_align_middle ltx_align_right">(2)</td>
+              </tr></tbody>
+            </table>
+          </section>
+        </div>
+      </body>
+    </html>
+    """
+
+    result = polish_web_html_document(html, source_url="https://arxiv.org/html/2501.00001")
+
+    assert "table.ltx_equationgroup td" in result.html
+    assert "border: 0;" in result.html
+    assert "z2m-ltx-single-equation-cell" in result.html
+    assert result.html.count('class="ltx_td ltx_align_right ltx_eqn_cell z2m-ltx-single-equation-cell"') == 1
+    assert 'class="ltx_td ltx_align_left ltx_eqn_cell z2m-ltx-single-equation-cell"' not in result.html
+
+
 def test_polish_web_html_file_inlines_arxiv_extracted_remote_images(tmp_path, monkeypatch) -> None:
     from zoteropdf2md import web_html_polish as web_polish_module
 
@@ -446,6 +487,34 @@ def test_polish_web_html_document_extracts_pmc_article() -> None:
     assert 'href="#FIG1"' in result.html
     assert 'href="#T1"' in result.html
     assert 'href="https://example.org/outside"' in result.html
+
+
+def test_polish_web_html_document_removes_empty_pmc_figure_shells() -> None:
+    html = f"""
+    <html>
+      <head><title>PMC Article</title></head>
+      <body>
+        <main id="main-content">
+          <article class="pmc-article" id="article">
+            <h1>PMC Article Title</h1>
+            <section class="body">
+              <p>{" ".join([LONG_PARAGRAPH] * 20)}</p>
+              <figure class="fig-group xbox font-sm" id="F2">
+                <div class="p text-right font-secondary"><a href="figure/F2/">Open in a new tab</a></div>
+              </figure>
+              <figure class="fig xbox font-sm" id="F3"><img alt="Figure 3" src="data:image/png;base64,iVBORw0KGgo="/></figure>
+            </section>
+          </article>
+        </main>
+      </body>
+    </html>
+    """
+
+    result = polish_web_html_document(html, source_url="https://pmc.ncbi.nlm.nih.gov/articles/PMC3115600/")
+
+    assert 'id="F2"' not in result.html
+    assert 'href="figure/F2/"' not in result.html
+    assert 'id="F3"' in result.html
 
 
 def test_pmc_polish_ignores_invalid_float_href() -> None:

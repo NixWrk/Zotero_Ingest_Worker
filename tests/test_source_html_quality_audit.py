@@ -110,6 +110,85 @@ def test_source_html_audit_reports_quality_defects(tmp_path: Path) -> None:
     assert report["warning_records"][0]["warnings"] == ["figure_without_media_warning"]
 
 
+def test_source_html_audit_accepts_nested_figure_media(tmp_path: Path) -> None:
+    data_dir = tmp_path / "Zotero_Test"
+    html = GOOD_HTML.replace(
+        '<figure><img alt="Plot" src="data:image/png;base64,iVBORw0KGgo="/></figure>',
+        '<figure id="outer"><figure><img alt="Plot" src="data:image/png;base64,iVBORw0KGgo="/></figure></figure>',
+    )
+    _write_html_attachment(
+        data_dir,
+        key="NEST1234",
+        parent_key="PARENT1",
+        title="Nested Figure [source HTML]",
+        html=html,
+    )
+
+    report = run_audit(zotero_data_dirs=(data_dir,), state_db=None)
+
+    assert report["summary"]["warning_counts"] == {}
+
+
+def test_source_html_audit_accepts_latexml_table_and_listing_figures(tmp_path: Path) -> None:
+    data_dir = tmp_path / "Zotero_Test"
+    html = GOOD_HTML.replace(
+        '<figure><img alt="Plot" src="data:image/png;base64,iVBORw0KGgo="/></figure>',
+        """
+        <figure class="ltx_table"><figcaption>Table 1</figcaption><table><tr><td>A</td></tr></table></figure>
+        <figure class="ltx_float ltx_lstlisting"><figcaption>Listing 1</figcaption><pre>print(1)</pre></figure>
+        """,
+    )
+    _write_html_attachment(
+        data_dir,
+        key="LTX12345",
+        parent_key="PARENT1",
+        title="LaTeXML Figure-like Blocks [source HTML]",
+        html=html,
+    )
+
+    report = run_audit(zotero_data_dirs=(data_dir,), state_db=None)
+
+    assert report["summary"]["warning_counts"] == {}
+
+
+def test_source_html_audit_accepts_supplementary_file_boxes(tmp_path: Path) -> None:
+    data_dir = tmp_path / "Zotero_Test"
+    html = GOOD_HTML.replace(
+        '<figure><img alt="Plot" src="data:image/png;base64,iVBORw0KGgo="/></figure>',
+        '<figure class="fig xbox"><a href="supp1-3358562.docx">supplementary document</a></figure>',
+    )
+    _write_html_attachment(
+        data_dir,
+        key="SUPP1234",
+        parent_key="PARENT1",
+        title="Supplementary File [source HTML]",
+        html=html,
+    )
+
+    report = run_audit(zotero_data_dirs=(data_dir,), state_db=None)
+
+    assert report["summary"]["warning_counts"] == {}
+
+
+def test_source_html_audit_accepts_video_figure_boxes(tmp_path: Path) -> None:
+    data_dir = tmp_path / "Zotero_Test"
+    html = GOOD_HTML.replace(
+        '<figure><img alt="Plot" src="data:image/png;base64,iVBORw0KGgo="/></figure>',
+        '<figure class="fig xbox"><a href="video1.mp4">Download video file</a></figure>',
+    )
+    _write_html_attachment(
+        data_dir,
+        key="VID12345",
+        parent_key="PARENT1",
+        title="Video Figure [source HTML]",
+        html=html,
+    )
+
+    report = run_audit(zotero_data_dirs=(data_dir,), state_db=None)
+
+    assert report["summary"]["warning_counts"] == {}
+
+
 def test_source_html_audit_does_not_flag_jobs_when_state_has_no_source_jobs(tmp_path: Path) -> None:
     data_dir = tmp_path / "Zotero_Test"
     _write_html_attachment(
