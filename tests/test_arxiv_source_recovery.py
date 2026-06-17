@@ -9,6 +9,7 @@ from zoteropdf2md.arxiv_source_recovery import (
     SourceFigure,
     collect_source_figures,
     recover_latexml_figures_from_arxiv_source_html,
+    _standalone_figure_document,
 )
 
 
@@ -58,6 +59,33 @@ def test_collect_source_figures_keeps_single_file_setup_preamble(tmp_path: Path)
     assert collected[0].labels == ("fig:ai4research-taxonomy",)
     assert collected[0].environments == ("forest",)
     assert collected[0].caption_text == "The taxonomy of AI for research."
+
+
+def test_standalone_figure_document_renders_float_body_without_float_environment() -> None:
+    figure = SourceFigure(
+        relative_path="figures/tree_taxonomy.tex",
+        tex=r"""
+\tikzstyle{leaf}=[draw=blue]
+\begin{figure*}[!t]
+  \centering
+  \begin{forest}
+    [Taxonomy [Branch, leaf]]
+  \end{forest}
+  \caption{The taxonomy of AI for research.}
+\end{figure*}
+""",
+        caption_text="The taxonomy of AI for research.",
+        labels=(),
+        environments=("forest",),
+    )
+
+    document = _standalone_figure_document(source_dir=Path("."), main_tex=None, figure=figure)
+
+    assert r"\tikzstyle{leaf}" in document
+    assert r"\begin{figure" not in document
+    assert r"\end{figure" not in document
+    assert r"\begin{center}" in document
+    assert r"\begin{forest}" in document
 
 
 def test_recover_latexml_figure_from_arxiv_source_package() -> None:

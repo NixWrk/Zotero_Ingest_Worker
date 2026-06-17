@@ -27,6 +27,7 @@ from .web_polish.core import HTML_TAG_RE, attr_value, balanced_element_from_matc
 SourceFetcher = Callable[[str], bytes]
 
 _FIGURE_ENV_RE = re.compile(r"\\begin\{figure\*?\}[\s\S]*?\\end\{figure\*?\}", re.IGNORECASE)
+_FIGURE_ENV_WITH_BODY_RE = re.compile(r"\\begin\{figure\*?\}(?:\s*\[[^\]]*\])?(?P<body>[\s\S]*?)\\end\{figure\*?\}", re.IGNORECASE)
 _LABEL_RE = re.compile(r"\\label\s*\{([^{}]+)\}")
 _BEGIN_ENV_RE = re.compile(r"\\begin\{([^{}]+)\}")
 _INPUT_RE = re.compile(r"\\(?:input|include)\s*\{([^{}]+)\}")
@@ -446,7 +447,7 @@ def _standalone_figure_document(
             _source_macro_preamble(main_tex),
             _preview_and_caption_suppression(),
             r"\begin{document}",
-            figure.tex,
+            _renderable_figure_tex(figure.tex),
             r"\end{document}",
             "",
         )
@@ -498,6 +499,7 @@ def _preview_and_caption_suppression() -> str:
 \usepackage[active,tightpage]{preview}
 \PreviewEnvironment{figure}
 \PreviewEnvironment{figure*}
+\PreviewEnvironment{center}
 \PreviewEnvironment{tikzpicture}
 \PreviewBorder=12pt
 \makeatletter
@@ -506,6 +508,23 @@ def _preview_and_caption_suppression() -> str:
 \long\def\z2m@caption@plain#1{}
 \makeatother
 """.strip()
+
+
+def _renderable_figure_tex(tex: str) -> str:
+    """Convert source float figures into renderable standalone content.
+
+    arXiv source snippets often use figure/figure* floats. Floats are useful in
+    full papers but fragile in our isolated renderer, and captions are preserved
+    from the polished HTML instead of the rendered image.
+    """
+
+    match = _FIGURE_ENV_WITH_BODY_RE.search(tex)
+    if match is None:
+        return tex
+    setup = tex[: match.start()].strip()
+    body = match.group("body").strip()
+    parts = [part for part in (setup, r"\begin{center}", body, r"\end{center}") if part]
+    return "\n".join(parts)
 
 
 def _synthesized_aux(*, source_dir: Path, main_tex: Path | None) -> str:
