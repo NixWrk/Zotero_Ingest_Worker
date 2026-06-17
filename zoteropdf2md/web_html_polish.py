@@ -109,6 +109,8 @@ def detect_web_html_kind(html: str, *, source_url: str | None = None) -> WebHtml
     sample = html[:500_000].lower()
     if _looks_like_arxiv_abs_page(sample):
         return WebHtmlKind.ARXIV_ABS_PAGE
+    if _looks_like_sciendo_article_page(sample, parsed_source):
+        return WebHtmlKind.GENERIC_ARTICLE
     if _looks_like_sciendo_abstract_page(sample, parsed_source):
         return WebHtmlKind.SCIENDO_ABSTRACT_PAGE
     if _looks_like_ojs_abstract_page(sample, parsed_source):
@@ -129,6 +131,8 @@ def detect_web_html_kind(html: str, *, source_url: str | None = None) -> WebHtml
     if full_sample != sample:
         if _looks_like_arxiv_abs_page(full_sample):
             return WebHtmlKind.ARXIV_ABS_PAGE
+        if _looks_like_sciendo_article_page(full_sample, parsed_source):
+            return WebHtmlKind.GENERIC_ARTICLE
         if _looks_like_sciendo_abstract_page(full_sample, parsed_source):
             return WebHtmlKind.SCIENDO_ABSTRACT_PAGE
         if _looks_like_ojs_abstract_page(full_sample, parsed_source):
@@ -165,6 +169,7 @@ def polish_web_html_document(
     *,
     source_url: str | None = None,
     canonical_url: str | None = None,
+    fetch_text: "RemoteHtmlFetcher | None" = None,
 ) -> WebHtmlPolishResult:
     """Normalize a web-native article HTML document.
 
@@ -173,7 +178,19 @@ def polish_web_html_document(
     same-document links, and wrap the result in a stable readable shell.
     """
 
-    kind = require_web_article_html(html, source_url=source_url)
+    kind = detect_web_html_kind(html, source_url=source_url)
+    if kind == WebHtmlKind.SCIENDO_ABSTRACT_PAGE:
+        full_text_url = _sciendo_full_text_url(html, source_url=source_url)
+        if not full_text_url:
+            raise WebHtmlPolishError(rejection_message_for_kind(kind) or "Known non-article web page.")
+        html = (fetch_text or _fetch_remote_html)(full_text_url)
+        source_url = full_text_url
+        canonical_url = canonical_url or full_text_url
+        kind = require_web_article_html(html, source_url=source_url)
+    else:
+        rejection_message = rejection_message_for_kind(kind)
+        if rejection_message is not None:
+            raise WebHtmlPolishError(rejection_message)
     title = _document_title(html)
     extraction = extract_web_article_fragment(html, kind=kind)
     normalized_html = normalize_web_article_fragment(
@@ -219,6 +236,7 @@ def polish_web_html_file(
     *,
     source_url: str | None = None,
     canonical_url: str | None = None,
+    fetch_text: "RemoteHtmlFetcher | None" = None,
 ) -> WebHtmlFilePolishResult:
     """Polish a web-native HTML file and inline local sidecar images."""
 
@@ -227,6 +245,7 @@ def polish_web_html_file(
         html,
         source_url=source_url,
         canonical_url=canonical_url,
+        fetch_text=fetch_text,
     )
     inlined = inline_local_images_from_web_html_document(document.html, base_dir=html_path.parent)
     remote_inlined = inline_remote_images_from_web_html_document(
@@ -309,6 +328,7 @@ def inline_local_images_from_web_html_document(html: str, *, base_dir: Path) -> 
     return InlineHtmlResult(html=html, inlined_images=inlined_count)
 
 
+RemoteHtmlFetcher = Callable[[str], str]
 RemoteImageFetcher = Callable[[str], tuple[bytes, str | None]]
 
 
@@ -406,6 +426,89 @@ def _fetch_remote_image(url: str) -> tuple[bytes, str | None]:
     with urllib.request.urlopen(request, timeout=20) as response:
         content_type = response.headers.get("Content-Type")
         return response.read(), content_type
+
+
+def _fetch_remote_html(url: str) -> str:
+    request = urllib.request.Request(
+        url,
+        headers={
+            "Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8",
+            "User-Agent": "Mozilla/5.0 z2m-web-polish",
+        },
+    )
+    with urllib.request.urlopen(request, timeout=30) as response:
+        content_type = response.headers.get("Content-Type") or ""
+        charset = response.headers.get_content_charset() or "utf-8"
+        body = response.read()
+    if "text/html" not in content_type.lower() and b"<html" not in body[:4096].lower():
+        raise WebHtmlPolishError(f"Fetched Sciendo full-text URL is not HTML: {url}")
+    return body.decode(charset, errors="replace")
+
+
+def _sciendo_full_text_url(html: str, *, source_url: str | None) -> str | None:
+    for name in ("citation_full_html_url", "dc.identifier.uri"):
+        for candidate in _meta_contents(html, name):
+            resolved = _valid_sciendo_article_url(candidate)
+            if resolved is not None:
+                return resolved
+    if source_url:
+        parsed = _urlsplit_or_none(source_url)
+        if parsed is not None and _is_sciendo_or_reference_global_host(parsed.netloc):
+            query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
+            if "tab" in query and query.get("tab") != ["article"]:
+                query["tab"] = ["article"]
+                return urllib.parse.urlunsplit(
+                    (
+                        parsed.scheme,
+                        parsed.netloc,
+                        parsed.path,
+                        urllib.parse.urlencode(query, doseq=True),
+                        parsed.fragment,
+                    )
+                )
+    return None
+
+
+def _meta_contents(html: str, name: str) -> list[str]:
+    expected = name.lower()
+    values: list[str] = []
+    for match in _META_TAG_RE.finditer(html):
+        attrs = match.group("attrs")
+        meta_name = (_attr_value(attrs, "name") or _attr_value(attrs, "property") or "").lower()
+        if meta_name != expected:
+            continue
+        content = (_attr_value(attrs, "content") or "").strip()
+        if content:
+            values.append(unescape(content))
+    return values
+
+
+def _valid_sciendo_article_url(url: str) -> str | None:
+    parsed = _urlsplit_or_none(url.strip())
+    if parsed is None or parsed.scheme.lower() not in {"http", "https"}:
+        return None
+    if not _is_sciendo_or_reference_global_host(parsed.netloc):
+        return None
+    query = urllib.parse.parse_qs(parsed.query, keep_blank_values=True)
+    if query.get("tab") == ["article"]:
+        return url.strip()
+    if "/article/" not in parsed.path:
+        return None
+    query["tab"] = ["article"]
+    return urllib.parse.urlunsplit(
+        (
+            parsed.scheme,
+            parsed.netloc,
+            parsed.path,
+            urllib.parse.urlencode(query, doseq=True),
+            parsed.fragment,
+        )
+    )
+
+
+def _is_sciendo_or_reference_global_host(netloc: str) -> bool:
+    host = netloc.lower().split(":", 1)[0]
+    return host.endswith("sciendo.com") or host.endswith("reference-global.com")
 
 
 def _remote_image_data_url(url: str, blob: bytes, content_type: str | None) -> str | None:
@@ -623,8 +726,21 @@ def _looks_like_sciendo_abstract_page(
     return (
         "content-tabs" in sample
         and "tab-button-article" in sample
+        and "article-content" not in sample
         and ("abstract-content" in sample or "self.__next_f.push" in sample)
     )
+
+
+def _looks_like_sciendo_article_page(
+    sample: str,
+    parsed_source: urllib.parse.SplitResult | None,
+) -> bool:
+    host = (parsed_source.netloc.lower() if parsed_source is not None else "")
+    if host not in {"content.sciendo.com", "reference-global.com", "www.reference-global.com"} and not (
+        "content.sciendo.com" in sample or "reference-global.com" in sample
+    ):
+        return False
+    return "article-content" in sample and ("full article" in sample or "tab-button-article" in sample)
 
 
 def _looks_like_ojs_abstract_page(

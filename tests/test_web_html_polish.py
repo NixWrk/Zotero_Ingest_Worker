@@ -720,6 +720,64 @@ def test_sciendo_abstract_page_wins_over_article_body_css_noise() -> None:
     )
 
 
+def test_sciendo_abstract_page_fetches_citation_full_html_url() -> None:
+    large_inline_payload = "x" * 1_100_000
+    abstract_html = """
+    <html><head>
+      <script>
+    """ + large_inline_payload + """
+      </script>
+      <meta name="citation_full_html_url" content="https://reference-global.com/article/10.5617/jeb.690?tab=article">
+    </head><body><div id="content-tabs"><button id="tab-button-article"></button>
+    <div id="abstract-content">Abstract only</div><script>self.__next_f.push([])</script></div></body></html>
+    """
+    full_html = f"""
+    <html><head><title>Full Sciendo Article</title></head><body>
+      <article><h1>Full Sciendo Article</h1><p>{" ".join([LONG_PARAGRAPH] * 20)}</p></article>
+    </body></html>
+    """
+    fetched: list[str] = []
+
+    def fake_fetch(url: str) -> str:
+        fetched.append(url)
+        return full_html
+
+    result = polish_web_html_document(
+        abstract_html,
+        source_url="https://reference-global.com/article/10.5617/jeb.690?tab=abstract",
+        fetch_text=fake_fetch,
+    )
+
+    assert fetched == ["https://reference-global.com/article/10.5617/jeb.690?tab=article"]
+    assert result.kind == WebHtmlKind.GENERIC_ARTICLE
+    assert "Full Sciendo Article" in result.html
+
+
+def test_sciendo_article_tab_is_not_rejected_as_abstract() -> None:
+    html = f"""
+    <html><body><div id="content-tabs">
+      <a id="tab-button-article" href="?tab=article" aria-expanded="true">Article</a>
+      <h2>Full Article</h2>
+      <div class="ArticleContent_articleContent__cLudH article-content">
+        <section><div>Introduction</div><p>{" ".join([LONG_PARAGRAPH] * 20)}</p></section>
+      </div>
+    </div></body></html>
+    """
+
+    assert (
+        detect_web_html_kind(html, source_url="https://reference-global.com/article/10.5617/jeb.690?tab=article")
+        == WebHtmlKind.GENERIC_ARTICLE
+    )
+    result = polish_web_html_document(
+        html,
+        source_url="https://reference-global.com/article/10.5617/jeb.690?tab=article",
+    )
+
+    assert result.kind == WebHtmlKind.GENERIC_ARTICLE
+    assert result.article_selector == ".article-content"
+    assert "Introduction" in result.html
+
+
 def test_researchgate_detector_does_not_reject_plain_mentions() -> None:
     html = f"""
     <html><body><article>
