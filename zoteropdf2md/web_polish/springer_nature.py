@@ -8,7 +8,7 @@ from html import unescape
 import re
 import urllib.parse
 
-from ..html_links import ATTR_HREF_RE
+from ..html_links import ATTR_HREF_RE, _urlsplit_or_none, extract_html_fragment_targets
 from .core import (
     _attr_value,
     _balanced_element_from_match,
@@ -89,6 +89,10 @@ def normalize_article_fragment(
         fetch_text=fetch_text,
     )
     html = _retarget_float_label_links_to_containers(html)
+    html = _rewrite_springer_same_document_absolute_fragments(
+        html,
+        base_url=canonical_url or source_url,
+    )
     return html.strip()
 
 
@@ -216,6 +220,45 @@ def _retarget_float_label_links_to_containers(html: str) -> str:
         return f"{match.group('prefix')}{quote}{local_href}{quote}"
 
     return ATTR_HREF_RE.sub(replace_href, html)
+
+
+def _rewrite_springer_same_document_absolute_fragments(html: str, *, base_url: str | None) -> str:
+    base_tokens = _springer_article_path_tokens(base_url)
+    if not base_tokens:
+        return html
+    targets = extract_html_fragment_targets(html)
+
+    def replace_href(match: re.Match[str]) -> str:
+        quote = match.group("quote")
+        href = unescape(match.group("href")).strip()
+        parsed = _urlsplit_or_none(href)
+        if parsed is None or not parsed.fragment:
+            return match.group(0)
+        if parsed.netloc.lower().split(":", 1)[0] not in {"link.springer.com", "www.nature.com", "nature.com"}:
+            return match.group(0)
+        href_tokens = _springer_article_path_tokens(href)
+        if not href_tokens.intersection(base_tokens):
+            return match.group(0)
+        target = urllib.parse.unquote(parsed.fragment)
+        if targets and target not in targets:
+            return match.group(0)
+        local_href = html_escape(f"#{parsed.fragment}", quote=True)
+        return f"{match.group('prefix')}{quote}{local_href}{quote}"
+
+    return ATTR_HREF_RE.sub(replace_href, html)
+
+
+def _springer_article_path_tokens(raw_url: str | None) -> set[str]:
+    parsed = _urlsplit_or_none(raw_url)
+    if parsed is None:
+        return set()
+    parts = [urllib.parse.unquote(part).strip().lower() for part in parsed.path.split("/") if part.strip()]
+    if not parts:
+        return set()
+    tokens = {parts[-1]}
+    if len(parts) >= 2 and parts[-2].startswith("10."):
+        tokens.add(f"{parts[-2]}/{parts[-1]}")
+    return {token for token in tokens if token}
 
 
 def _springer_float_label_target_map(html: str) -> dict[str, str]:

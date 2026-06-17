@@ -50,6 +50,27 @@ zotero-article-polish input.html output.html
 The main Zotero worker runs that CLI from `zotero-ingest-worker:latest` with the
 ingest repository mounted as `/ingest_worker_repo`.
 
+## Source HTML Quality Audit
+
+`zotero-source-html-audit` checks attached source HTML files in Zotero storage
+against the article-standard shell: polish style marker, `#web-doc`, source
+kind, local fragment links, image sources, tables, script tags, duplicate source
+attachments, orphan files, and source HTML job history.
+
+```powershell
+zotero-source-html-audit `
+  --zotero-root C:\PC\Zotero `
+  --zotero-root C:\Users\ELVIS_NIX\Zotero `
+  --state-db D:\Elvis_projects\Zotero_automatization\data\ocr\state.sqlite `
+  --pretty
+```
+
+By default the command writes timestamped and latest JSON reports under
+`INGEST_HTML_ROOT/diagnostics`. `critical_records` means the current HTML file
+does not satisfy the standard. `warning_counts` keeps softer process signals,
+including missing historic source-html job success rows and figures whose media
+was absent in the publisher source.
+
 ## Main Commands
 
 ```powershell

@@ -13,6 +13,7 @@ dependencies = [
 [project.scripts]
 zotero-ingest-worker = "zotero_ingest_worker.__main__:main"
 zotero-fulltext-worker = "zotero_ingest_worker.fulltext_main:main"
+zotero-source-html-audit = "zotero_ingest_worker.source_html_quality_audit:main"
 zotero-article-polish = "zoteropdf2md.web_polish.cli:main"
 pdf-html-polish-web = "zoteropdf2md.web_polish.cli:main"
 pdf-html-polish-web-arxiv = "zoteropdf2md.web_polish.cli:main_arxiv"

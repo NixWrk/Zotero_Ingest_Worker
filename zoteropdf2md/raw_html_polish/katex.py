@@ -159,7 +159,7 @@ def render_katex_html(html: str, *, ensure_head: Callable[[str], str]) -> str:
     try:
         ctx = katex_v8_context()
     except ImportError:
-        return inject_mathjax(original, ensure_head=ensure_head)
+        return original
 
     rendered = ctx.call(
         "__z2m_katex", [{"t": tex, "d": display} for tex, display in jobs]

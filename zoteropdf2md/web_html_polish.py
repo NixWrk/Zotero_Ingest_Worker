@@ -36,6 +36,8 @@ from .html_links import (
     canonicalize_same_document_links,
     count_same_document_absolute_fragment_links,
     declared_document_urls as _declared_document_urls,
+    extract_html_fragment_targets,
+    is_plain_local_fragment,
 )
 from .web_polish.core import (
     WebArticleExtraction,
@@ -88,6 +90,8 @@ _SRCSET_RE = re.compile(
     r"(?P<prefix><(?:img|source)\b[^>]*?\ssrcset\s*=\s*)(?P<quote>['\"])(?P<srcset>.*?)(?P=quote)",
     re.IGNORECASE | re.DOTALL,
 )
+_IMG_OPEN_RE = re.compile(r"<img\b(?P<attrs>[^>]*)>", re.IGNORECASE | re.DOTALL)
+_EMPTY_TABLE_RE = re.compile(r"<table\b[^>]*>\s*</table>", re.IGNORECASE)
 _ROOT_RELATIVE_URL_ATTR_RE = re.compile(
     r"(?P<prefix>(?<![\w:-])(?P<name>href|src|action|poster)\s*=\s*)"
     r"(?P<quote>['\"])(?P<url>.*?)(?P=quote)",
@@ -202,6 +206,7 @@ def polish_web_html_document(
         canonical_url=inferred_canonical_url,
         fetch_text=fetch_text or _fetch_remote_html,
     )
+    normalized_html = remove_publisher_ui_fragments(normalized_html)
     canonicalized = canonicalize_same_document_links(
         normalized_html,
         source_url=source_url,
@@ -215,6 +220,18 @@ def polish_web_html_document(
             source_url=source_url,
         ),
     )
+    if kind == WebHtmlKind.ARXIV_LATEXML:
+        article_html = absolutize_arxiv_extracted_asset_urls(
+            article_html,
+            base_url=_root_relative_url_base(
+                kind=kind,
+                canonical_url=inferred_canonical_url,
+                source_url=source_url,
+            ),
+        )
+    article_html = repair_empty_image_sources(article_html)
+    article_html = remove_empty_tables(article_html)
+    article_html = remove_unresolved_local_fragment_hrefs(article_html)
     wrapped = _wrap_web_article_html(
         article_html,
         kind=kind,
@@ -409,6 +426,8 @@ def inline_remote_images_from_web_html_document(
 def _remote_image_hosts_for_kind(kind: WebHtmlKind) -> frozenset[str]:
     if kind == WebHtmlKind.IOP_ARTICLE:
         return frozenset({"content.cld.iop.org"})
+    if kind == WebHtmlKind.ARXIV_LATEXML:
+        return frozenset({"arxiv.org", "www.arxiv.org"})
     return frozenset()
 
 
@@ -582,6 +601,56 @@ def absolutize_root_relative_urls(html: str, *, base_url: str | None) -> str:
     return html
 
 
+def absolutize_arxiv_extracted_asset_urls(html: str, *, base_url: str | None) -> str:
+    """Rewrite arXiv LaTeXML ``extracted/...`` assets to fetchable HTML URLs."""
+
+    parsed_base = _urlsplit_or_none(base_url)
+    if parsed_base is None or parsed_base.netloc.lower() not in {"arxiv.org", "www.arxiv.org"}:
+        return html
+    if _arxiv_html_parts(parsed_base) is None:
+        return html
+    document_base = urllib.parse.urlunsplit(
+        (parsed_base.scheme, parsed_base.netloc, parsed_base.path.rstrip("/") + "/", "", "")
+    )
+
+    def absolute_url(raw_url: str) -> str | None:
+        value = unescape(raw_url).strip()
+        if not value.lower().startswith("extracted/"):
+            return None
+        return urllib.parse.urljoin(document_base, value)
+
+    def replace_src(match: re.Match[str]) -> str:
+        rewritten = absolute_url(match.group("src"))
+        if rewritten is None:
+            return match.group(0)
+        quote = match.group("quote")
+        return f"{match.group('prefix')}{quote}{html_escape(rewritten, quote=True)}{quote}"
+
+    def replace_srcset(match: re.Match[str]) -> str:
+        changed = False
+        entries: list[str] = []
+        for raw_entry in match.group("srcset").split(","):
+            entry = raw_entry.strip()
+            if not entry:
+                continue
+            parts = entry.split()
+            rewritten = absolute_url(parts[0])
+            if rewritten is None:
+                entries.append(entry)
+                continue
+            changed = True
+            descriptor = " ".join(parts[1:])
+            entries.append(f"{rewritten} {descriptor}".strip())
+        if not changed:
+            return match.group(0)
+        quote = match.group("quote")
+        return f"{match.group('prefix')}{quote}{html_escape(', '.join(entries), quote=True)}{quote}"
+
+    html = _IMG_SRC_RE.sub(replace_src, html)
+    html = _SRCSET_RE.sub(replace_srcset, html)
+    return html
+
+
 def _root_relative_url_base(
     *,
     kind: WebHtmlKind,
@@ -630,6 +699,75 @@ def normalize_web_article_fragment(
         canonical_url=canonical_url,
         fetch_text=fetch_text,
     )
+
+
+def remove_publisher_ui_fragments(html: str) -> str:
+    """Drop article-page chrome that often survives generic extraction."""
+
+    html = _remove_elements_by_attr_tokens(
+        html,
+        (
+            "ArticleMetrics",
+            "articleMetrics",
+            "article-metrics",
+            "article_metrics",
+            "data-event=\"articleMetrics",
+            "data-event='articleMetrics",
+            "altmetric",
+        ),
+        tags=("aside", "div", "section", "nav"),
+    )
+    return html
+
+
+def remove_unresolved_local_fragment_hrefs(html: str) -> str:
+    """Keep link text but disable local fragment links whose target is absent."""
+
+    targets = extract_html_fragment_targets(html)
+
+    def replace(match: re.Match[str]) -> str:
+        href = unescape(match.group("href")).strip()
+        parsed = _urlsplit_or_none(href)
+        if parsed is None or not is_plain_local_fragment(parsed):
+            return match.group(0)
+        target = urllib.parse.unquote(parsed.fragment)
+        if target in targets:
+            return match.group(0)
+        quote = match.group("quote")
+        escaped_href = html_escape(href, quote=True)
+        return f"data-z2m-unresolved-href={quote}{escaped_href}{quote}"
+
+    return _ATTR_HREF_RE.sub(replace, html)
+
+
+def repair_empty_image_sources(html: str) -> str:
+    """Restore lazy image sources or remove broken empty ``img`` placeholders."""
+
+    def replace(match: re.Match[str]) -> str:
+        open_tag = match.group(0)
+        attrs = match.group("attrs") or ""
+        src = (_attr_value(attrs, "src") or "").strip()
+        if src:
+            return open_tag
+        srcset = (_attr_value(attrs, "srcset") or "").strip()
+        if srcset:
+            return open_tag
+        for attr_name in ("data-src", "data-original", "data-lazy-src"):
+            candidate = (_attr_value(attrs, attr_name) or "").strip()
+            if candidate:
+                return _set_attr_value(open_tag, "src", candidate)
+        return ""
+
+    return _IMG_OPEN_RE.sub(replace, html)
+
+
+def remove_empty_tables(html: str) -> str:
+    previous = None
+    cleaned = html
+    while cleaned != previous:
+        previous = cleaned
+        cleaned = _EMPTY_TABLE_RE.sub("", cleaned)
+    return cleaned
 
 
 def _extract_source_specific_article_fragment(

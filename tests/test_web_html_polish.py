@@ -244,6 +244,89 @@ def test_polish_web_html_document_extracts_arxiv_latexml_article() -> None:
     assert ".off-screen, .sr-only" in result.html
 
 
+def test_polish_web_html_file_inlines_arxiv_extracted_remote_images(tmp_path, monkeypatch) -> None:
+    from zoteropdf2md import web_html_polish as web_polish_module
+
+    html_path = tmp_path / "article.html"
+    html_path.write_text(
+        f"""
+        <html>
+          <body>
+            <div class="ltx_page_main">
+              <section id="S1">
+                <h1>arXiv Article</h1>
+                <p>{" ".join([LONG_PARAGRAPH] * 20)}</p>
+                <figure>
+                  <img alt="Figure" src="extracted/6200412/graphs/visimark.png">
+                </figure>
+              </section>
+            </div>
+          </body>
+        </html>
+        """,
+        encoding="utf-8",
+    )
+    fetched: list[str] = []
+
+    def fake_fetch(url: str) -> tuple[bytes, str]:
+        fetched.append(url)
+        return PNG_BYTES, "image/png"
+
+    monkeypatch.setattr(web_polish_module, "_fetch_remote_image", fake_fetch)
+
+    result = polish_web_html_file(html_path, source_url="https://arxiv.org/html/2502.10561")
+
+    assert fetched == ["https://arxiv.org/html/2502.10561/extracted/6200412/graphs/visimark.png"]
+    assert result.inlined_images == 1
+    assert 'src="data:image/png;base64,' in result.html
+    assert 'data-z2m-src="https://arxiv.org/html/2502.10561/extracted/6200412/graphs/visimark.png"' in result.html
+
+
+def test_polish_web_html_document_removes_empty_arxiv_missing_image_placeholder() -> None:
+    html = f"""
+    <html>
+      <body>
+        <div class="ltx_page_main">
+          <section id="S1">
+            <h1>arXiv Article</h1>
+            <p>{" ".join([LONG_PARAGRAPH] * 20)}</p>
+            <figure>
+              <img src="" class="ltx_graphics ltx_missing ltx_missing_image" alt="Refer to caption">
+              <figcaption>Figure with unavailable source art.</figcaption>
+            </figure>
+          </section>
+        </div>
+      </body>
+    </html>
+    """
+
+    result = polish_web_html_document(html, source_url="https://arxiv.org/html/2101.05452")
+
+    assert 'src=""' not in result.html
+    assert "ltx_missing_image" not in result.html
+    assert "Figure with unavailable source art." in result.html
+
+
+def test_polish_web_html_document_removes_empty_table_shells() -> None:
+    html = f"""
+    <html>
+      <body>
+        <article>
+          <h1>Article</h1>
+          <p>{" ".join([LONG_PARAGRAPH] * 20)}</p>
+          <table>  </table>
+          <table><tr><td>real value</td></tr></table>
+        </article>
+      </body>
+    </html>
+    """
+
+    result = polish_web_html_document(html)
+
+    assert "<table>  </table>" not in result.html
+    assert "<td>real value</td>" in result.html
+
+
 def test_polish_web_html_document_absolutizes_root_relative_publisher_urls() -> None:
     html = f"""
     <html>
@@ -271,6 +354,64 @@ def test_polish_web_html_document_absolutizes_root_relative_publisher_urls() -> 
     assert "https://www.tandfonline.com/cms/asset/figure-large.jpg 2x" in result.html
     assert 'href="/action/' not in result.html
     assert 'src="/cms/' not in result.html
+
+
+def test_polish_web_html_document_removes_metrics_and_disables_missing_local_fragments() -> None:
+    html = f"""
+    <html>
+      <head><title>Frontiers-like Article</title></head>
+      <body>
+        <article>
+          <div class="ArticleMetrics">
+            <p>Article metrics</p>
+            <a class="ArticleMetrics__link" href="#metrics">View details</a>
+          </div>
+          <h1>Article</h1>
+          <p>{" ".join([LONG_PARAGRAPH] * 20)}</p>
+          <p>
+            <a class="ArticleReference" href="#SM1">Supplementary Figure S1</a>
+            <a class="ArticleReference" href="#present">real target</a>
+          </p>
+          <section id="present">A real local target.</section>
+        </article>
+      </body>
+    </html>
+    """
+
+    result = polish_web_html_document(html)
+
+    assert "ArticleMetrics" not in result.html
+    assert 'href="#metrics"' not in result.html
+    assert ' href="#SM1"' not in result.html
+    assert 'data-z2m-unresolved-href="#SM1"' in result.html
+    assert 'href="#present"' in result.html
+
+
+def test_polish_web_html_document_does_not_inject_mathjax_when_static_katex_unavailable(monkeypatch) -> None:
+    from zoteropdf2md.raw_html_polish import katex as katex_module
+
+    def raise_import_error() -> None:
+        raise ImportError("mini racer unavailable")
+
+    monkeypatch.setattr(katex_module, "katex_v8_context", raise_import_error)
+    html = f"""
+    <html>
+      <head><title>Math Article</title></head>
+      <body>
+        <article>
+          <h1>Math Article</h1>
+          <p>{" ".join([LONG_PARAGRAPH] * 20)}</p>
+          <p>Inline math \\(x + y\\).</p>
+        </article>
+      </body>
+    </html>
+    """
+
+    result = polish_web_html_document(html)
+
+    assert "MathJax-script" not in result.html
+    assert "<script" not in result.html
+    assert "\\(x + y\\)" in result.html
 
 
 def test_polish_web_html_document_extracts_pmc_article() -> None:
@@ -461,6 +602,7 @@ def test_polish_web_html_document_extracts_springer_nature_body() -> None:
             <p>
               See <a href="#Fig1">Fig. 1</a>
               and <a href="https://link.springer.com/article/10.1007/example#Tab1">Table 1</a>.
+              Also cite <a href="https://link.springer.com/articles/example#ref-CR1">Reference 1</a>.
             </p>
             <div class="c-article-section__figure" id="figure-1" data-container-section="figure">
               <figure>
@@ -477,7 +619,7 @@ def test_polish_web_html_document_extracts_springer_nature_body() -> None:
               <table><tr><td>Value</td></tr></table>
             </div>
             <section data-title="References">
-              <ul class="c-article-references"><li>Reference one.</li></ul>
+              <ul class="c-article-references"><li id="ref-CR1">Reference one.</li></ul>
             </section>
             <a href="/article/10.1007/example/figures/1">Full image</a>
           </div>
@@ -498,6 +640,8 @@ def test_polish_web_html_document_extracts_springer_nature_body() -> None:
     assert 'id="Tab1"' in result.html
     assert 'href="#Fig1"' not in result.html
     assert 'href="https://link.springer.com/article/10.1007/example#Tab1"' not in result.html
+    assert 'href="#ref-CR1"' in result.html
+    assert 'href="https://link.springer.com/articles/example#ref-CR1"' not in result.html
     assert 'href="https://link.springer.com/article/10.1007/example/figures/1"' in result.html
 
 
