@@ -192,15 +192,16 @@ def polish_web_html_document(
         if rejection_message is not None:
             raise WebHtmlPolishError(rejection_message)
     title = _document_title(html)
+    declared_urls = _declared_document_urls(html)
+    inferred_canonical_url = canonical_url or (declared_urls[0] if declared_urls else None)
     extraction = extract_web_article_fragment(html, kind=kind)
     normalized_html = normalize_web_article_fragment(
         extraction.html,
         kind=kind,
         source_url=source_url,
-        canonical_url=canonical_url,
+        canonical_url=inferred_canonical_url,
+        fetch_text=fetch_text or _fetch_remote_html,
     )
-    declared_urls = _declared_document_urls(html)
-    inferred_canonical_url = canonical_url or (declared_urls[0] if declared_urls else None)
     canonicalized = canonicalize_same_document_links(
         normalized_html,
         source_url=source_url,
@@ -618,6 +619,7 @@ def normalize_web_article_fragment(
     kind: WebHtmlKind,
     source_url: str | None = None,
     canonical_url: str | None = None,
+    fetch_text: "RemoteHtmlFetcher | None" = None,
 ) -> str:
     """Apply publisher-specific static normalizations after extraction."""
 
@@ -626,6 +628,7 @@ def normalize_web_article_fragment(
         kind=kind,
         source_url=source_url,
         canonical_url=canonical_url,
+        fetch_text=fetch_text,
     )
 
 

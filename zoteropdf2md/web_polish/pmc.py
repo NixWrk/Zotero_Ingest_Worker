@@ -41,8 +41,9 @@ def normalize_article_fragment(
     *,
     source_url: str | None = None,
     canonical_url: str | None = None,
+    fetch_text: object | None = None,
 ) -> str:
-    del source_url, canonical_url
+    del source_url, canonical_url, fetch_text
     html = _remove_elements_by_attr_tokens(
         html,
         (

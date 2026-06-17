@@ -71,5 +71,5 @@ docker compose up -d zotero-ingest-worker zotero-fulltext-worker
 
 The default image is `zotero-ingest-worker:latest`.
 
-- metadata worker: `127.0.0.1:8765`
+- metadata worker: `127.0.0.1:8767`
 - full-text worker: `127.0.0.1:8766`

@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from importlib import import_module
 from types import ModuleType
 
 from .core import WebArticleExtraction, WebHtmlKind
+
+RemoteHtmlFetcher = Callable[[str], str]
 
 
 @dataclass(frozen=True)
@@ -38,6 +41,7 @@ class WebPolishHandler:
         *,
         source_url: str | None = None,
         canonical_url: str | None = None,
+        fetch_text: RemoteHtmlFetcher | None = None,
     ) -> str:
         if self.module_name is None:
             return html
@@ -45,6 +49,7 @@ class WebPolishHandler:
             html,
             source_url=source_url,
             canonical_url=canonical_url,
+            fetch_text=fetch_text,
         )
 
 
@@ -136,6 +141,7 @@ def normalize_source_specific_article_fragment(
     kind: WebHtmlKind,
     source_url: str | None = None,
     canonical_url: str | None = None,
+    fetch_text: RemoteHtmlFetcher | None = None,
 ) -> str:
     handler = handler_for_kind(kind)
     if handler is None:
@@ -144,4 +150,5 @@ def normalize_source_specific_article_fragment(
         html,
         source_url=source_url,
         canonical_url=canonical_url,
+        fetch_text=fetch_text,
     )

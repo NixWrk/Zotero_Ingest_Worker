@@ -448,7 +448,10 @@ def test_taylor_francis_polish_uses_publisher_origin_for_doi_source_root_links()
 def test_polish_web_html_document_extracts_springer_nature_body() -> None:
     html = f"""
     <html>
-      <head><title>Springer Article</title></head>
+      <head>
+        <title>Springer Article</title>
+        <link rel="canonical" href="https://link.springer.com/article/10.1007/example">
+      </head>
       <body>
         <aside>related articles</aside>
         <article>
@@ -496,6 +499,67 @@ def test_polish_web_html_document_extracts_springer_nature_body() -> None:
     assert 'href="#Fig1"' not in result.html
     assert 'href="https://link.springer.com/article/10.1007/example#Tab1"' not in result.html
     assert 'href="https://link.springer.com/article/10.1007/example/figures/1"' in result.html
+
+
+def test_polish_web_html_document_inlines_springer_full_size_tables() -> None:
+    html = f"""
+    <html>
+      <head>
+        <title>Springer Article</title>
+        <link rel="canonical" href="https://link.springer.com/article/10.1007/example">
+      </head>
+      <body>
+        <article>
+          <div class="c-article-body" id="body">
+            <h2 id="Sec1">Introduction</h2>
+            <p>{" ".join([LONG_PARAGRAPH] * 22)}</p>
+            <p>See <a href="https://link.springer.com/article/10.1007/example#Tab1">Table 1</a>.</p>
+            <div class="c-article-table" id="table-1" data-container-section="table">
+              <figure>
+                <figcaption class="c-article-table__figcaption">
+                  <b id="Tab1" data-test="table-caption">Table 1 Summary of values</b>
+                </figcaption>
+                <div class="u-text-right u-hide-print">
+                  <a data-test="table-link" href="/article/10.1007/example/tables/1">Full size table</a>
+                </div>
+              </figure>
+            </div>
+          </div>
+        </article>
+      </body>
+    </html>
+    """
+    table_page = """
+    <html><body>
+      <main>
+        <div class="c-article-table-container">
+          <div class="c-article-table-border">
+            <table class="data last-table">
+              <thead><tr><th><p>Fiber Type</p></th><th><p>Function</p></th></tr></thead>
+              <tbody><tr><td><p>Aα</p></td><td><p>Motor</p></td></tr></tbody>
+            </table>
+          </div>
+        </div>
+      </main>
+    </body></html>
+    """
+    fetched: list[str] = []
+
+    def fake_fetch(url: str) -> str:
+        fetched.append(url)
+        return table_page
+
+    result = polish_web_html_document(
+        html,
+        fetch_text=fake_fetch,
+    )
+
+    assert fetched == ["https://link.springer.com/article/10.1007/example/tables/1"]
+    assert 'href="#table-1"' in result.html
+    assert "<table" in result.html
+    assert "Fiber Type" in result.html
+    assert "Motor" in result.html
+    assert "Full size table" not in result.html
 
 
 def test_polish_web_html_document_extracts_iop_article_content() -> None:
