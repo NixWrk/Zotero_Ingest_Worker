@@ -44,6 +44,7 @@ def run_web_polish_cli(expected_kind: WebHtmlKind | None = None) -> int:
         return 3
 
     output.write_text(result.html, encoding="utf-8")
+    source_errors = ",".join(result.source_recovery_errors) or "-"
     print(
         "web-polish "
         f"kind={result.kind.value} "
@@ -52,6 +53,8 @@ def run_web_polish_cli(expected_kind: WebHtmlKind | None = None) -> int:
         f"same_doc_links={result.same_document_links_rewritten} "
         f"unresolved_same_doc_links={result.unresolved_same_document_links} "
         f"inlined_images={result.inlined_images} "
+        f"source_figures={result.recovered_source_figures}/{result.attempted_source_figures} "
+        f"source_figure_errors={source_errors} "
         f"output={output}"
     )
     return 0

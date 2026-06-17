@@ -10,6 +10,16 @@ ENV ZOTERO_INGEST_ROLE=metadata
 
 WORKDIR /app
 
+RUN --mount=type=cache,target=/var/cache/apt \
+    apt-get update \
+    && apt-get install -y --no-install-recommends \
+        texlive-latex-base \
+        texlive-latex-recommended \
+        texlive-latex-extra \
+        texlive-pictures \
+        texlive-fonts-recommended \
+    && rm -rf /var/lib/apt/lists/*
+
 COPY pyproject.toml README.md ./
 
 RUN --mount=type=cache,target=/root/.cache/pip \
@@ -18,7 +28,8 @@ RUN --mount=type=cache,target=/root/.cache/pip \
         "cryptography>=3.1" \
         "mini-racer>=0.12" \
         "playwright>=1.45" \
-        "pypdf>=4.0"
+        "pypdf>=4.0" \
+        "PyMuPDF>=1.24"
 
 RUN --mount=type=cache,target=/root/.cache/ms-playwright \
     python -m playwright install --with-deps chromium

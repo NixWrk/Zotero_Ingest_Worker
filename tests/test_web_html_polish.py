@@ -323,6 +323,57 @@ def test_polish_web_html_file_inlines_arxiv_extracted_remote_images(tmp_path, mo
     assert 'data-z2m-src="https://arxiv.org/html/2502.10561/extracted/6200412/graphs/visimark.png"' in result.html
 
 
+def test_polish_web_html_file_runs_arxiv_source_recovery(tmp_path, monkeypatch) -> None:
+    from zoteropdf2md import web_html_polish as web_polish_module
+    from zoteropdf2md.arxiv_source_recovery import ArxivSourceRecoveryResult
+
+    html_path = tmp_path / "article.html"
+    html_path.write_text(
+        f"""
+        <html>
+          <body>
+            <div class="ltx_page_main">
+              <section id="S1">
+                <h1>arXiv Article</h1>
+                <p>{" ".join([LONG_PARAGRAPH] * 20)}</p>
+                <figure id="S1.F1">
+                  <span class="ltx_ERROR undefined">{{forest}}</span>
+                  <figcaption>Figure 1: Taxonomy.</figcaption>
+                </figure>
+              </section>
+            </div>
+          </body>
+        </html>
+        """,
+        encoding="utf-8",
+    )
+    calls: list[str | None] = []
+
+    def fake_recover(html: str, *, source_url: str | None, **kwargs: object) -> ArxivSourceRecoveryResult:
+        del kwargs
+        calls.append(source_url)
+        return ArxivSourceRecoveryResult(
+            html=html.replace(
+                '<span class="ltx_ERROR undefined">{forest}</span>',
+                '<img data-z2m-recovery="arxiv-source" src="data:image/png;base64,AAAA" alt="Recovered">',
+            ),
+            recovered_figures=1,
+            attempted_figures=1,
+            errors=(),
+        )
+
+    monkeypatch.setattr(web_polish_module, "recover_latexml_figures_from_arxiv_source_html", fake_recover)
+
+    result = polish_web_html_file(html_path, source_url="https://arxiv.org/html/2507.01903")
+
+    assert calls == ["https://arxiv.org/html/2507.01903"]
+    assert result.recovered_source_figures == 1
+    assert result.attempted_source_figures == 1
+    assert result.source_recovery_errors == ()
+    assert 'data-z2m-recovery="arxiv-source"' in result.html
+    assert "ltx_ERROR" not in result.html
+
+
 def test_polish_web_html_document_removes_empty_arxiv_missing_image_placeholder() -> None:
     html = f"""
     <html>

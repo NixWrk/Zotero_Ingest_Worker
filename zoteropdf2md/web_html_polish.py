@@ -18,6 +18,9 @@ import re
 import urllib.parse
 import urllib.request
 
+from .arxiv_source_recovery import (
+    recover_latexml_figures_from_arxiv_source_html,
+)
 from .html_theme import web_readability_style
 from .html_images import (
     IMAGE_SIGNATURES,
@@ -80,6 +83,9 @@ class WebHtmlFilePolishResult:
     same_document_links_rewritten: int
     unresolved_same_document_links: int
     inlined_images: int
+    recovered_source_figures: int = 0
+    attempted_source_figures: int = 0
+    source_recovery_errors: tuple[str, ...] = ()
 
 
 _IMG_SRC_RE = re.compile(
@@ -273,7 +279,17 @@ def polish_web_html_file(
         canonical_url=canonical_url,
         fetch_text=fetch_text,
     )
-    inlined = inline_local_images_from_web_html_document(document.html, base_dir=html_path.parent)
+    recovered_source_figures = 0
+    html_for_inlining = document.html
+    attempted_source_figures = 0
+    source_recovery_errors: tuple[str, ...] = ()
+    if document.kind == WebHtmlKind.ARXIV_LATEXML:
+        recovery = recover_latexml_figures_from_arxiv_source_html(document.html, source_url=source_url)
+        html_for_inlining = recovery.html
+        recovered_source_figures = recovery.recovered_figures
+        attempted_source_figures = recovery.attempted_figures
+        source_recovery_errors = recovery.errors
+    inlined = inline_local_images_from_web_html_document(html_for_inlining, base_dir=html_path.parent)
     remote_inlined = inline_remote_images_from_web_html_document(
         inlined.html,
         allowed_hosts=_remote_image_hosts_for_kind(document.kind),
@@ -286,6 +302,9 @@ def polish_web_html_file(
         same_document_links_rewritten=document.same_document_links_rewritten,
         unresolved_same_document_links=document.unresolved_same_document_links,
         inlined_images=inlined.inlined_images + remote_inlined.inlined_images,
+        recovered_source_figures=recovered_source_figures,
+        attempted_source_figures=attempted_source_figures,
+        source_recovery_errors=source_recovery_errors,
     )
 
 
