@@ -97,6 +97,7 @@ from .metadata_processor_helpers import (
 from .relay_client import ZoteroRelayClient, relay_url_candidates as _relay_url_candidates
 from .researchgate_pdf import ResearchGatePdfOptions, download_and_attach_researchgate_pdf
 from .scihub_pdf import SciHubPdfOptions, download_and_attach_scihub_pdf
+from .source_html_maintenance import cleanup_source_html_library
 from .state import FileSignature, PipelineStateStore
 
 
@@ -204,6 +205,50 @@ class ZoteroMetadataProcessor:
             data_dir=data_dir,
             collection=collection,
         )
+
+    def source_html_cleanup(
+        self,
+        *,
+        max_items: int | None = None,
+        limit: int | None = None,
+        dry_run: bool = True,
+        confirm: bool = False,
+        delete_webdav: bool = False,
+        library_id: str | None = None,
+        data_dir: str | None = None,
+        collection: str | None = None,
+    ) -> dict[str, Any]:
+        if not dry_run and not confirm:
+            raise RuntimeError("source-html-cleanup apply mode requires confirm=true.")
+        max_scan = int(max_items or limit or 10000)
+        results: list[dict[str, Any]] = []
+        scanned = 0
+        affected = 0
+        candidates = 0
+        for library_config in self._library_configs(library_id=library_id, data_dir=data_dir):
+            result = cleanup_source_html_library(
+                store=LocalZoteroStore(library_config),
+                trash_attachment=self._trash_attachment_via_relay,
+                max_items=max_scan,
+                dry_run=dry_run,
+                delete_webdav=delete_webdav,
+                collection=collection,
+            )
+            scanned += int(result["scanned"])
+            affected += int(result["affected_parents"])
+            candidates += int(result["candidate_count"])
+            results.append(result)
+        ok = all(bool(result.get("ok", True)) for result in results)
+        return {
+            "ok": ok,
+            "mode": "source_html_cleanup",
+            "dry_run": dry_run,
+            "delete_webdav": delete_webdav,
+            "scanned": scanned,
+            "affected_parents": affected,
+            "candidate_count": candidates,
+            "libraries": results,
+        }
 
     def drain_metadata_queue(
         self,
@@ -1496,6 +1541,7 @@ class ZoteroMetadataProcessor:
             enqueue_pdf_for_ocr=self._enqueue_attached_pdf_for_ocr,
             enqueue_pdf_for_html=self._enqueue_attached_pdf_for_html,
             enqueue_html_for_translation=self._enqueue_attached_html_for_translation,
+            trash_source_html_attachment=self._trash_attachment_via_relay,
         ).attach(
             attachment=attachment,
             metadata=metadata,
@@ -1523,6 +1569,19 @@ class ZoteroMetadataProcessor:
             content_type=content_type,
             probe_attachment_key=probe_attachment_key,
             dedupe_prefix=dedupe_prefix,
+        )
+
+    def _trash_attachment_via_relay(
+        self,
+        *,
+        attachment: LocalAttachment,
+        dry_run: bool,
+        delete_webdav: bool = False,
+    ) -> dict[str, Any]:
+        return ZoteroRelayClient(self.config).trash_attachment(
+            attachment=attachment,
+            dry_run=dry_run,
+            delete_webdav=delete_webdav,
         )
 
     def _write_parent_attachment_local_copy(

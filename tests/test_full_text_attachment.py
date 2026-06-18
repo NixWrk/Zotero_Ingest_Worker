@@ -112,6 +112,178 @@ def test_full_text_attachment_service_attaches_html_without_processor(tmp_path: 
     assert local_copy.read_text(encoding="utf-8") == "<html><body>Article</body></html>"
 
 
+def test_full_text_attachment_service_skips_html_when_source_html_exists(tmp_path: Path) -> None:
+    source = tmp_path / "article.html"
+    source.write_text("<html><body>New Article</body></html>", encoding="utf-8")
+    existing = tmp_path / "storage" / "HTML0001" / "Article [SOURCE HTML].html"
+    existing.parent.mkdir(parents=True)
+    existing.write_text("<html><body>Existing Article</body></html>", encoding="utf-8")
+    metadata = SimpleNamespace(
+        library_id="LIB1",
+        data_dir=tmp_path,
+        key="ITEM1234",
+        item_id=10,
+        title="Article",
+    )
+    attachment = SimpleNamespace(storage_dir=tmp_path / "storage")
+    create_calls: list[dict[str, Any]] = []
+
+    service = FullTextAttachmentService(
+        relay_enabled=True,
+        create_parent_attachment=lambda **kwargs: create_calls.append(kwargs) or {"ok": True},
+        enqueue_pdf_for_ocr=lambda **_kwargs: {"unexpected": "ocr"},
+        enqueue_pdf_for_html=lambda **_kwargs: {"unexpected": "html"},
+    )
+
+    result = service.attach(
+        attachment=attachment,
+        metadata=metadata,
+        inventory={
+            "has_html": True,
+            "has_source_html": True,
+            "attachments": [
+                {
+                    "key": "HTML0001",
+                    "content_type": "text/html",
+                    "path": "storage:Article [SOURCE HTML].html",
+                    "title": "Article [source HTML]",
+                    "file_path": str(existing),
+                    "exists": True,
+                }
+            ],
+        },
+        payload={
+            "html_downloads": [{"ok": True, "output_path": str(source), "article": _article_html()}],
+            "pdf_downloads": [],
+        },
+    )
+
+    assert result is not None
+    assert result["skipped"] is True
+    assert result["reason"] == "parent_already_has_source_html"
+    assert result["existing_attachment_key"] == "HTML0001"
+    assert create_calls == []
+
+
+def test_full_text_attachment_service_trashes_dangling_source_html_before_attach(tmp_path: Path) -> None:
+    source = tmp_path / "article.html"
+    source.write_text("<html><body>Article</body></html>", encoding="utf-8")
+    metadata = SimpleNamespace(
+        library_id="LIB1",
+        data_dir=tmp_path,
+        key="ITEM1234",
+        item_id=10,
+        title="Article",
+    )
+    attachment = SimpleNamespace(storage_dir=tmp_path / "storage")
+    trash_calls: list[dict[str, Any]] = []
+    create_calls: list[dict[str, Any]] = []
+
+    service = FullTextAttachmentService(
+        relay_enabled=True,
+        create_parent_attachment=lambda **kwargs: create_calls.append(kwargs) or {"ok": True, "newAttachmentKey": "HTML1234"},
+        enqueue_pdf_for_ocr=lambda **_kwargs: {"unexpected": "ocr"},
+        enqueue_pdf_for_html=lambda **_kwargs: {"unexpected": "html"},
+        trash_source_html_attachment=lambda **kwargs: trash_calls.append(kwargs) or {"ok": True, "trashed": True},
+    )
+
+    result = service.attach(
+        attachment=attachment,
+        metadata=metadata,
+        inventory={
+            "has_html": False,
+            "has_source_html": False,
+            "attachments": [
+                {
+                    "key": "HTMLDEAD",
+                    "content_type": "text/html",
+                    "path": "storage:Article [SOURCE HTML].html",
+                    "title": "Article [source HTML]",
+                    "file_path": str(tmp_path / "storage" / "HTMLDEAD" / "Article [SOURCE HTML].html"),
+                    "exists": False,
+                }
+            ],
+        },
+        payload={
+            "html_downloads": [{"ok": True, "output_path": str(source), "article": _article_html()}],
+            "pdf_downloads": [],
+        },
+    )
+
+    assert result is not None
+    assert result["kind"] == "html"
+    assert [call["attachment"].key for call in trash_calls] == ["HTMLDEAD"]
+    assert trash_calls[0]["dry_run"] is False
+    assert create_calls[0]["content_type"] == "text/html"
+    assert result["source_html_cleanup"]["candidate_count"] == 1
+
+
+def test_full_text_attachment_service_still_attaches_pdf_when_html_already_exists(tmp_path: Path) -> None:
+    html = tmp_path / "article.html"
+    html.write_text("<html><body>Article</body></html>", encoding="utf-8")
+    pdf = tmp_path / "article.pdf"
+    pdf.write_bytes(b"%PDF")
+    existing = tmp_path / "storage" / "HTML0001" / "Article [SOURCE HTML].html"
+    existing.parent.mkdir(parents=True)
+    existing.write_text("<html><body>Existing Article</body></html>", encoding="utf-8")
+    metadata = SimpleNamespace(
+        library_id="LIB1",
+        data_dir=tmp_path,
+        key="ITEM1234",
+        item_id=10,
+        title="Article",
+    )
+    attachment = SimpleNamespace(storage_dir=tmp_path / "storage")
+    create_calls: list[dict[str, Any]] = []
+
+    def create_parent_attachment(**kwargs: Any) -> dict[str, Any]:
+        create_calls.append(kwargs)
+        return {"ok": True, "newAttachmentKey": "PDF1234"}
+
+    service = FullTextAttachmentService(
+        relay_enabled=True,
+        create_parent_attachment=create_parent_attachment,
+        enqueue_pdf_for_ocr=lambda **_kwargs: {"unexpected": "ocr"},
+        enqueue_pdf_for_html=lambda **_kwargs: {"classification": "skipped"},
+    )
+
+    result = service.attach(
+        attachment=attachment,
+        metadata=metadata,
+        inventory={
+            "has_html": True,
+            "has_pdf": False,
+            "has_source_html": True,
+            "attachments": [
+                {
+                    "key": "HTML0001",
+                    "content_type": "text/html",
+                    "path": "storage:Article [SOURCE HTML].html",
+                    "title": "Article [source HTML]",
+                    "file_path": str(existing),
+                    "exists": True,
+                }
+            ],
+        },
+        payload={
+            "html_downloads": [{"ok": True, "output_path": str(html), "article": _article_html()}],
+            "pdf_downloads": [
+                {
+                    "ok": True,
+                    "status": "downloaded",
+                    "output_path": str(pdf),
+                    "identity": {"needs_ocr": False},
+                }
+            ],
+        },
+    )
+
+    assert result is not None
+    assert result["kind"] == "pdf"
+    assert result["html_attachment"]["skipped"] is True
+    assert [call["content_type"] for call in create_calls] == ["application/pdf"]
+
+
 def test_full_text_attachment_service_reports_local_metadata_failure(
     monkeypatch: Any,
     tmp_path: Path,

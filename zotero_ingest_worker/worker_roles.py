@@ -46,6 +46,7 @@ FULLTEXT_POST_ACTION_PATHS = frozenset(
         "/api/zotero/scihub-pdf/backlog-scan",
         "/api/zotero/researchgate-pdf/queue/drain",
         "/api/zotero/scihub-pdf/queue/drain",
+        "/api/zotero/source-html/cleanup",
         "/api/zotero/metadata/queue/retry",
         "/api/zotero/metadata/queue/cancel",
     }
@@ -119,6 +120,7 @@ def cli_command_role(command: str | None) -> str:
         "researchgate-pdf-drain-queue",
         "scihub-pdf-backlog-scan",
         "scihub-pdf-drain-queue",
+        "source-html-cleanup",
     }:
         return ROLE_FULLTEXT
     if command in {

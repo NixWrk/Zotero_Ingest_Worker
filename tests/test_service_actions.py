@@ -108,6 +108,53 @@ def test_run_post_action_routes_full_text_backlog_with_auto_drain(monkeypatch: A
     ]
 
 
+def test_run_post_action_routes_source_html_cleanup(monkeypatch: Any) -> None:
+    calls: list[dict[str, Any]] = []
+
+    class FakeMetadataProcessor:
+        def __init__(self, _config: Any) -> None:
+            pass
+
+        def source_html_cleanup(self, **kwargs: Any) -> dict[str, Any]:
+            calls.append(kwargs)
+            return {"route": "source_html_cleanup"}
+
+    monkeypatch.setattr(
+        "zotero_ingest_worker.service_actions.ZoteroMetadataProcessor",
+        FakeMetadataProcessor,
+    )
+
+    result = run_post_action(
+        "/api/zotero/source-html/cleanup",
+        from_env(load_file=False),
+        {
+            "max_items": "50",
+            "limit": "10",
+            "dry_run": False,
+            "confirm": True,
+            "delete_webdav": True,
+            "library_id": "LIB1",
+            "data_dir": "/tmp/zotero",
+            "collection": "C1",
+        },
+        _FakeFullRunManager(),
+    )
+
+    assert result == {"route": "source_html_cleanup"}
+    assert calls == [
+        {
+            "max_items": 50,
+            "limit": 10,
+            "dry_run": False,
+            "confirm": True,
+            "delete_webdav": True,
+            "library_id": "LIB1",
+            "data_dir": "/tmp/zotero",
+            "collection": "C1",
+        }
+    ]
+
+
 def test_run_post_action_routes_full_run_status() -> None:
     result = run_post_action(
         "/api/zotero/pipeline/full-run/status",

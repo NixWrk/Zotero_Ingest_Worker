@@ -107,6 +107,17 @@ def run_post_action(
             limit=_int_value(payload.get("limit"), 1),
             dry_run=bool(payload.get("dry_run", False)),
         )
+    if path == "/api/zotero/source-html/cleanup":
+        return metadata_processor.source_html_cleanup(
+            max_items=_optional_int(payload.get("max_items")),
+            limit=_optional_int(payload.get("limit")),
+            dry_run=bool(payload.get("dry_run", True)),
+            confirm=bool(payload.get("confirm", False)),
+            delete_webdav=bool(payload.get("delete_webdav", False)),
+            library_id=_optional_str(payload.get("library_id")),
+            data_dir=_optional_str(payload.get("data_dir")),
+            collection=_optional_str(payload.get("collection")),
+        )
     if path == "/api/zotero/scihub-pdf/backlog-scan":
         result = metadata_processor.scihub_pdf_backlog_scan(
             max_items=_optional_int(payload.get("max_items")),

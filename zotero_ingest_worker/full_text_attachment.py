@@ -16,6 +16,7 @@ from .full_text_article import (
 )
 from .local_attachment_sync import sync_parent_attachment_local
 from .local_zotero import LocalAttachment, LocalItemMetadata
+from .source_html_maintenance import TrashAttachment, cleanup_source_html_inventory
 
 
 CreateParentAttachment = Callable[..., dict[str, Any]]
@@ -32,12 +33,14 @@ class FullTextAttachmentService:
         enqueue_pdf_for_ocr: EnqueueAttachedPdf,
         enqueue_pdf_for_html: EnqueueAttachedPdf,
         enqueue_html_for_translation: EnqueueAttachedHtml | None = None,
+        trash_source_html_attachment: TrashAttachment | None = None,
     ) -> None:
         self.relay_enabled = relay_enabled
         self.create_parent_attachment = create_parent_attachment
         self.enqueue_pdf_for_ocr = enqueue_pdf_for_ocr
         self.enqueue_pdf_for_html = enqueue_pdf_for_html
         self.enqueue_html_for_translation = enqueue_html_for_translation
+        self.trash_source_html_attachment = trash_source_html_attachment
 
     def attach(
         self,
@@ -54,7 +57,7 @@ class FullTextAttachmentService:
         pdf = _first_successful_download(payload.get("pdf_downloads"))
         html_result: dict[str, Any] | None = None
         if html is not None:
-            html_result = self._attach_html(
+            html_result = self._attach_or_skip_html(
                 html=html,
                 attachment=attachment,
                 metadata=metadata,
@@ -76,6 +79,10 @@ class FullTextAttachmentService:
         if html_result is not None and pdf_result is not None:
             if pdf_result.get("skipped"):
                 return html_result
+            if html_result.get("skipped") and pdf_result.get("ok"):
+                pdf_result = dict(pdf_result)
+                pdf_result["html_attachment"] = html_result
+                return pdf_result
             if html_result.get("ok") and pdf_result.get("ok"):
                 return _with_pdf_attachment_result(html_result=html_result, pdf_result=pdf_result)
             if not html_result.get("ok") and pdf_result.get("ok"):
@@ -88,6 +95,49 @@ class FullTextAttachmentService:
         if html_result is not None:
             return html_result
         return pdf_result
+
+    def _attach_or_skip_html(
+        self,
+        *,
+        html: dict[str, Any],
+        attachment: LocalAttachment,
+        metadata: LocalItemMetadata,
+        inventory: dict[str, object],
+    ) -> dict[str, Any]:
+        source_path = _html_attachment_preferred_source_path(html)
+        if not source_path.exists():
+            return {"ok": False, "status": "local_source_missing", "sourcePath": str(source_path)}
+        cleanup = cleanup_source_html_inventory(
+            metadata=metadata,
+            inventory=inventory,
+            storage_dir=attachment.storage_dir,
+            trash_attachment=self.trash_source_html_attachment,
+            dry_run=False,
+        )
+        if not cleanup.get("ok"):
+            return {
+                "ok": False,
+                "kind": "html",
+                "status": "source_html_cleanup_failed",
+                "source": html,
+                "source_html_cleanup": cleanup,
+            }
+        keep_key = str(cleanup.get("keep_key") or "").strip()
+        if keep_key:
+            return _skipped_existing_html_result(
+                html=html,
+                inventory=inventory,
+                keep_key=keep_key,
+                cleanup=cleanup,
+            )
+        result = self._attach_html(
+            html=html,
+            attachment=attachment,
+            metadata=metadata,
+            inventory=inventory,
+        )
+        result["source_html_cleanup"] = cleanup
+        return result
 
     def _attach_html(
         self,
@@ -265,6 +315,26 @@ def _skipped_existing_pdf_result(
         "has_html": bool(inventory.get("has_html")),
         "has_pdf": bool(inventory.get("has_pdf")),
         "source": pdf,
+    }
+
+
+def _skipped_existing_html_result(
+    *,
+    html: dict[str, Any],
+    inventory: dict[str, object],
+    keep_key: str,
+    cleanup: dict[str, Any],
+) -> dict[str, Any]:
+    return {
+        "ok": True,
+        "skipped": True,
+        "kind": "html",
+        "reason": "parent_already_has_source_html",
+        "existing_attachment_key": keep_key,
+        "has_html": bool(inventory.get("has_html")),
+        "has_source_html": bool(inventory.get("has_source_html")),
+        "source": html,
+        "source_html_cleanup": cleanup,
     }
 
 

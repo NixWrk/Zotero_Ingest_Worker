@@ -30,6 +30,7 @@ CLI_POST_ACTIONS = {
     "researchgate-pdf-drain-queue": "/api/zotero/researchgate-pdf/queue/drain",
     "scihub-pdf-backlog-scan": "/api/zotero/scihub-pdf/backlog-scan",
     "scihub-pdf-drain-queue": "/api/zotero/scihub-pdf/queue/drain",
+    "source-html-cleanup": "/api/zotero/source-html/cleanup",
     "full-run-start": "/api/zotero/pipeline/full-run/start",
     "full-run-status": "/api/zotero/pipeline/full-run/status",
     "full-run-stop": "/api/zotero/pipeline/full-run/stop",
@@ -130,6 +131,19 @@ def main(argv: list[str] | None = None, *, default_role: str = ROLE_METADATA) ->
         help="Process queued Sci-Hub PDF fallback jobs.",
     )
     _add_drain_args(scihub_pdf_drain_parser)
+
+    source_html_cleanup_parser = subparsers.add_parser(
+        "source-html-cleanup",
+        help="Trash dangling/duplicate source HTML attachments without touching PDFs or parent items.",
+    )
+    source_html_cleanup_parser.add_argument("--limit", type=int, default=None)
+    source_html_cleanup_parser.add_argument("--max-items", type=int, default=None)
+    source_html_cleanup_parser.add_argument("--library-id", default=None)
+    source_html_cleanup_parser.add_argument("--data-dir", default=None)
+    source_html_cleanup_parser.add_argument("--collection", default=None)
+    source_html_cleanup_parser.add_argument("--apply", action="store_true")
+    source_html_cleanup_parser.add_argument("--confirm", action="store_true")
+    source_html_cleanup_parser.add_argument("--delete-webdav", action="store_true")
 
     full_run_start = subparsers.add_parser(
         "full-run-start",
@@ -266,6 +280,17 @@ def _cli_action_payload(command: str, args: argparse.Namespace) -> dict[str, obj
         return {"type": args.type, "statuses": args.status, "limit": args.limit}
     if command in {"metadata-backlog-scan", "arxiv-html-backlog-scan", "full-text-backlog-scan"}:
         return _backlog_payload(args)
+    if command == "source-html-cleanup":
+        return {
+            "max_items": args.max_items,
+            "limit": args.limit,
+            "library_id": args.library_id,
+            "data_dir": args.data_dir,
+            "collection": args.collection,
+            "dry_run": not bool(args.apply),
+            "confirm": bool(args.confirm),
+            "delete_webdav": bool(args.delete_webdav),
+        }
     if command == "scihub-pdf-backlog-scan":
         return {
             **_backlog_payload(args),

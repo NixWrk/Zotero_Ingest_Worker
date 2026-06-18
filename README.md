@@ -116,6 +116,22 @@ does not satisfy the standard. `warning_counts` keeps softer process signals,
 including missing historic source-html job success rows and figures whose media
 was absent in the publisher source.
 
+`zotero-fulltext-worker source-html-cleanup` repairs Zotero attachment records
+that would otherwise produce duplicate `[source HTML]` rows in the UI. It scans
+parent items, finds source HTML attachments whose local file is missing, and
+deduplicates multiple valid source HTML attachments by keeping the largest/newest
+one. The command is dry-run by default and only targets source HTML attachments;
+PDFs, generated translation HTML, and parent items are outside its scope.
+
+```powershell
+zotero-fulltext-worker source-html-cleanup --limit 1000
+zotero-fulltext-worker source-html-cleanup --limit 1000 --apply --confirm
+```
+
+The full-text attach path runs the same cleanup before creating a new source
+HTML. If a valid source HTML is already attached, the worker skips creating a
+duplicate and can still attach a newly found PDF for the same parent item.
+
 ## Main Commands
 
 ```powershell
@@ -129,6 +145,7 @@ zotero-fulltext-worker full-text-backlog-scan --limit 100
 zotero-fulltext-worker full-text-drain-queue --limit 32
 zotero-fulltext-worker scihub-pdf-backlog-scan --limit 100
 zotero-fulltext-worker scihub-pdf-drain-queue --limit 32
+zotero-fulltext-worker source-html-cleanup --limit 1000
 ```
 
 ## Container
