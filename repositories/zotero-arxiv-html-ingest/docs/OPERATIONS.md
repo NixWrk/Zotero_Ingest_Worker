@@ -3,15 +3,15 @@
 ## Dry-run queue
 
 ```powershell
-python -m zotero_ingest_worker.__main__ arxiv-html-backlog-scan --limit 20
-python -m zotero_ingest_worker.__main__ arxiv-html-drain-queue --dry-run --limit 20
-python -m zotero_ingest_worker.__main__ metadata-queue --type arxiv_html --limit 20
+zotero-ingest-worker arxiv-html-backlog-scan --limit 20
+zotero-ingest-worker arxiv-html-drain-queue --dry-run --limit 20
+zotero-ingest-worker metadata-queue --type arxiv_html --limit 20
 ```
 
 ## Apply one job
 
 ```powershell
-python -m zotero_ingest_worker.__main__ arxiv-html-drain-queue --limit 1
+zotero-ingest-worker arxiv-html-drain-queue --limit 1
 ```
 
 ## Full-run integration
@@ -78,4 +78,3 @@ Title search не прошел threshold.
 HTML сохранен локально, но не прикрепился в Zotero.
 
 Действие: retry job после проверки `zotero-file-relay`.
-

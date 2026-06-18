@@ -58,4 +58,7 @@ Semantic Scholar может работать без API key, но с более 
 python -m pytest -q
 ```
 
-Пакет не должен сам писать в Zotero. Запись metadata/attachments делает основной `zotero-worker` через relay после того, как этот пакет вернул diff или full-text artifact.
+Пакет не должен сам писать в Zotero. Он возвращает candidates, diffs и
+full-text evidence. Запись metadata/attachments выполняет сервисный слой
+`zotero-ingest-worker`/`zotero-fulltext-worker` через `zotero-file-relay`, а
+основной `zotero-worker` только оркестрирует и проксирует эти стадии.

@@ -4,7 +4,7 @@
 
 ```text
 Zotero local sqlite/storage
-  -> zotero-worker metadata scanner
+  -> zotero-ingest-worker metadata scanner
   -> metadata_jobs queue
   -> provider chain
        1. Zotero translation-server
@@ -120,4 +120,3 @@ PATCH /attachments/{pdfKey}/parent/metadata
 - structural fields
 
 Для полноценного enrichment нужен новый extended endpoint.
-

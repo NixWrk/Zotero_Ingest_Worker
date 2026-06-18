@@ -1,8 +1,12 @@
 # Zotero arXiv HTML Ingest
 
-Отдельный проектный репозиторий для блока поиска arXiv-версий статей, загрузки HTML с arXiv и записи результата в Zotero/storage.
+Проектный Python-пакет для блока поиска arXiv-версий статей, загрузки HTML с
+arXiv и подготовки результата для Zotero/storage.
 
-Цель: если в metadata статьи есть arXiv-ссылка или статью можно уверенно найти на arXiv, получить официальный HTML с `arxiv.org/html/{id}`, сохранить его в локальное хранилище и прикрепить как sibling attachment к PDF.
+Цель: если в metadata статьи есть arXiv-ссылка или статью можно уверенно найти
+на arXiv, получить официальный HTML с `arxiv.org/html/{id}`, сохранить его в
+локальное хранилище и передать сервисному слою ingest/fulltext для attachment
+write-back через relay.
 
 Репозиторий уже является рабочим Python-пакетом: его можно тестировать, импортировать как библиотеку и запускать CLI для lookup/fetch/validate.
 
@@ -35,7 +39,8 @@ data/html/arxiv/
           manifest.json
 ```
 
-6. Через `zotero-file-relay` прикрепляет HTML как sibling attachment:
+6. Сервисный слой `zotero-ingest-worker`/`zotero-fulltext-worker` через
+   `zotero-file-relay` прикрепляет HTML как sibling attachment:
 
 ```text
 <document_name> [ARXIV HTML].html
@@ -43,7 +48,8 @@ data/html/arxiv/
 
 ## Связанные сервисы
 
-- `zotero-worker` - очередь и обработчик `arxiv_html`.
+- `zotero-ingest-worker` / `zotero-fulltext-worker` - очередь и обработчик
+  `arxiv_html`; основной `zotero-worker` может проксировать эти операции.
 - `zotero-file-relay` - запись HTML sibling в Zotero/WebDAV.
 - `zotero/translation-server` - optional metadata evidence для нахождения arXiv ID.
 - `arxiv.org/api/query` - поиск/проверка arXiv records.
@@ -90,10 +96,10 @@ python -m zotero_arxiv_html_ingest.cli fetch --arxiv-id 2401.01234 --output-root
 ## Команды интеграции в текущем worker
 
 ```powershell
-python -m zotero_ingest_worker.__main__ arxiv-html-backlog-scan --limit 10
-python -m zotero_ingest_worker.__main__ arxiv-html-drain-queue --dry-run --limit 5
-python -m zotero_ingest_worker.__main__ arxiv-html-drain-queue --limit 1
-python -m zotero_ingest_worker.__main__ metadata-queue --type arxiv_html
+zotero-ingest-worker arxiv-html-backlog-scan --limit 10
+zotero-ingest-worker arxiv-html-drain-queue --dry-run --limit 5
+zotero-ingest-worker arxiv-html-drain-queue --limit 1
+zotero-ingest-worker metadata-queue --type arxiv_html
 ```
 
 ## Статус
@@ -106,4 +112,5 @@ python -m zotero_ingest_worker.__main__ metadata-queue --type arxiv_html
 - прикреплять sibling через relay;
 - писать manifest рядом с HTML.
 
-Главная следующая доработка: сделать audit/render validation, чтобы не прикреплять пустые или некачественные HTML-страницы.
+Более строгий article-standard polish, figure recovery и source HTML audit
+живут уровнем выше в основном `zotero-ingest-worker` package.

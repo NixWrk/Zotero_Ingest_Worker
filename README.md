@@ -8,6 +8,12 @@ Small services for the first Zotero pipeline stages.
   acquisition: publisher/PMC/IOP/arXiv HTML, PDF download, ResearchGate browser
   PDF fallback, and Sci-Hub as the last PDF fallback.
 
+The full-text worker searches by all identifiers it can derive from Zotero and
+metadata enrichment: DOI, PMID, PMCID, arXiv id, URL, and title evidence. A
+successful PDF/HTML attachment is reported back through `downstream_orchestrator`
+so the main Zotero worker can enqueue later OCR, PDF-to-HTML, polish, or
+translation stages without duplicating full-text provider logic.
+
 The code currently lives in one repository so both containers share Zotero
 SQLite access, queue storage, provider configuration, and tests. The HTTP
 surface is role-guarded, so the metadata container does not expose full-text
@@ -50,6 +56,45 @@ zotero-article-polish input.html output.html
 The main Zotero worker runs that CLI from `zotero-ingest-worker:latest` with the
 ingest repository mounted as `/ingest_worker_repo`.
 
+Provider-specific polish entrypoints are also installed for manual testing and
+targeted repair:
+
+```powershell
+pdf-html-polish-web input.html output.html
+pdf-html-polish-web-arxiv input.html output.html
+pdf-html-polish-web-pmc input.html output.html
+pdf-html-polish-web-iop input.html output.html
+pdf-html-polish-web-springer-nature input.html output.html
+```
+
+## arXiv Source Recovery
+
+Official arXiv HTML can contain failed LaTeXML figure bodies even when the
+article text is otherwise good. During arXiv web polish, the worker can recover
+those broken figures from the original arXiv source package:
+
+1. detect broken LaTeXML figure fragments in polished arXiv HTML;
+2. fetch `https://arxiv.org/e-print/<arxiv_id>`;
+3. extract the source package safely;
+4. collect matching LaTeX figure environments;
+5. render selected figures to PNG through local TeX and PyMuPDF;
+6. replace the broken HTML figure body with a standard embedded recovered image.
+
+This is enabled by default for arXiv polish and can be controlled with:
+
+```text
+ARXIV_SOURCE_RECOVERY_ENABLED=1
+ARXIV_SOURCE_RECOVERY_MAX_FIGURES=4
+ARXIV_SOURCE_RECOVERY_FETCH_TIMEOUT_SECONDS=60
+ARXIV_SOURCE_RECOVERY_TIMEOUT_SECONDS=120
+ARXIV_SOURCE_RECOVERY_TEX_COMMAND=pdflatex
+```
+
+The Docker image installs the required TeX Live packages and `PyMuPDF`. CLI
+stdout reports `source_figures=<recovered>/<attempted>` and
+`source_figure_errors=...` so audits can distinguish publisher-source defects
+from recovery defects.
+
 ## Source HTML Quality Audit
 
 `zotero-source-html-audit` checks attached source HTML files in Zotero storage
@@ -78,6 +123,8 @@ zotero-ingest-worker serve
 zotero-fulltext-worker serve
 zotero-ingest-worker metadata-backlog-scan --limit 100
 zotero-ingest-worker metadata-drain-queue --limit 32
+zotero-ingest-worker arxiv-html-backlog-scan --limit 100
+zotero-ingest-worker arxiv-html-drain-queue --limit 32
 zotero-fulltext-worker full-text-backlog-scan --limit 100
 zotero-fulltext-worker full-text-drain-queue --limit 32
 zotero-fulltext-worker scihub-pdf-backlog-scan --limit 100
