@@ -106,7 +106,7 @@ attachments, orphan files, and source HTML job history.
 zotero-source-html-audit `
   --zotero-root C:\PC\Zotero `
   --zotero-root C:\Users\ELVIS_NIX\Zotero `
-  --state-db D:\Elvis_projects\Zotero_automatization\data\ocr\state.sqlite `
+  --state-db D:\Elvis_projects\zotero\Zotero_automatization\data\ocr\state.sqlite `
   --pretty
 ```
 

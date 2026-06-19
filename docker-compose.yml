@@ -69,10 +69,10 @@ services:
         source: C:/Users/ELVIS_NIX/Zotero
         target: /zotero_roots/user_zotero
       - type: bind
-        source: D:/Elvis_projects/zotero-ingest-worker/data/ingest
+        source: D:/Elvis_projects/zotero/zotero-ingest-worker/data/ingest
         target: /data/ingest
       - type: bind
-        source: D:/Elvis_projects/zotero-ingest-worker/data/html
+        source: D:/Elvis_projects/zotero/zotero-ingest-worker/data/html
         target: /data/html
     networks:
       - zotero-automation
@@ -147,10 +147,10 @@ services:
         source: C:/Users/ELVIS_NIX/Zotero
         target: /zotero_roots/user_zotero
       - type: bind
-        source: D:/Elvis_projects/zotero-ingest-worker/data/ingest
+        source: D:/Elvis_projects/zotero/zotero-ingest-worker/data/ingest
         target: /data/ingest
       - type: bind
-        source: D:/Elvis_projects/zotero-ingest-worker/data/html
+        source: D:/Elvis_projects/zotero/zotero-ingest-worker/data/html
         target: /data/html
     networks:
       - zotero-automation

@@ -38,7 +38,7 @@ Payload flags:
 На Windows host:
 
 ```text
-D:\Elvis_projects\Zotero_automatization\data\html\arxiv\...
+D:\Elvis_projects\zotero\Zotero_automatization\data\html\arxiv\...
 ```
 
 В Zotero:
