@@ -210,6 +210,215 @@ def test_source_html_audit_flags_latexml_render_errors_inside_figures(tmp_path: 
     assert "latexml_figure_render_error" in report["critical_records"][0]["issues"]
 
 
+def test_source_html_audit_flags_discovered_regression_defects(tmp_path: Path) -> None:
+    data_dir = tmp_path / "Zotero_Test"
+    webp = "UklGRhAAAABXRUJQVlA4IHoybQ=="
+    html = f"""<!doctype html>
+    <html>
+    <head>
+      <style data-z2m-style="web-html-polish">body {{ color: #111; }}</style>
+    </head>
+    <body>
+    <main id="web-doc" data-z2m-source-kind="arxiv_latexml">
+      <h1>Regression Article</h1>
+      <dl class="def-list"><dt>MI</dt><dd><p>motor imagery</p></dd></dl>
+      <picture>
+        <source srcset="https://cdn.example/fig.webp 1x">
+        <img alt="Figure" src="data:image/webp;base64,{webp}">
+      </picture>
+      <img alt="Generic MIME" src="data:application/octet-stream;base64,{webp}">
+      <figure class="ltx_table">
+        <figcaption class="ltx_caption">
+          <span class="ltx_transformed_outer"><span class="ltx_transformed_inner">Table 1</span></span>
+        </figcaption>
+        <table><tr><td>\\rowcolor gray!10 RNN</td></tr></table>
+      </figure>
+      <table class="disp-formula"><tr><td class="formula"><math display="block">x</math></td><td class="label">(1)</td></tr></table>
+    </main>
+    </body>
+    </html>
+    """
+    _write_html_attachment(
+        data_dir,
+        key="REGRESS1",
+        parent_key="PARENT1",
+        title="Regression Article [source HTML]",
+        html=html,
+    )
+
+    report = run_audit(zotero_data_dirs=(data_dir,), state_db=None)
+    issues = set(report["critical_records"][0]["issues"])
+
+    assert "image_data_non_image_mime" in issues
+    assert "picture_source_overrides_inline_image" in issues
+    assert "latexml_rowcolor_artifact" in issues
+    assert "missing_def_list_style" in issues
+    assert "missing_latexml_caption_style" in issues
+    assert "missing_latexml_table_style" in issues
+    assert "missing_formula_style" in issues
+    assert report["critical_records"][0]["counts"]["picture_inline_data_img_with_source"] == 1
+    assert report["critical_records"][0]["counts"]["latexml_rowcolor_artifacts"] == 1
+
+
+def test_source_html_audit_flags_frontiers_reference_buttons(tmp_path: Path) -> None:
+    data_dir = tmp_path / "Zotero_Test"
+    html = GOOD_HTML.replace(
+        '<p>See <a href="#bib1">reference</a>.</p>',
+        """
+        <p>
+          See
+          <button type="button" color="Blue40" id="B1-button" class="ArticleReference" data-event="articleReference-a-b1"> 2024 </button>.
+        </p>
+        <ul class="References">
+          <li class="References__item" id="B1">Reference one.</li>
+        </ul>
+        """,
+    )
+    _write_html_attachment(
+        data_dir,
+        key="FRONT001",
+        parent_key="PARENT1",
+        title="Frontiers Article [source HTML]",
+        html=html,
+    )
+
+    report = run_audit(zotero_data_dirs=(data_dir,), state_db=None)
+
+    assert report["summary"]["issue_counts"]["frontiers_reference_button"] == 1
+    assert report["critical_records"][0]["counts"]["frontiers_reference_buttons"] == 1
+    assert "frontiers_reference_button" in report["critical_records"][0]["issues"]
+
+
+def test_source_html_audit_flags_discovered_js_wrapped_source_html(tmp_path: Path) -> None:
+    data_dir = tmp_path / "Zotero_Test"
+    html = f"""<!doctype html>
+    <html>
+    <head>
+      <title>JS Wrapped Article</title>
+      {web_readability_style()}
+    </head>
+    <body>
+      <main id="web-doc" data-z2m-source-kind="pmc_article">
+        <main id="web-doc" data-z2m-source-kind="pmc_article">
+          <h1>JS Wrapped Article</h1>
+          <p>
+            See <a class="ArticleReference" data-event="articleReference-a-sm1">Supplementary Material</a>.
+          </p>
+          <button class="ArticleFigure__figureButton" aria-label="Open lightbox for FIGURE 1">
+            <figure id="F1"><img alt="Figure" src="data:image/png;base64,iVBORw0KGgo="/></figure>
+          </button>
+          <button class="ButtonIcon" data-event="articleFigure-button-download" aria-label="Download FIGURE 1">Download</button>
+          <button class="citation-dialog-trigger">Cite</button>
+          <form id="collections-action-dialog-form"><button type="button">Save</button></form>
+          <table><tr><td>A</td></tr></table>
+        </main>
+      </main>
+    </body>
+    </html>
+    """
+    _write_html_attachment(
+        data_dir,
+        key="JSWRAP01",
+        parent_key="PARENT1",
+        title="JS Wrapped Article [source HTML]",
+        html=html,
+    )
+
+    report = run_audit(zotero_data_dirs=(data_dir,), state_db=None)
+    record = report["critical_records"][0]
+    issues = set(record["issues"])
+
+    assert "nested_web_doc_wrapper" in issues
+    assert "frontiers_empty_article_reference_link" in issues
+    assert "frontiers_figure_js_control" in issues
+    assert "pmc_dead_ui_control" in issues
+    assert record["counts"]["web_doc_mains"] == 2
+    assert record["counts"]["frontiers_empty_article_reference_links"] == 1
+    assert record["counts"]["frontiers_figure_js_controls"] == 2
+    assert record["counts"]["pmc_dead_ui_controls"] == 2
+
+
+def test_source_html_audit_flags_discovered_js_wrapped_generated_html(tmp_path: Path) -> None:
+    data_dir = tmp_path / "Zotero_Test"
+    html = f"""<!doctype html>
+    <html>
+    <head>
+      <title>Generated Article</title>
+      {web_readability_style()}
+    </head>
+    <body>
+      <main id="web-doc" data-z2m-source-kind="pmc_article">
+        <main id="web-doc" data-z2m-source-kind="pmc_article">
+          <h1>Generated Article</h1>
+          <p>Translated article text.</p>
+          <button class="pmc-permalink__dropdown__copy__btn" type="button">Copy</button>
+        </main>
+      </main>
+    </body>
+    </html>
+    """
+    _write_html_attachment(
+        data_dir,
+        key="GENRU001",
+        parent_key="PARENT1",
+        title="Generated Article [RU HTML]",
+        html=html,
+    )
+
+    report = run_audit(zotero_data_dirs=(data_dir,), state_db=None)
+    record = report["critical_records"][0]
+
+    assert report["summary"]["source_html_files"] == 0
+    assert report["summary"]["non_source_html_files"] == 1
+    assert record["is_generated_html"] is True
+    assert record["is_source_html"] is False
+    assert "nested_web_doc_wrapper" in record["issues"]
+    assert "pmc_dead_ui_control" in record["issues"]
+    assert "missing_web_polish_style" not in record["issues"]
+
+
+def test_source_html_audit_flags_stale_active_arxiv_html_sibling(tmp_path: Path) -> None:
+    data_dir = tmp_path / "Zotero_Test"
+    _write_html_attachment(
+        data_dir,
+        key="SOURCE1",
+        parent_key="PARENT1",
+        title="Article [source HTML]",
+        html=GOOD_HTML,
+    )
+    arxiv_dir = data_dir / "storage" / "ARXIV001"
+    arxiv_dir.mkdir(parents=True)
+    arxiv_filename = "Article [ARXIV HTML].html"
+    (arxiv_dir / arxiv_filename).write_text("<html><body>old arxiv html</body></html>", encoding="utf-8")
+    connection = sqlite3.connect(data_dir / "zotero.sqlite")
+    try:
+        connection.execute("insert into items (itemID, key, dateModified) values (3, 'ARXIV001', '')")
+        connection.execute(
+            """
+            insert into itemAttachments (itemID, parentItemID, linkMode, contentType, path)
+            values (3, 1, 1, 'text/html', ?)
+            """,
+            (f"storage:{arxiv_filename}",),
+        )
+        connection.execute("insert into itemDataValues (valueID, value) values (2, 'Article [ARXIV HTML]')")
+        connection.execute("insert into itemData (itemID, fieldID, valueID) values (3, 1, 2)")
+        connection.commit()
+    finally:
+        connection.close()
+
+    report = run_audit(zotero_data_dirs=(data_dir,), state_db=None)
+    stale = [
+        record
+        for record in report["critical_records"]
+        if "stale_arxiv_html_attachment" in record["issues"]
+    ]
+
+    assert len(stale) == 1
+    assert stale[0]["key"] == "ARXIV001"
+    assert stale[0]["is_arxiv_html"] is True
+    assert report["summary"]["issue_counts"]["stale_arxiv_html_attachment"] == 1
+
+
 def test_source_html_audit_does_not_flag_jobs_when_state_has_no_source_jobs(tmp_path: Path) -> None:
     data_dir = tmp_path / "Zotero_Test"
     _write_html_attachment(

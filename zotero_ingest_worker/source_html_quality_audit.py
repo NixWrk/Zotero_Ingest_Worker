@@ -27,8 +27,18 @@ from .local_zotero_paths import library_id_for_data_dir
 
 
 SOURCE_HTML_RE = re.compile(r"\[\s*source\s+html\s*\]|\bsource\s+html\b", re.IGNORECASE)
+ARXIV_HTML_RE = re.compile(r"\[\s*arxiv\s+html\s*\]|\barxiv\s+html\b", re.IGNORECASE)
 GENERATED_HTML_RE = re.compile(r"\[(?:[a-z]{2,12}|mixed|unknown) html\]\.html?$", re.IGNORECASE)
 SPRINGER_TABLE_PLACEHOLDER_RE = re.compile(r"/tables/\d+\b", re.IGNORECASE)
+IGNORED_BLOCK_RE = re.compile(r"<(?:script|style)\b[^>]*>[\s\S]*?</(?:script|style)>", re.IGNORECASE)
+DEF_LIST_RE = re.compile(r"<dl\b(?=[^>]*\bclass\s*=\s*['\"][^'\"]*\bdef-list\b)", re.IGNORECASE)
+LTX_TABLE_RE = re.compile(r"<figure\b(?=[^>]*\bclass\s*=\s*['\"][^'\"]*\bltx_table\b)", re.IGNORECASE)
+DISP_FORMULA_TABLE_RE = re.compile(r"<table\b(?=[^>]*\bclass\s*=\s*['\"][^'\"]*\bdisp-formula\b)", re.IGNORECASE)
+DISPLAY_MATH_RE = re.compile(r"<math\b(?=[^>]*\bdisplay\s*=\s*['\"]block['\"])", re.IGNORECASE)
+LTX_ROWCOLOR_RE = re.compile(
+    r"(?:\\rowcolor|<span\b(?=[^>]*\bltx_ERROR\b)[^>]*>\s*\\rowcolor\s*</span>)",
+    re.IGNORECASE,
+)
 LOCAL_HTML_SUFFIXES = {".html", ".htm"}
 SUPPLEMENTARY_RESOURCE_SUFFIXES = {
     ".bib",
@@ -60,8 +70,21 @@ CRITICAL_ISSUES = {
     "absolute_fragment_links_resolve_local",
     "image_missing_src",
     "image_relative_missing_file",
+    "image_data_non_image_mime",
     "image_bad_data_url",
+    "picture_source_overrides_inline_image",
     "latexml_figure_render_error",
+    "latexml_rowcolor_artifact",
+    "frontiers_reference_button",
+    "frontiers_empty_article_reference_link",
+    "frontiers_figure_js_control",
+    "nested_web_doc_wrapper",
+    "pmc_dead_ui_control",
+    "missing_def_list_style",
+    "missing_latexml_caption_style",
+    "missing_latexml_table_style",
+    "missing_formula_style",
+    "stale_arxiv_html_attachment",
     "script_tags_present",
     "table_without_rows",
     "springer_table_placeholder",
@@ -105,13 +128,25 @@ class HtmlMetrics:
     image_data_non_image_mime: int = 0
     image_bad_data_url: int = 0
     image_empty_alt: int = 0
+    picture_inline_data_img_with_source: int = 0
     figures: int = 0
     figure_without_media_warning: int = 0
     latexml_figure_render_error: int = 0
+    latexml_rowcolor_artifacts: int = 0
+    frontiers_reference_buttons: int = 0
+    frontiers_empty_article_reference_links: int = 0
+    frontiers_figure_js_controls: int = 0
+    pmc_dead_ui_controls: int = 0
+    web_doc_mains: int = 0
     tables: int = 0
     table_rows: int = 0
     table_cells: int = 0
     table_without_rows: int = 0
+    def_lists: int = 0
+    latexml_caption_transformed_blocks: int = 0
+    latexml_tables: int = 0
+    disp_formula_tables: int = 0
+    display_math_blocks: int = 0
     scripts: int = 0
     springer_table_placeholder_markers: int = 0
 
@@ -129,13 +164,25 @@ class HtmlMetrics:
             "image_data_non_image_mime": self.image_data_non_image_mime,
             "image_bad_data_url": self.image_bad_data_url,
             "image_empty_alt": self.image_empty_alt,
+            "picture_inline_data_img_with_source": self.picture_inline_data_img_with_source,
             "figures": self.figures,
             "figure_without_media_warning": self.figure_without_media_warning,
             "latexml_figure_render_error": self.latexml_figure_render_error,
+            "latexml_rowcolor_artifacts": self.latexml_rowcolor_artifacts,
+            "frontiers_reference_buttons": self.frontiers_reference_buttons,
+            "frontiers_empty_article_reference_links": self.frontiers_empty_article_reference_links,
+            "frontiers_figure_js_controls": self.frontiers_figure_js_controls,
+            "pmc_dead_ui_controls": self.pmc_dead_ui_controls,
+            "web_doc_mains": self.web_doc_mains,
             "tables": self.tables,
             "table_rows": self.table_rows,
             "table_cells": self.table_cells,
             "table_without_rows": self.table_without_rows,
+            "def_lists": self.def_lists,
+            "latexml_caption_transformed_blocks": self.latexml_caption_transformed_blocks,
+            "latexml_tables": self.latexml_tables,
+            "disp_formula_tables": self.disp_formula_tables,
+            "display_math_blocks": self.display_math_blocks,
             "scripts": self.scripts,
             "springer_table_placeholder_markers": self.springer_table_placeholder_markers,
         }
@@ -157,6 +204,7 @@ class ArticleHtmlAuditParser(HTMLParser):
         self._text_parts: list[str] = []
         self._ignored_depth = 0
         self._figure_stack: list[bool] = []
+        self._picture_stack: list[dict[str, bool]] = []
         self._table_stack: list[dict[str, int]] = []
 
     @property
@@ -175,8 +223,21 @@ class ArticleHtmlAuditParser(HTMLParser):
         if tag_name == "style" and attr_map.get("data-z2m-style") == "web-html-polish":
             self.style_ok = True
         if tag_name == "main" and attr_map.get("id") == "web-doc":
+            self.metrics.web_doc_mains += 1
             self.web_doc_main = True
             self.source_kind = attr_map.get("data-z2m-source-kind", "").strip()
+        class_tokens = attr_map.get("class", "").split()
+        if tag_name == "button" and "ArticleReference" in class_tokens:
+            self.metrics.frontiers_reference_buttons += 1
+        if tag_name == "a" and "ArticleReference" in class_tokens:
+            href = unescape(attr_map.get("href", "")).strip()
+            data_event = attr_map.get("data-event", "")
+            if not href and data_event.casefold().startswith("articlereference-a-"):
+                self.metrics.frontiers_empty_article_reference_links += 1
+        if _is_frontiers_figure_js_control(tag_name, attr_map):
+            self.metrics.frontiers_figure_js_controls += 1
+        if _is_pmc_dead_ui_control(tag_name, attr_map):
+            self.metrics.pmc_dead_ui_controls += 1
 
         if tag_name == "a" and "href" in attr_map:
             href = unescape(attr_map.get("href", "")).strip()
@@ -196,6 +257,11 @@ class ArticleHtmlAuditParser(HTMLParser):
             self.metrics.latexml_figure_render_error += 1
         elif tag_name in {"audio", "canvas", "embed", "iframe", "img", "math", "object", "picture", "svg", "video"}:
             self._mark_current_figure_has_media()
+
+        if tag_name == "picture":
+            self._picture_stack.append({"source": False, "inline_img": False})
+        elif tag_name == "source" and self._picture_stack:
+            self._picture_stack[-1]["source"] = True
 
         if tag_name == "img":
             self._record_image(attr_map)
@@ -225,6 +291,10 @@ class ArticleHtmlAuditParser(HTMLParser):
             has_media = self._figure_stack.pop()
             if not has_media:
                 self.metrics.figure_without_media_warning += 1
+        if tag_name == "picture" and self._picture_stack:
+            picture = self._picture_stack.pop()
+            if picture["source"] and picture["inline_img"]:
+                self.metrics.picture_inline_data_img_with_source += 1
         if tag_name == "table" and self._table_stack:
             table = self._table_stack.pop()
             if table["rows"] == 0:
@@ -235,6 +305,7 @@ class ArticleHtmlAuditParser(HTMLParser):
             self._text_parts.append(data)
 
     def finalize(self, html: str) -> None:
+        content_html = _html_without_ignored_blocks(html)
         targets = self.fragment_targets or extract_html_fragment_targets(html)
         for href in self.hrefs:
             parsed = urlsplit_or_none(href)
@@ -246,7 +317,14 @@ class ArticleHtmlAuditParser(HTMLParser):
                 if len(self.unresolved_local_fragments) < 20:
                     self.unresolved_local_fragments.append(href)
         self.metrics.absolute_fragment_links_resolve_local = count_same_document_absolute_fragment_links(html)
-        self.metrics.springer_table_placeholder_markers = len(SPRINGER_TABLE_PLACEHOLDER_RE.findall(html))
+        self.metrics.springer_table_placeholder_markers = len(SPRINGER_TABLE_PLACEHOLDER_RE.findall(content_html))
+        self.metrics.latexml_rowcolor_artifacts = len(LTX_ROWCOLOR_RE.findall(content_html))
+        self.metrics.def_lists = len(DEF_LIST_RE.findall(content_html))
+        self.metrics.latexml_tables = len(LTX_TABLE_RE.findall(content_html))
+        self.metrics.disp_formula_tables = len(DISP_FORMULA_TABLE_RE.findall(content_html))
+        self.metrics.display_math_blocks = len(DISPLAY_MATH_RE.findall(content_html))
+        if "ltx_caption" in content_html and "ltx_transformed_outer" in content_html:
+            self.metrics.latexml_caption_transformed_blocks = 1
 
     def _record_fragment_target(self, attr_map: dict[str, str]) -> None:
         for attr_name in ("id", "name"):
@@ -265,6 +343,8 @@ class ArticleHtmlAuditParser(HTMLParser):
             self.metrics.image_missing_src += 1
             return
         if _is_data_url(src):
+            if src.casefold().startswith("data:image/") and self._picture_stack:
+                self._picture_stack[-1]["inline_img"] = True
             self._record_data_url(src)
             return
         parsed = urlsplit_or_none(src)
@@ -342,26 +422,28 @@ def run_audit(
                 job_index=job_index,
             )
             records.append(record)
+    _mark_stale_arxiv_html_records(records)
 
     source_records = [record for record in records if record["is_source_html"]]
     non_source_records = [record for record in records if not record["is_source_html"]]
     duplicate_source_parents = _duplicate_source_parents(source_records)
     critical_records = [
-        record for record in source_records if any(issue in CRITICAL_ISSUES for issue in record["issues"])
+        record for record in records if any(issue in CRITICAL_ISSUES for issue in record["issues"])
     ]
     warning_records = [
         record
-        for record in source_records
+        for record in records
         if record["warnings"] or any(issue in WARNING_ISSUES for issue in record["issues"])
     ]
     issue_counts: Counter[str] = Counter()
     warning_counts: Counter[str] = Counter()
     source_kind_counts: Counter[str] = Counter()
     remote_image_hosts: Counter[str] = Counter()
-    for record in source_records:
+    for record in records:
         issue_counts.update(record["issues"])
         warning_counts.update(record["warnings"])
         warning_counts.update(issue for issue in record["issues"] if issue in WARNING_ISSUES)
+    for record in source_records:
         source_kind_counts.update([record["source_kind"] or "unknown"])
         remote_image_hosts.update(dict(record.get("remote_image_hosts", [])))
 
@@ -543,6 +625,12 @@ def _audit_html_file(
         parser.finalize(html)
 
     is_source_html = _looks_like_source_html(html_path, title=title, zotero_path=attachment.zotero_path if attachment else "")
+    is_arxiv_html = _looks_like_arxiv_html(html_path, title=title, zotero_path=attachment.zotero_path if attachment else "")
+    is_generated_html = _looks_like_generated_html(
+        html_path,
+        title=title,
+        zotero_path=attachment.zotero_path if attachment else "",
+    )
     job_ok = (
         (library_id, key) in job_index.succeeded_source_keys or key in job_index.succeeded_source_attachment_keys
         if job_index.enabled
@@ -551,6 +639,7 @@ def _audit_html_file(
     issues: list[str] = []
     warnings: list[str] = []
     counts = parser.metrics.as_dict()
+    style_rules = _style_rule_presence(html)
 
     if read_error:
         issues.append("html_read_error")
@@ -573,10 +662,26 @@ def _audit_html_file(
             issues.append("image_missing_src")
         if counts["image_relative_missing_file"]:
             issues.append("image_relative_missing_file")
+        if counts["image_data_non_image_mime"]:
+            issues.append("image_data_non_image_mime")
         if counts["image_bad_data_url"]:
             issues.append("image_bad_data_url")
+        if counts["picture_inline_data_img_with_source"]:
+            issues.append("picture_source_overrides_inline_image")
         if counts["latexml_figure_render_error"]:
             issues.append("latexml_figure_render_error")
+        if counts["latexml_rowcolor_artifacts"]:
+            issues.append("latexml_rowcolor_artifact")
+        if counts["frontiers_reference_buttons"]:
+            issues.append("frontiers_reference_button")
+        if counts["def_lists"] and not style_rules["def_list"]:
+            issues.append("missing_def_list_style")
+        if counts["latexml_caption_transformed_blocks"] and not style_rules["latexml_caption"]:
+            issues.append("missing_latexml_caption_style")
+        if counts["latexml_tables"] and not style_rules["latexml_table"]:
+            issues.append("missing_latexml_table_style")
+        if (counts["disp_formula_tables"] or counts["display_math_blocks"]) and not style_rules["formula"]:
+            issues.append("missing_formula_style")
         if counts["scripts"]:
             issues.append("script_tags_present")
         if counts["table_without_rows"]:
@@ -586,6 +691,16 @@ def _audit_html_file(
         if counts["figure_without_media_warning"]:
             warnings.append("figure_without_media_warning")
 
+    if is_source_html or is_generated_html:
+        if counts["web_doc_mains"] > 1:
+            issues.append("nested_web_doc_wrapper")
+        if counts["frontiers_empty_article_reference_links"]:
+            issues.append("frontiers_empty_article_reference_link")
+        if counts["frontiers_figure_js_controls"]:
+            issues.append("frontiers_figure_js_control")
+        if counts["pmc_dead_ui_controls"]:
+            issues.append("pmc_dead_ui_control")
+
     return {
         "key": key,
         "library": data_dir.name,
@@ -594,10 +709,13 @@ def _audit_html_file(
         "title": title,
         "path": str(html_path),
         "is_source_html": is_source_html,
+        "is_arxiv_html": is_arxiv_html,
+        "is_generated_html": is_generated_html,
         "source_kind": parser.source_kind or "unknown",
         "text_length": parser.text_length,
         "job_ok": job_ok,
         "style_ok": parser.style_ok,
+        "style_rules": style_rules,
         "web_doc_main": parser.web_doc_main,
         "counts": counts,
         "samples": {
@@ -755,6 +873,26 @@ def _duplicate_source_parents(source_records: list[dict[str, Any]]) -> list[dict
     return duplicates
 
 
+def _mark_stale_arxiv_html_records(records: list[dict[str, Any]]) -> None:
+    active_source_parents = {
+        (str(record.get("library_id") or ""), str(record.get("parent_key") or ""))
+        for record in records
+        if record.get("is_source_html")
+        and record.get("parent_key")
+        and "missing_zotero_attachment_record" not in record.get("issues", [])
+    }
+    for record in records:
+        parent_key = str(record.get("parent_key") or "")
+        if not parent_key or not record.get("is_arxiv_html"):
+            continue
+        parent_id = (str(record.get("library_id") or ""), parent_key)
+        if parent_id not in active_source_parents:
+            continue
+        issues = record.setdefault("issues", [])
+        if "stale_arxiv_html_attachment" not in issues:
+            issues.append("stale_arxiv_html_attachment")
+
+
 def _source_html_job_label(pipeline_key: str) -> str | None:
     if pipeline_key == "source_html" or ("source_html=1" in pipeline_key and "en=1" in pipeline_key):
         return "source_html"
@@ -768,6 +906,73 @@ def _source_html_job_label(pipeline_key: str) -> str | None:
 def _looks_like_source_html(path: Path, *, title: str, zotero_path: str) -> bool:
     haystack = f"{path.name} {title} {zotero_path}".casefold()
     return SOURCE_HTML_RE.search(haystack) is not None
+
+
+def _looks_like_arxiv_html(path: Path, *, title: str, zotero_path: str) -> bool:
+    haystack = f"{path.name} {title} {zotero_path}".casefold()
+    return ARXIV_HTML_RE.search(haystack) is not None
+
+
+def _looks_like_generated_html(path: Path, *, title: str, zotero_path: str) -> bool:
+    haystack = f"{path.name} {title} {zotero_path}".casefold()
+    return (
+        GENERATED_HTML_RE.search(haystack) is not None
+        and SOURCE_HTML_RE.search(haystack) is None
+        and ARXIV_HTML_RE.search(haystack) is None
+    )
+
+
+def _is_frontiers_figure_js_control(tag_name: str, attr_map: dict[str, str]) -> bool:
+    if tag_name != "button":
+        return False
+    class_name = attr_map.get("class", "")
+    data_event = attr_map.get("data-event", "")
+    aria_label = attr_map.get("aria-label", "")
+    if "ArticleFigure__figureButton" in class_name:
+        return True
+    if "ButtonIcon" in class_name and data_event.startswith(("articleFigure-", "articleTable-")):
+        return True
+    return bool("ButtonIcon" in class_name and aria_label.startswith(("Expand ", "Download ")))
+
+
+def _is_pmc_dead_ui_control(tag_name: str, attr_map: dict[str, str]) -> bool:
+    class_name = attr_map.get("class", "")
+    element_id = attr_map.get("id", "")
+    aria_label = attr_map.get("aria-label", "")
+    aria_controls = attr_map.get("aria-controls", "")
+    if tag_name == "form" and element_id == "collections-action-dialog-form":
+        return True
+    if tag_name == "button" and aria_label == "Show article permalink":
+        return True
+    if tag_name == "button" and aria_controls == "journal_context_menu":
+        return True
+    if tag_name == "button" and "d-button" in class_name.split() and aria_controls:
+        return True
+    return any(
+        token in class_name
+        for token in (
+            "citation-dialog-trigger",
+            "collections-dialog-trigger",
+            "collections-action-panel-form",
+            "export-button",
+            "pmc-permalink__dropdown__copy__btn",
+            "usa-accordion__button",
+        )
+    )
+
+
+def _style_rule_presence(html: str) -> dict[str, bool]:
+    return {
+        "def_list": "dl.def-list" in html,
+        "latexml_caption": ".ltx_caption .ltx_transformed_outer" in html,
+        "latexml_table": "figure.ltx_table > figcaption" in html
+        and "figure.ltx_table table" in html,
+        "formula": "table.disp-formula td.label" in html,
+    }
+
+
+def _html_without_ignored_blocks(html: str) -> str:
+    return IGNORED_BLOCK_RE.sub("", html)
 
 
 def _is_data_url(value: str) -> bool:

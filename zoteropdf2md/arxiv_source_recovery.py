@@ -13,6 +13,7 @@ import os
 from pathlib import Path
 import re
 import shlex
+import shutil
 import subprocess
 import tarfile
 import tempfile
@@ -80,6 +81,7 @@ class LatexSourceFigureRenderer:
         scale: float = 1.5,
     ) -> None:
         self.tex_command = tex_command or os.environ.get("ARXIV_SOURCE_RECOVERY_TEX_COMMAND", "pdflatex")
+        self.tex_docker_image = os.environ.get("ARXIV_SOURCE_RECOVERY_TEX_DOCKER_IMAGE", "").strip()
         self.timeout_seconds = timeout_seconds or _env_int("ARXIV_SOURCE_RECOVERY_TIMEOUT_SECONDS", 120)
         self.scale = scale
 
@@ -103,7 +105,7 @@ class LatexSourceFigureRenderer:
         )
         aux_path.write_text(_synthesized_aux(source_dir=source_dir, main_tex=main_tex), encoding="utf-8")
 
-        command = [*shlex.split(self.tex_command), "-interaction=nonstopmode", "-halt-on-error", standalone_name]
+        command = self._render_command(source_dir=source_dir, standalone_name=standalone_name)
         try:
             completed = subprocess.run(
                 command,
@@ -119,6 +121,29 @@ class LatexSourceFigureRenderer:
         if completed.returncode != 0 or not pdf_path.is_file():
             return None
         return _pdf_first_page_to_png(pdf_path, scale=self.scale)
+
+    def _render_command(self, *, source_dir: Path, standalone_name: str) -> list[str]:
+        tex_parts = [*shlex.split(self.tex_command), "-interaction=nonstopmode", "-halt-on-error", standalone_name]
+        if not self.tex_docker_image:
+            return tex_parts
+        mount_path = str(source_dir.resolve())
+        return [
+            "docker",
+            "run",
+            "--rm",
+            "-v",
+            f"{mount_path}:/work",
+            "-w",
+            "/work",
+            self.tex_docker_image,
+            *tex_parts,
+        ]
+
+    def has_available_engine(self) -> bool:
+        if self.tex_docker_image:
+            return shutil.which("docker") is not None
+        first = shlex.split(self.tex_command)[0] if self.tex_command.strip() else "pdflatex"
+        return shutil.which(first) is not None
 
 
 def recover_latexml_figures_from_arxiv_source_html(

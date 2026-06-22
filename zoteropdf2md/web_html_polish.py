@@ -46,6 +46,7 @@ from .web_polish.core import (
     WebArticleExtraction,
     WebHtmlKind,
     WebHtmlPolishError,
+    _HTML_TAG_RE,
     _attr_value,
     _balanced_element_from_match,
     _extract_fragment_by_attr_tokens,
@@ -96,12 +97,23 @@ _SRCSET_RE = re.compile(
     r"(?P<prefix><(?:img|source)\b[^>]*?\ssrcset\s*=\s*)(?P<quote>['\"])(?P<srcset>.*?)(?P=quote)",
     re.IGNORECASE | re.DOTALL,
 )
+_PICTURE_RE = re.compile(
+    r"<picture\b(?P<attrs>[^>]*)>(?P<body>[\s\S]*?)</picture>",
+    re.IGNORECASE | re.DOTALL,
+)
+_SOURCE_OPEN_RE = re.compile(r"<source\b[^>]*>", re.IGNORECASE | re.DOTALL)
 _IMG_OPEN_RE = re.compile(r"<img\b(?P<attrs>[^>]*)>", re.IGNORECASE | re.DOTALL)
 _EMPTY_TABLE_RE = re.compile(r"<table\b[^>]*>\s*</table>", re.IGNORECASE)
 _EMPTY_FIGURE_SHELL_RE = re.compile(
     r"<figure\b[^>]*>\s*(?:<div\b[^>]*>\s*<a\b[^>]*>\s*Open\s+in\s+a\s+new\s+tab\s*</a>\s*</div>\s*)?</figure>",
     re.IGNORECASE | re.DOTALL,
 )
+_LTX_ROWCOLOR_ARTIFACT_RE = re.compile(
+    r"<span\b(?=[^>]*\bltx_ERROR\b)[^>]*>\s*\\rowcolor\s*</span>\s*[A-Za-z]+!\d+\s*",
+    re.IGNORECASE | re.DOTALL,
+)
+_LTX_ROWCOLOR_TEXT_RE = re.compile(r"\\rowcolor\s*[A-Za-z]+!\d+\s*", re.IGNORECASE)
+_LTX_DESCRIPTION_TEXT_RE = re.compile(r"\\Description\b", re.IGNORECASE)
 _ROOT_RELATIVE_URL_ATTR_RE = re.compile(
     r"(?P<prefix>(?<![\w:-])(?P<name>href|src|action|poster)\s*=\s*)"
     r"(?P<quote>['\"])(?P<url>.*?)(?P=quote)",
@@ -113,6 +125,16 @@ _MAX_LOCAL_ASSET_REFERENCE_LENGTH = 4096
 _H1_RE = re.compile(r"<h1\b", re.IGNORECASE)
 _LTX_EQUATION_ROW_RE = re.compile(r"<tr\b(?P<attrs>[^>]*)>(?P<body>[\s\S]*?)</tr>", re.IGNORECASE)
 _TD_OPEN_RE = re.compile(r"<td\b(?P<attrs>[^>]*)>", re.IGNORECASE | re.DOTALL)
+_FRONTIERS_REFERENCE_BUTTON_RE = re.compile(
+    r"<button\b(?P<attrs>(?=[^>]*\bclass\s*=\s*['\"][^'\"]*\bArticleReference\b)[^>]*)>"
+    r"(?P<body>[\s\S]*?)</button>",
+    re.IGNORECASE | re.DOTALL,
+)
+_FRONTIERS_REFERENCE_ANCHOR_RE = re.compile(
+    r"<a\b(?P<attrs>(?=[^>]*\bclass\s*=\s*['\"][^'\"]*\bArticleReference\b)[^>]*)>"
+    r"(?P<body>[\s\S]*?)</a>",
+    re.IGNORECASE | re.DOTALL,
+)
 
 
 def detect_web_html_kind(html: str, *, source_url: str | None = None) -> WebHtmlKind:
@@ -194,6 +216,7 @@ def polish_web_html_document(
     same-document links, and wrap the result in a stable readable shell.
     """
 
+    html = unwrap_existing_web_polish_document(html)
     kind = detect_web_html_kind(html, source_url=source_url)
     if kind == WebHtmlKind.SCIENDO_ABSTRACT_PAGE:
         full_text_url = _sciendo_full_text_url(html, source_url=source_url)
@@ -218,6 +241,7 @@ def polish_web_html_document(
         canonical_url=inferred_canonical_url,
         fetch_text=fetch_text or _fetch_remote_html,
     )
+    normalized_html = normalize_frontiers_reference_links(normalized_html)
     normalized_html = remove_publisher_ui_fragments(normalized_html)
     canonicalized = canonicalize_same_document_links(
         normalized_html,
@@ -242,6 +266,8 @@ def polish_web_html_document(
             ),
         )
         article_html = normalize_latexml_equation_alignment(article_html)
+        article_html = remove_latexml_table_color_artifacts(article_html)
+        article_html = remove_latexml_description_error_panels(article_html)
     article_html = repair_empty_image_sources(article_html)
     article_html = remove_empty_tables(article_html)
     article_html = remove_empty_figure_shells(article_html)
@@ -294,8 +320,11 @@ def polish_web_html_file(
         inlined.html,
         allowed_hosts=_remote_image_hosts_for_kind(document.kind),
     )
+    normalized_html = _prefer_picture_inline_img_sources(
+        _normalize_inline_data_image_mime_types(remote_inlined.html)
+    )
     return WebHtmlFilePolishResult(
-        html=remote_inlined.html,
+        html=normalized_html,
         kind=document.kind,
         article_extracted=document.article_extracted,
         article_selector=document.article_selector,
@@ -306,6 +335,126 @@ def polish_web_html_file(
         attempted_source_figures=attempted_source_figures,
         source_recovery_errors=source_recovery_errors,
     )
+
+
+def unwrap_existing_web_polish_document(html: str) -> str:
+    """Remove prior z2m readability wrappers before re-polishing source HTML."""
+
+    cleaned = html
+    while True:
+        unwrapped = False
+        for match in _HTML_TAG_RE.finditer(cleaned):
+            if match.group(0).startswith("</") or match.group("tag").lower() != "main":
+                continue
+            attrs = match.group("attrs") or ""
+            if (_attr_value(attrs, "id") or "") != "web-doc":
+                continue
+            fragment = _balanced_element_from_match(cleaned, match)
+            if fragment is None:
+                continue
+            cleaned = fragment[len(match.group(0)) : -len("</main>")].strip()
+            unwrapped = True
+            break
+        if not unwrapped:
+            return cleaned
+
+
+def unwrap_elements_by_attr_tokens(
+    html: str,
+    tokens: tuple[str, ...],
+    *,
+    tags: tuple[str, ...],
+) -> str:
+    """Remove matching wrapper tags while preserving their inner article content."""
+
+    lowered_tokens = tuple(token.lower() for token in tokens)
+    allowed_tags = {tag.lower() for tag in tags}
+    cleaned = html
+    previous = None
+    while cleaned != previous:
+        previous = cleaned
+        for match in list(_HTML_TAG_RE.finditer(cleaned)):
+            if match.group(0).startswith("</"):
+                continue
+            tag = match.group("tag").lower()
+            if tag not in allowed_tags:
+                continue
+            attrs = unescape(match.group("attrs") or "").lower()
+            if not any(token in attrs for token in lowered_tokens):
+                continue
+            fragment = _balanced_element_from_match(cleaned, match)
+            if fragment is None:
+                continue
+            inner = fragment[len(match.group(0)) : -len(f"</{tag}>")]
+            cleaned = cleaned[: match.start()] + inner + cleaned[match.start() + len(fragment) :]
+            break
+    return cleaned
+
+
+def normalize_frontiers_reference_links(html: str) -> str:
+    """Convert Frontiers JS citation buttons into durable local bibliography links."""
+
+    if "ArticleReference" not in html:
+        return html
+    targets_by_lower = {target.lower(): target for target in extract_html_fragment_targets(html)}
+
+    def replace_button(match: re.Match[str]) -> str:
+        attrs = match.group("attrs") or ""
+        class_name = _attr_value(attrs, "class") or ""
+        if "ArticleReference" not in class_name.split():
+            return match.group(0)
+        reference_id = _frontiers_reference_id_from_attrs(attrs)
+        target_id = targets_by_lower.get(reference_id.lower()) if reference_id else None
+        if not target_id:
+            return match.group(0)
+        body = match.group("body")
+        original_id = _attr_value(attrs, "id") or ""
+        link_attrs = [
+            'class="ArticleReference z2m-frontiers-citation"',
+            f'href="#{html_escape(target_id, quote=True)}"',
+        ]
+        if original_id:
+            link_attrs.append(f'id="{html_escape(original_id, quote=True)}"')
+        return f"<a {' '.join(link_attrs)}>{body}</a>"
+
+    def replace_anchor(match: re.Match[str]) -> str:
+        attrs = match.group("attrs") or ""
+        class_name = _attr_value(attrs, "class") or ""
+        if "ArticleReference" not in class_name.split():
+            return match.group(0)
+        if (_attr_value(attrs, "href") or "").strip():
+            return match.group(0)
+        reference_id = _frontiers_reference_id_from_attrs(attrs)
+        if not reference_id:
+            return match.group(0)
+        body = match.group("body")
+        target_id = targets_by_lower.get(reference_id.lower())
+        if target_id:
+            link_attrs = [
+                'class="ArticleReference z2m-frontiers-citation"',
+                f'href="#{html_escape(target_id, quote=True)}"',
+            ]
+            return f"<a {' '.join(link_attrs)}>{body}</a>"
+        escaped_reference_id = html_escape(reference_id, quote=True)
+        return (
+            '<span class="ArticleReference z2m-frontiers-unresolved-reference" '
+            f'data-z2m-unresolved-reference="{escaped_reference_id}">{body}</span>'
+        )
+
+    html = _FRONTIERS_REFERENCE_BUTTON_RE.sub(replace_button, html)
+    return _FRONTIERS_REFERENCE_ANCHOR_RE.sub(replace_anchor, html)
+
+
+def _frontiers_reference_id_from_attrs(attrs: str) -> str | None:
+    button_id = _attr_value(attrs, "id") or ""
+    match = re.match(r"(?P<id>[A-Za-z]+\d+[A-Za-z]*)-button$", button_id, flags=re.IGNORECASE)
+    if match is not None:
+        return match.group("id")
+    data_event = _attr_value(attrs, "data-event") or ""
+    match = re.search(r"articleReference-a-(?P<id>[A-Za-z]+\d+[A-Za-z]*)\b", data_event, flags=re.IGNORECASE)
+    if match is not None:
+        return match.group("id")
+    return None
 
 
 def inline_local_images_from_web_html_document(html: str, *, base_dir: Path) -> InlineHtmlResult:
@@ -371,6 +520,86 @@ def inline_local_images_from_web_html_document(html: str, *, base_dir: Path) -> 
     html = _IMG_SRC_RE.sub(replace_src, html)
     html = _SRCSET_RE.sub(replace_srcset, html)
     return InlineHtmlResult(html=html, inlined_images=inlined_count)
+
+
+def _normalize_inline_data_image_mime_types(html: str) -> str:
+    """Repair embedded image data URLs whose MIME type is too generic for browsers."""
+
+    def replace(match: re.Match[str]) -> str:
+        rewritten = _normalize_inline_data_image_src(unescape(match.group("src")).strip())
+        if rewritten is None:
+            return match.group(0)
+        quote = match.group("quote")
+        return f"{match.group('prefix')}{quote}{html_escape(rewritten, quote=True)}{quote}"
+
+    return _IMG_SRC_RE.sub(replace, html)
+
+
+def _prefer_picture_inline_img_sources(html: str) -> str:
+    """Prevent remote ``source srcset`` entries from overriding embedded ``img`` fallbacks."""
+
+    def replace(match: re.Match[str]) -> str:
+        body = match.group("body")
+        has_inline_img = False
+        for img_match in _IMG_OPEN_RE.finditer(body):
+            src = (_attr_value(img_match.group("attrs") or "", "src") or "").strip().lower()
+            if src.startswith("data:image/"):
+                has_inline_img = True
+                break
+        if not has_inline_img:
+            return match.group(0)
+        body = _SOURCE_OPEN_RE.sub("", body)
+        return f"<picture{match.group('attrs')}>{body}</picture>"
+
+    return _PICTURE_RE.sub(replace, html)
+
+
+def _normalize_inline_data_image_src(src_value: str) -> str | None:
+    if not src_value.lower().startswith("data:"):
+        return None
+    comma_idx = src_value.find(",")
+    if comma_idx < 0:
+        return None
+    meta = src_value[5:comma_idx]
+    payload = src_value[comma_idx + 1 :]
+    meta_parts = [part.strip() for part in meta.split(";") if part.strip()]
+    declared_mime = meta_parts[0].lower() if meta_parts and "/" in meta_parts[0] else ""
+    params = meta_parts[1:] if declared_mime else meta_parts
+    if declared_mime.startswith("image/"):
+        return None
+    if not any(part.lower() == "base64" for part in params):
+        return None
+    blob_prefix = _decode_base64_prefix(payload)
+    if not blob_prefix:
+        return None
+    mime = _image_mime_from_blob_prefix(blob_prefix)
+    if mime is None:
+        return None
+    suffix = ";".join(params) or "base64"
+    return f"data:{mime};{suffix},{payload}"
+
+
+def _decode_base64_prefix(payload: str) -> bytes:
+    sample = re.sub(r"\s+", "", payload[:512])[:128]
+    if not sample:
+        return b""
+    sample += "=" * ((4 - len(sample) % 4) % 4)
+    try:
+        return base64.b64decode(sample)
+    except Exception:
+        return b""
+
+
+def _image_mime_from_blob_prefix(blob: bytes) -> str | None:
+    for signature, mime in sorted(IMAGE_SIGNATURES.items(), key=lambda item: len(item[0]), reverse=True):
+        if not mime.startswith("image/"):
+            continue
+        if not blob.startswith(signature):
+            continue
+        if signature == b"RIFF" and blob[8:12] != b"WEBP":
+            continue
+        return mime
+    return None
 
 
 RemoteHtmlFetcher = Callable[[str], str]
@@ -734,6 +963,41 @@ def remove_publisher_ui_fragments(html: str) -> str:
     html = _remove_elements_by_attr_tokens(
         html,
         (
+            "citation-dialog-trigger",
+            "collections-dialog-trigger",
+            "collections-dialog",
+            "collections-action-dialog-form",
+            "collections-action-panel-form",
+            "collections-action-panel",
+            "export-button",
+            "pmc-permalink",
+            "pmc-permalink__dropdown__copy__btn",
+            "usa-accordion__button",
+            "journal_context_menu",
+            "show article permalink",
+            "d-button",
+            "d-buttons",
+        ),
+        tags=("a", "button", "form", "div", "li", "nav", "section", "aside", "ul"),
+    )
+    html = _remove_elements_by_attr_tokens(
+        html,
+        (
+            "ButtonIcon",
+            "articleFigure-button-download",
+            "articleFigure-button-openLightbox",
+            "articleTable-button-openLightbox",
+        ),
+        tags=("button",),
+    )
+    html = unwrap_elements_by_attr_tokens(
+        html,
+        ("ArticleFigure__figureButton",),
+        tags=("button",),
+    )
+    html = _remove_elements_by_attr_tokens(
+        html,
+        (
             "ArticleMetrics",
             "articleMetrics",
             "article-metrics",
@@ -804,6 +1068,85 @@ def remove_empty_figure_shells(html: str) -> str:
         previous = cleaned
         cleaned = _EMPTY_FIGURE_SHELL_RE.sub("", cleaned)
     return cleaned
+
+
+def remove_latexml_table_color_artifacts(html: str) -> str:
+    html = _LTX_ROWCOLOR_ARTIFACT_RE.sub("", html)
+    return _LTX_ROWCOLOR_TEXT_RE.sub("", html)
+
+
+def remove_latexml_description_error_panels(html: str) -> str:
+    """Drop LaTeXML ``\\Description`` error panels without losing real media/table content."""
+
+    cleaned = html
+    while True:
+        for match in _HTML_TAG_RE.finditer(cleaned):
+            if match.group(0).startswith("</") or match.group("tag").lower() != "div":
+                continue
+            attrs = match.group("attrs") or ""
+            if "ltx_flex_figure" not in (_attr_value(attrs, "class") or "").split():
+                continue
+            fragment = _balanced_element_from_match(cleaned, match)
+            if fragment is None or not _looks_like_latexml_description_panel(fragment):
+                continue
+            replacement = _latexml_description_panel_replacement(fragment, match.group(0))
+            cleaned = cleaned[: match.start()] + replacement + cleaned[match.start() + len(fragment) :]
+            break
+        else:
+            return cleaned
+
+
+def _looks_like_latexml_description_panel(fragment: str) -> bool:
+    return "ltx_ERROR" in fragment and _LTX_DESCRIPTION_TEXT_RE.search(fragment) is not None
+
+
+def _latexml_description_panel_replacement(fragment: str, open_tag: str) -> str:
+    inner = fragment[len(open_tag) : -len("</div>")]
+    inner = _rewrite_latexml_description_panel_children(inner)
+    if not _has_structural_latexml_content(inner):
+        return ""
+    return inner.strip()
+
+
+def _rewrite_latexml_description_panel_children(html: str) -> str:
+    cleaned = html
+    while True:
+        for match in _HTML_TAG_RE.finditer(cleaned):
+            if match.group(0).startswith("</") or match.group("tag").lower() != "div":
+                continue
+            attrs = match.group("attrs") or ""
+            class_tokens = set((_attr_value(attrs, "class") or "").split())
+            if not class_tokens & {"ltx_flex_cell", "ltx_flex_break"}:
+                continue
+            fragment = _balanced_element_from_match(cleaned, match)
+            if fragment is None:
+                continue
+            if "ltx_flex_break" in class_tokens or _looks_like_latexml_description_panel(fragment):
+                replacement = ""
+            else:
+                replacement = fragment[len(match.group(0)) : -len("</div>")].strip()
+            cleaned = cleaned[: match.start()] + replacement + cleaned[match.start() + len(fragment) :]
+            break
+        else:
+            return cleaned
+
+
+def _has_structural_latexml_content(html: str) -> bool:
+    sample = html.casefold()
+    return any(
+        marker in sample
+        for marker in (
+            "<img",
+            "<math",
+            "<object",
+            "<picture",
+            "<svg",
+            "<table",
+            "<video",
+            "ltx_graphics",
+            "ltx_tabular",
+        )
+    )
 
 
 def normalize_latexml_equation_alignment(html: str) -> str:

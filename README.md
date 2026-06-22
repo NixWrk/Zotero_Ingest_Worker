@@ -100,7 +100,11 @@ from recovery defects.
 `zotero-source-html-audit` checks attached source HTML files in Zotero storage
 against the article-standard shell: polish style marker, `#web-doc`, source
 kind, local fragment links, image sources, tables, script tags, duplicate source
-attachments, orphan files, and source HTML job history.
+attachments, orphan files, and source HTML job history. It also includes
+regression gates for known web-polish failures: generic embedded image MIME
+types, `<picture>` source overrides of embedded images, LaTeXML `\rowcolor`
+artifacts, missing table/caption/formula/abbreviation CSS rules, and stale
+active `[ARXIV HTML]` siblings when a parent already has `[SOURCE HTML]`.
 
 ```powershell
 zotero-source-html-audit `

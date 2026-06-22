@@ -46,7 +46,11 @@ from .full_text_inventory import (
     inventory_fingerprint,
 )
 from .local_zotero import LocalAttachment, LocalItemMetadata, LocalZoteroStore
-from .local_attachment_sync import sync_ensured_parent_local, sync_parent_metadata_local
+from .local_attachment_sync import (
+    sync_ensured_parent_local,
+    sync_parent_attachment_local,
+    sync_parent_metadata_local,
+)
 from .metadata_jobs import (
     METADATA_JOB_ARXIV_HTML,
     METADATA_JOB_ENRICH,
@@ -1228,12 +1232,24 @@ class ZoteroMetadataProcessor:
                             title=filename,
                             arxiv_id=arxiv_id,
                         )
-                        self._write_html_sibling_local_copy(
+                        local_copy = self._write_html_sibling_local_copy(
                             attachment=attachment,
                             source_path=output_path,
                             filename=filename,
                             relay_result=relay_result,
                         )
+                        local_metadata = self._sync_html_sibling_local_metadata(
+                            metadata=metadata,
+                            attachment=attachment,
+                            filename=filename,
+                            title=filename,
+                            relay_result=relay_result,
+                        )
+                        relay_result = {
+                            **relay_result,
+                            "local_copy": local_copy,
+                            "local_metadata": local_metadata,
+                        }
                 elif require_relay:
                     raise RuntimeError("ZOTERO_RELAY_URL is required before arXiv HTML can be attached.")
 
@@ -1735,6 +1751,25 @@ class ZoteroMetadataProcessor:
         os.replace(temp_path, target_path)
         return {"ok": True, "siblingKey": sibling_key, "path": str(target_path)}
 
+    def _sync_html_sibling_local_metadata(
+        self,
+        *,
+        metadata: LocalItemMetadata,
+        attachment: LocalAttachment,
+        filename: str,
+        title: str,
+        relay_result: dict[str, Any],
+    ) -> dict[str, Any]:
+        sync_relay_result = _relay_result_with_attachment_key(relay_result)
+        return sync_parent_attachment_local(
+            metadata=metadata,
+            attachment=attachment,
+            filename=filename,
+            title=title,
+            content_type="text/html",
+            relay_result=sync_relay_result,
+        )
+
     def _existing_html_sibling_by_filename(
         self,
         *,
@@ -1821,6 +1856,18 @@ class ZoteroMetadataProcessor:
 
     def _queue_key(self, job_type: str) -> str:
         return metadata_queue_key(self.config, job_type)
+
+
+def _relay_result_with_attachment_key(relay_result: dict[str, Any]) -> dict[str, Any]:
+    attachment_key = str(
+        relay_result.get("newAttachmentKey")
+        or relay_result.get("attachmentKey")
+        or relay_result.get("siblingKey")
+        or ""
+    ).strip()
+    if not attachment_key:
+        return relay_result
+    return {**relay_result, "newAttachmentKey": attachment_key}
 
 
 def _optional_int(value: object) -> int | None:

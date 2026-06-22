@@ -24,6 +24,33 @@ table { width: 100%; border-collapse: collapse; }
 th, td { border: 1px solid #d8dde6; padding: 6px 8px; vertical-align: top; }
 pre, code { white-space: pre-wrap; overflow-wrap: anywhere; }
 a { color: #0645ad; overflow-wrap: anywhere; }
+.ArticleReference.z2m-frontiers-citation {
+  display: inline;
+  border: 0;
+  padding: 0;
+  background: transparent;
+  color: #0645ad;
+  font: inherit;
+  text-decoration: underline;
+  text-underline-offset: 0.12em;
+  cursor: pointer;
+}
+dl.def-list {
+  display: grid;
+  grid-template-columns: max-content minmax(0, 1fr);
+  column-gap: 1.5em;
+  row-gap: 0.4em;
+  align-items: baseline;
+}
+dl.def-list dt {
+  grid-column: 1;
+  font-weight: 650;
+}
+dl.def-list dd {
+  grid-column: 2;
+  margin: 0;
+}
+dl.def-list dd p { margin: 0; }
 figure,
 .fig,
 .fig-inline,
@@ -111,6 +138,45 @@ ul.references.numeric-ordered-list > li::before,
   color: #4b5563;
   font-weight: 600;
 }
+.References {
+  list-style: none;
+  padding-left: 0;
+  margin: 1em 0;
+}
+.References__item {
+  display: grid;
+  grid-template-columns: 2.6em minmax(0, 1fr);
+  column-gap: 0.85em;
+  align-items: start;
+  margin: 0.75em 0;
+}
+.References__label p {
+  margin: 0;
+  color: #4b5563;
+  font-weight: 650;
+  text-align: right;
+}
+.References__content p {
+  margin: 0 0 0.3em;
+}
+.References__personGroup,
+.References__name,
+.References__surname,
+.References__givenNames {
+  display: inline;
+}
+.References__links {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.25em 0.8em;
+  list-style: none;
+  padding-left: 0;
+  margin: 0.2em 0 0;
+  font-size: 0.92em;
+}
+.References__links__item {
+  margin: 0;
+}
 .off-screen, .sr-only, .visually-hidden, .u-visually-hidden, .usa-sr-only {
   position: absolute !important;
   width: 1px !important;
@@ -122,7 +188,17 @@ ul.references.numeric-ordered-list > li::before,
   white-space: nowrap !important;
   border: 0 !important;
 }
-figure.ltx_table { overflow-x: auto; }
+figure.ltx_table {
+  box-sizing: border-box;
+  width: 100% !important;
+  max-width: 100% !important;
+  overflow-x: auto;
+}
+figure.ltx_table > figcaption,
+figure.ltx_table > .ltx_caption {
+  box-sizing: border-box;
+  width: 100%;
+}
 figure.ltx_table .ltx_transformed_outer {
   width: 100% !important;
   max-width: 100% !important;
@@ -134,9 +210,30 @@ figure.ltx_table .ltx_transformed_inner {
   display: block;
   transform: none !important;
 }
+.ltx_caption .ltx_inline-block,
+.ltx_caption .ltx_transformed_outer,
+figcaption .ltx_inline-block,
+figcaption .ltx_transformed_outer {
+  display: inline !important;
+  width: auto !important;
+  max-width: none !important;
+  height: auto !important;
+  vertical-align: baseline !important;
+}
+.ltx_caption .ltx_transformed_inner,
+figcaption .ltx_transformed_inner {
+  display: inline !important;
+  transform: none !important;
+}
+.ltx_caption .ltx_p,
+figcaption .ltx_p {
+  display: inline;
+  margin: 0;
+}
 figure.ltx_table table {
-  width: auto;
-  max-width: 100%;
+  width: max-content;
+  min-width: 100%;
+  max-width: none;
   margin: 0 auto;
 }
 table.ltx_equation,
@@ -177,6 +274,36 @@ table.ltx_equationgroup .ltx_eqn_eqno {
 table.ltx_equation .z2m-ltx-single-equation-cell,
 table.ltx_equationgroup .z2m-ltx-single-equation-cell {
   text-align: center;
+}
+table.disp-formula {
+  width: 100%;
+  max-width: 100%;
+  margin: 1em 0;
+  border: 0;
+  border-collapse: collapse;
+  background: transparent;
+}
+table.disp-formula td,
+table.disp-formula th {
+  border: 0;
+  padding: 0.15em 0.35em;
+  background: transparent;
+  vertical-align: middle;
+}
+table.disp-formula td.formula {
+  text-align: center;
+  overflow-x: auto;
+}
+table.disp-formula td.label {
+  width: 1%;
+  padding-left: 0.75em;
+  white-space: nowrap;
+  text-align: right;
+}
+math[display="block"] {
+  display: block;
+  max-width: 100%;
+  overflow-x: auto;
 }
 #web-doc :target {
   outline: 3px solid #f59e0b;

@@ -4,8 +4,11 @@ import io
 import tarfile
 from pathlib import Path
 
+import pytest
+
 from zoteropdf2md.arxiv_source_recovery import (
     ArxivSourceRecoveryResult,
+    LatexSourceFigureRenderer,
     SourceFigure,
     collect_source_figures,
     recover_latexml_figures_from_arxiv_source_html,
@@ -163,6 +166,18 @@ def test_recover_latexml_figure_is_noop_without_arxiv_id() -> None:
     assert result.html == html
     assert result.recovered_figures == 0
     assert result.attempted_figures == 0
+
+
+def test_latex_source_renderer_can_use_docker_tex_image(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("ARXIV_SOURCE_RECOVERY_TEX_DOCKER_IMAGE", "ghcr.io/xu-cheng/texlive-full:latest")
+
+    renderer = LatexSourceFigureRenderer()
+    command = renderer._render_command(source_dir=tmp_path, standalone_name="figure.tex")
+
+    assert command[:4] == ["docker", "run", "--rm", "-v"]
+    assert command[4].endswith(":/work")
+    assert command[5:8] == ["-w", "/work", "ghcr.io/xu-cheng/texlive-full:latest"]
+    assert command[-4:] == ["pdflatex", "-interaction=nonstopmode", "-halt-on-error", "figure.tex"]
 
 
 def _source_tarball(files: dict[str, str]) -> bytes:

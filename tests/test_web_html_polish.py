@@ -1,3 +1,4 @@
+import base64
 from pathlib import Path
 
 import pytest
@@ -241,6 +242,11 @@ def test_polish_web_html_document_extracts_arxiv_latexml_article() -> None:
     assert "border-top: 1px solid #cbd5e1" in result.html
     assert "counter-reset: z2m-ref" in result.html
     assert "figure.ltx_table .ltx_transformed_inner" in result.html
+    assert "figure.ltx_table > figcaption" in result.html
+    assert "min-width: 100%" in result.html
+    assert ".ltx_caption .ltx_transformed_outer" in result.html
+    assert "table.disp-formula td.label" in result.html
+    assert "dl.def-list" in result.html
     assert ".off-screen, .sr-only" in result.html
 
 
@@ -283,6 +289,87 @@ def test_polish_web_html_document_normalizes_latexml_equation_layout() -> None:
     assert "z2m-ltx-single-equation-cell" in result.html
     assert result.html.count('class="ltx_td ltx_align_right ltx_eqn_cell z2m-ltx-single-equation-cell"') == 1
     assert 'class="ltx_td ltx_align_left ltx_eqn_cell z2m-ltx-single-equation-cell"' not in result.html
+
+
+def test_polish_web_html_document_removes_latexml_table_color_artifacts() -> None:
+    html = f"""
+    <html>
+      <head><title>Table Article</title></head>
+      <body>
+        <div class="ltx_page_main">
+          <section id="S1">
+            <h1>Table Article</h1>
+            <p>{" ".join([LONG_PARAGRAPH] * 18)}</p>
+            <figure class="ltx_table ltx_minipage" style="width:166.9pt;">
+              <figcaption class="ltx_caption">Table 1: Results.</figcaption>
+              <table class="ltx_tabular">
+                <tr><td><span class="ltx_ERROR undefined">\\rowcolor</span>blue!10 BIT End-to-End</td></tr>
+                <tr><td>\\rowcolor gray!10 RNN</td></tr>
+              </table>
+            </figure>
+          </section>
+        </div>
+      </body>
+    </html>
+    """
+
+    result = polish_web_html_document(html, source_url="https://arxiv.org/html/2511.02824v2")
+
+    assert "\\rowcolor" not in result.html
+    assert "blue!10" not in result.html
+    assert "gray!10" not in result.html
+    assert "BIT End-to-End" in result.html
+    assert "RNN" in result.html
+
+
+def test_polish_web_html_document_removes_latexml_description_error_panels() -> None:
+    png_base64 = base64.b64encode(PNG_BYTES).decode("ascii")
+    html = f"""
+    <html>
+      <head><title>Description Article</title></head>
+      <body>
+        <div class="ltx_page_main">
+          <section id="S1">
+            <h1>Description Article</h1>
+            <p>{" ".join([LONG_PARAGRAPH] * 18)}</p>
+            <figure class="ltx_figure" id="S1.F1">
+              <img class="ltx_graphics" src="data:image/png;base64,{png_base64}" alt="Landmark photo">
+              <figcaption class="ltx_caption">Figure 1: Landmark.</figcaption>
+              <div class="ltx_flex_figure">
+                <div class="ltx_flex_cell ltx_flex_size_1">
+                  <span class="ltx_ERROR ltx_figure_panel undefined">\\Description</span>
+                </div>
+                <div class="ltx_flex_break"></div>
+                <div class="ltx_flex_cell ltx_flex_size_1">
+                  <p class="ltx_p ltx_figure_panel">Long visual description that should not render under the figure.</p>
+                </div>
+              </div>
+            </figure>
+            <figure class="ltx_table" id="S1.T1">
+              <figcaption class="ltx_caption">Table 1: Participants.</figcaption>
+              <div class="ltx_flex_figure">
+                <div class="ltx_flex_cell ltx_flex_size_1">
+                  <span class="ltx_ERROR ltx_figure_panel undefined">\\Description</span>
+                </div>
+                <div class="ltx_flex_break"></div>
+                <div class="ltx_flex_cell ltx_flex_size_1">
+                  <p class="ltx_p">Table description <span class="ltx_tabular">P01 Active</span></p>
+                </div>
+              </div>
+            </figure>
+          </section>
+        </div>
+      </body>
+    </html>
+    """
+
+    result = polish_web_html_document(html, source_url="https://arxiv.org/html/2502.10561")
+
+    assert "\\Description" not in result.html
+    assert "ltx_ERROR" not in result.html
+    assert "Landmark photo" in result.html
+    assert "Long visual description" not in result.html
+    assert "P01 Active" in result.html
 
 
 def test_polish_web_html_file_inlines_arxiv_extracted_remote_images(tmp_path, monkeypatch) -> None:
@@ -477,6 +564,157 @@ def test_polish_web_html_document_removes_metrics_and_disables_missing_local_fra
     assert ' href="#SM1"' not in result.html
     assert 'data-z2m-unresolved-href="#SM1"' in result.html
     assert 'href="#present"' in result.html
+
+
+def test_polish_web_html_document_unwraps_frontiers_and_links_references() -> None:
+    raw_article = f"""
+    <main class="ArticleDetailsV4__main">
+      <h1>How path integration abilities of blind people change</h1>
+      <div class="ArticleContent">
+        <p>
+          {" ".join([LONG_PARAGRAPH] * 20)}
+          Kosslyn and Osherson,
+          <button type="button" color="Blue40" id="B24-button" class="ArticleReference" data-event="articleReference-a-b24"> 1995 </button>.
+          Another Frontiers variant cites
+          <button type="button" color="Blue40" id="ref9-button" class="ArticleReference" data-event="articleReference-a-ref9"> Bourne et al., 2017 </button>.
+        </p>
+        <button class="ArticleFigure__figureButton" aria-label="Open lightbox for FIGURE 1">
+          <figure>
+            <figcaption>
+              Figure caption cites
+              <button type="button" color="Blue40" id="B31-button" class="ArticleReference" data-event="articleReference-a-b31"> Grill-Spector and Weiner, 2014 </button>.
+            </figcaption>
+          </figure>
+        </button>
+        <div id="h14">
+          <h2>References</h2>
+          <ul class="References">
+            <li class="References__item" id="B24">
+              <div class="References__label"><p>24</p></div>
+              <div class="References__content">
+                <p class="notranslate">
+                  <span class="References__personGroup">
+                    <span class="References__name">
+                      <span class="References__surname">Kosslyn</span>
+                    </span>
+                  </span>
+                  (1995). Title.
+                </p>
+              </div>
+            </li>
+            <li class="References__item" id="ref9">
+              <div class="References__label"><p>9</p></div>
+              <div class="References__content"><p>Bourne et al. (2017). Title.</p></div>
+            </li>
+            <li class="References__item" id="B31">
+              <div class="References__label"><p>31</p></div>
+              <div class="References__content"><p>Grill-Spector and Weiner (2014). Title.</p></div>
+            </li>
+          </ul>
+        </div>
+      </div>
+    </main>
+    """
+    html = f"""
+    <html>
+      <head><title>Previously polished Frontiers article</title></head>
+      <body>
+        <main id="web-doc" data-z2m-source-kind="unknown">
+          <main id="web-doc" data-z2m-source-kind="unknown">
+            {raw_article}
+          </main>
+        </main>
+      </body>
+    </html>
+    """
+
+    result = polish_web_html_document(html)
+
+    assert result.html.count('id="web-doc"') == 1
+    assert '<button type="button" color="Blue40"' not in result.html
+    assert (
+        '<a class="ArticleReference z2m-frontiers-citation" href="#B24" id="B24-button"> 1995 </a>'
+        in result.html
+    )
+    assert (
+        '<a class="ArticleReference z2m-frontiers-citation" href="#ref9" id="ref9-button"> Bourne et al., 2017 </a>'
+        in result.html
+    )
+    assert (
+        '<a class="ArticleReference z2m-frontiers-citation" href="#B31" id="B31-button"> Grill-Spector and Weiner, 2014 </a>'
+        in result.html
+    )
+    assert 'class="References"' in result.html
+    assert ".References__item" in result.html
+    assert ".ArticleReference.z2m-frontiers-citation" in result.html
+    assert result.unresolved_same_document_links == 0
+
+
+def test_polish_web_html_document_removes_discovered_js_chrome_and_supplementary_refs() -> None:
+    html = f"""
+    <html>
+      <head><title>Previously polished mixed publisher article</title></head>
+      <body>
+        <main id="web-doc" data-z2m-source-kind="pmc_article">
+          <main id="web-doc" data-z2m-source-kind="pmc_article">
+            <article class="pmc-article" id="article">
+              <h1>Mixed publisher article</h1>
+              <p>
+                {" ".join([LONG_PARAGRAPH] * 20)}
+                <a class="ArticleReference" data-event="articleReference-a-sm1">Supplementary Material</a>
+                <a class="ArticleReference" data-event="articleReference-a-b2">reference two</a>
+              </p>
+              <button class="ArticleFigure__figureButton" aria-label="Open lightbox for FIGURE 1">
+                <figure id="F1">
+                  <img alt="Figure 1" src="data:image/png;base64,iVBORw0KGgo="/>
+                  <figcaption>Visible figure caption.</figcaption>
+                </figure>
+              </button>
+              <button class="ButtonIcon" data-event="articleFigure-button-download" aria-label="Download FIGURE 1">Download</button>
+              <button class="ButtonIcon" data-event="articleFigure-button-openLightbox" aria-label="Expand FIGURE 1">Expand</button>
+              <button class="citation-dialog-trigger">Cite</button>
+              <li class="pmc-permalink">
+                <button aria-label="Show article permalink" type="button">Permalink</button>
+                <div class="pmc-permalink__dropdown"><button class="pmc-permalink__dropdown__copy__btn">Copy</button></div>
+              </li>
+              <div id="collections-action-dialog" class="dialog collections-dialog">
+                <div class="collections-action-panel action-panel">
+                  <form id="collections-action-dialog-form"><button type="button">Save</button></form>
+                </div>
+              </div>
+              <ul class="d-buttons inline-list">
+                <li><button class="d-button" aria-controls="copyright-dialog" type="button">Copyright</button></li>
+              </ul>
+              <button class="usa-accordion__button" type="button">Accordion</button>
+              <section id="B2">Reference two.</section>
+            </article>
+          </main>
+        </main>
+      </body>
+    </html>
+    """
+
+    result = polish_web_html_document(html, source_url="https://pmc.ncbi.nlm.nih.gov/articles/PMC1234567/")
+
+    assert result.html.count('id="web-doc"') == 1
+    assert "ArticleFigure__figureButton" not in result.html
+    assert "ButtonIcon" not in result.html
+    assert "articleFigure-button-download" not in result.html
+    assert "citation-dialog-trigger" not in result.html
+    assert "pmc-permalink" not in result.html
+    assert "collections-dialog" not in result.html
+    assert "collections-action-panel" not in result.html
+    assert "collections-action-dialog-form" not in result.html
+    assert "usa-accordion__button" not in result.html
+    assert "d-button" not in result.html
+    assert '<figure id="F1">' in result.html
+    assert "Visible figure caption." in result.html
+    assert (
+        '<span class="ArticleReference z2m-frontiers-unresolved-reference" '
+        'data-z2m-unresolved-reference="sm1">Supplementary Material</span>'
+        in result.html
+    )
+    assert '<a class="ArticleReference z2m-frontiers-citation" href="#B2">reference two</a>' in result.html
 
 
 def test_polish_web_html_document_does_not_inject_mathjax_when_static_katex_unavailable(monkeypatch) -> None:
@@ -1140,6 +1378,35 @@ def test_polish_web_html_file_inlines_local_images_without_marker_polish(tmp_pat
     assert result.inlined_images == 1
     assert 'data-z2m-src="figure.png?download=1"' in result.html
     assert 'src="data:image/png;base64,' in result.html
+
+
+def test_polish_web_html_file_repairs_generic_inline_image_data_mime(tmp_path) -> None:
+    webp_blob = b"RIFF\x10\x00\x00\x00WEBPVP8 z2m"
+    data_url = "data:application/octet-stream;base64," + base64.b64encode(webp_blob).decode("ascii")
+    html_path = tmp_path / "article.html"
+    html_path.write_text(
+        f"""
+        <html><body>
+          <article>
+            <h1>Article</h1>
+            <p>{" ".join([LONG_PARAGRAPH] * 20)}</p>
+            <figure>
+              <picture>
+                <source media="(max-width: 600px)" srcset="https://cdn.example/remote.webp 1x">
+                <img class="is-inside-mask" src="{data_url}" alt="Figure">
+              </picture>
+            </figure>
+          </article>
+        </body></html>
+        """,
+        encoding="utf-8",
+    )
+
+    result = polish_web_html_file(html_path)
+
+    assert 'src="data:image/webp;base64,' in result.html
+    assert "data:application/octet-stream" not in result.html
+    assert "<source" not in result.html
 
 
 def test_polish_web_html_file_inlines_local_srcset_images(tmp_path) -> None:
