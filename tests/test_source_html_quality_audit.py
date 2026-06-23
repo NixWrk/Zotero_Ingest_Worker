@@ -271,6 +271,41 @@ def test_source_html_audit_flags_latexml_inline_black_text(tmp_path: Path) -> No
     assert report["critical_records"][0]["counts"]["latexml_inline_black_text_styles"] == 1
 
 
+def test_source_html_audit_flags_latexml_black_mathcolor(tmp_path: Path) -> None:
+    data_dir = tmp_path / "Zotero_Test"
+    html = GOOD_HTML.replace(
+        "<h1>Good Article</h1>",
+        """
+        <h1>Good Article</h1>
+        <figure class="ltx_table" id="S1.T1">
+          <table class="ltx_tabular"><tr><td>
+            <math class="ltx_Math" display="inline">
+              <mrow>
+                <mi mathcolor="#000000" mathsize="90%">M</mi>
+                <mo mathcolor="#000">=</mo>
+                <mn mathcolor="black">6.09</mn>
+                <mi mathcolor="#ff0000">x</mi>
+              </mrow>
+            </math>
+          </td></tr></table>
+          <figcaption>Table 1</figcaption>
+        </figure>
+        """,
+    )
+    _write_html_attachment(
+        data_dir,
+        key="LTXMATH1",
+        parent_key="PARENT1",
+        title="LaTeXML Black Math [source HTML]",
+        html=html,
+    )
+
+    report = run_audit(zotero_data_dirs=(data_dir,), state_db=None)
+
+    assert report["summary"]["issue_counts"]["latexml_math_black_color"] == 1
+    assert report["critical_records"][0]["counts"]["latexml_black_mathcolor_attrs"] == 3
+
+
 def test_source_html_audit_flags_discovered_regression_defects(tmp_path: Path) -> None:
     data_dir = tmp_path / "Zotero_Test"
     webp = "UklGRhAAAABXRUJQVlA4IHoybQ=="
@@ -548,6 +583,21 @@ def test_source_html_audit_flags_orphan_source_html_file(tmp_path: Path) -> None
     report = run_audit(zotero_data_dirs=(data_dir,), state_db=None)
 
     assert report["summary"]["source_html_files"] == 1
+    assert report["critical_records"][0]["issues"] == ["missing_zotero_attachment_record"]
+
+
+def test_source_html_audit_flags_orphan_arxiv_html_file(tmp_path: Path) -> None:
+    data_dir = tmp_path / "Zotero_Test"
+    storage_dir = data_dir / "storage" / "ARXIV1"
+    storage_dir.mkdir(parents=True)
+    (storage_dir / "Article [ARXIV HTML].html").write_text(GOOD_HTML, encoding="utf-8")
+    _write_zotero_schema(data_dir)
+
+    report = run_audit(zotero_data_dirs=(data_dir,), state_db=None)
+
+    assert report["summary"]["non_source_html_files"] == 1
+    assert report["summary"]["issue_counts"]["missing_zotero_attachment_record"] == 1
+    assert report["critical_records"][0]["is_arxiv_html"] is True
     assert report["critical_records"][0]["issues"] == ["missing_zotero_attachment_record"]
 
 

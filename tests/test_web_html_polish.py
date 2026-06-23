@@ -385,6 +385,45 @@ def test_polish_web_html_document_removes_latexml_black_text_color() -> None:
     assert "height:0.8pt;color:#000000" in result.html
 
 
+def test_polish_web_html_document_removes_latexml_black_mathcolor() -> None:
+    html = f"""
+    <html>
+      <head><title>Math Color Article</title></head>
+      <body>
+        <div class="ltx_page_main">
+          <section id="S1">
+            <h1>Math Color Article</h1>
+            <p>{" ".join([LONG_PARAGRAPH] * 18)}</p>
+            <figure class="ltx_table" id="S1.T1">
+              <table class="ltx_tabular">
+                <tr><td>
+                  <math class="ltx_Math" display="inline">
+                    <mrow>
+                      <mi mathcolor="#000000" mathsize="90%">M</mi>
+                      <mo mathcolor="#000" mathsize="90%">=</mo>
+                      <mn mathcolor="black">6.09</mn>
+                      <mi mathcolor="#ff0000">x</mi>
+                    </mrow>
+                  </math>
+                </td></tr>
+              </table>
+              <figcaption class="ltx_caption">Table 1: Results.</figcaption>
+            </figure>
+          </section>
+        </div>
+      </body>
+    </html>
+    """
+
+    result = polish_web_html_document(html, source_url="https://arxiv.org/html/2502.10561")
+
+    assert 'mathcolor="#000000"' not in result.html
+    assert 'mathcolor="#000"' not in result.html
+    assert 'mathcolor="black"' not in result.html
+    assert 'mathcolor="#ff0000"' in result.html
+    assert '<mi mathsize="90%">M</mi>' in result.html
+
+
 def test_polish_web_html_document_removes_latexml_description_error_panels() -> None:
     png_base64 = base64.b64encode(PNG_BYTES).decode("ascii")
     html = f"""

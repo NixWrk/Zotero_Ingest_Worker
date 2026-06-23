@@ -50,6 +50,10 @@ LTX_INLINE_BLACK_TEXT_RE = re.compile(
     r"(?=[^>]*\bstyle\s*=\s*['\"][^'\"]*\bcolor\s*:\s*(?:#000(?:000)?|black)\b)",
     re.IGNORECASE,
 )
+LTX_BLACK_MATHCOLOR_RE = re.compile(
+    r"\bmathcolor\s*=\s*['\"]\s*(?:#000(?:000)?|black)\s*['\"]",
+    re.IGNORECASE,
+)
 LOCAL_HTML_SUFFIXES = {".html", ".htm"}
 SUPPLEMENTARY_RESOURCE_SUFFIXES = {
     ".bib",
@@ -102,6 +106,7 @@ CRITICAL_ISSUES = {
     "html_attachment_missing_file",
     "latexml_itemize_marker_layout",
     "latexml_inline_black_text",
+    "latexml_math_black_color",
 }
 
 WARNING_ISSUES = {
@@ -161,6 +166,7 @@ class HtmlMetrics:
     latexml_tables: int = 0
     latexml_itemize_marker_blocks: int = 0
     latexml_inline_black_text_styles: int = 0
+    latexml_black_mathcolor_attrs: int = 0
     disp_formula_tables: int = 0
     display_math_blocks: int = 0
     scripts: int = 0
@@ -199,6 +205,7 @@ class HtmlMetrics:
             "latexml_tables": self.latexml_tables,
             "latexml_itemize_marker_blocks": self.latexml_itemize_marker_blocks,
             "latexml_inline_black_text_styles": self.latexml_inline_black_text_styles,
+            "latexml_black_mathcolor_attrs": self.latexml_black_mathcolor_attrs,
             "disp_formula_tables": self.disp_formula_tables,
             "display_math_blocks": self.display_math_blocks,
             "scripts": self.scripts,
@@ -341,6 +348,7 @@ class ArticleHtmlAuditParser(HTMLParser):
         self.metrics.latexml_tables = len(LTX_TABLE_RE.findall(content_html))
         self.metrics.latexml_itemize_marker_blocks = len(LTX_ITEMIZE_MARKER_BLOCK_RE.findall(content_html))
         self.metrics.latexml_inline_black_text_styles = len(LTX_INLINE_BLACK_TEXT_RE.findall(content_html))
+        self.metrics.latexml_black_mathcolor_attrs = len(LTX_BLACK_MATHCOLOR_RE.findall(content_html))
         self.metrics.disp_formula_tables = len(DISP_FORMULA_TABLE_RE.findall(content_html))
         self.metrics.display_math_blocks = len(DISPLAY_MATH_RE.findall(content_html))
         if "ltx_caption" in content_html and "ltx_transformed_outer" in content_html:
@@ -677,9 +685,9 @@ def _audit_html_file(
 
     if read_error:
         issues.append("html_read_error")
+    if attachment is None and (is_source_html or is_arxiv_html):
+        issues.append("missing_zotero_attachment_record")
     if is_source_html:
-        if attachment is None:
-            issues.append("missing_zotero_attachment_record")
         if job_index.enabled and not job_ok:
             issues.append("no_succeeded_source_html_job")
         if not parser.style_ok:
@@ -710,6 +718,8 @@ def _audit_html_file(
             issues.append("latexml_itemize_marker_layout")
         if counts["latexml_inline_black_text_styles"]:
             issues.append("latexml_inline_black_text")
+        if counts["latexml_black_mathcolor_attrs"]:
+            issues.append("latexml_math_black_color")
         if counts["frontiers_reference_buttons"]:
             issues.append("frontiers_reference_button")
         if counts["def_lists"] and not style_rules["def_list"]:

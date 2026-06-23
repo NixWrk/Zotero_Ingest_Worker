@@ -1079,22 +1079,29 @@ def remove_latexml_table_color_artifacts(html: str) -> str:
 
 
 def remove_latexml_inline_black_text_color(html: str) -> str:
-    """Let the readability theme control LaTeXML text color instead of hard-coded black."""
+    """Let the readability theme control LaTeXML text/math color instead of hard-coded black."""
 
     def replace(match: re.Match[str]) -> str:
         tag = match.group(0)
-        if tag.startswith("</") or match.group("tag").lower() != "span":
+        if tag.startswith("</"):
             return tag
         attrs = match.group("attrs") or ""
-        if "ltx_text" not in (_attr_value(attrs, "class") or "").split():
-            return tag
-        style = _attr_value(attrs, "style") or ""
-        cleaned_style = _strip_black_foreground_declaration(style)
-        if cleaned_style == style:
-            return tag
-        if cleaned_style:
-            return _set_attr_value(tag, "style", cleaned_style)
-        return _remove_attr_value(tag, "style")
+        cleaned_tag = tag
+        if match.group("tag").lower() == "span" and "ltx_text" in (
+            _attr_value(attrs, "class") or ""
+        ).split():
+            style = _attr_value(attrs, "style") or ""
+            cleaned_style = _strip_black_foreground_declaration(style)
+            if cleaned_style != style:
+                cleaned_tag = (
+                    _set_attr_value(cleaned_tag, "style", cleaned_style)
+                    if cleaned_style
+                    else _remove_attr_value(cleaned_tag, "style")
+                )
+        mathcolor = (_attr_value(attrs, "mathcolor") or "").strip().casefold()
+        if mathcolor in {"#000", "#000000", "black"}:
+            cleaned_tag = _remove_attr_value(cleaned_tag, "mathcolor")
+        return cleaned_tag
 
     return _HTML_TAG_RE.sub(replace, html)
 

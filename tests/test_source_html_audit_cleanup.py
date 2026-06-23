@@ -10,6 +10,7 @@ from scripts.source_html_audit_cleanup import (
     mark_local_attachment_deleted,
     quarantine_storage_dir,
     relay_library_id_for_record,
+    remote_stale_arxiv_records,
     trash_stale_arxiv_html,
 )
 
@@ -32,6 +33,14 @@ def test_cleanup_plan_groups_audit_records() -> None:
                 "is_source_html": False,
                 "is_arxiv_html": True,
                 "issues": ["stale_arxiv_html_attachment"],
+            },
+            {
+                "key": "ARXIVORPHAN",
+                "library_id": "LIB1",
+                "path": r"C:\Zotero\storage\ARXIVORPHAN\Article [ARXIV HTML].html",
+                "is_source_html": False,
+                "is_arxiv_html": True,
+                "issues": ["missing_zotero_attachment_record"],
             },
             {
                 "key": "LATEXML1",
@@ -57,17 +66,109 @@ def test_cleanup_plan_groups_audit_records() -> None:
                 "is_arxiv_html": False,
                 "issues": ["latexml_inline_black_text"],
             },
+            {
+                "key": "LATEXML4",
+                "library_id": "LIB1",
+                "path": r"C:\Zotero\storage\LATEXML4\Article [SOURCE HTML].html",
+                "is_source_html": True,
+                "is_arxiv_html": False,
+                "issues": ["latexml_math_black_color"],
+            },
+            {
+                "key": "RAWHTML1",
+                "library_id": "LIB1",
+                "path": r"C:\Zotero\storage\RAWHTML1\Article [SOURCE HTML].html",
+                "is_source_html": True,
+                "is_arxiv_html": False,
+                "issues": ["missing_web_polish_style", "script_tags_present"],
+            },
         ]
     }
 
     plan = cleanup_plan_from_audit(report)
 
     assert [record["key"] for record in plan["orphan_source_html"]] == ["ORPHAN1"]
+    assert [record["key"] for record in plan["orphan_arxiv_html"]] == ["ARXIVORPHAN"]
     assert [record["key"] for record in plan["stale_arxiv_html"]] == ["ARXIVOLD"]
     assert [record["key"] for record in plan["latexml_repolish"]] == [
         "LATEXML1",
         "LATEXML2",
         "LATEXML3",
+        "LATEXML4",
+        "RAWHTML1",
+    ]
+
+
+def test_remote_stale_arxiv_records_include_remote_only_siblings(tmp_path: Path) -> None:
+    data_dir = tmp_path / "Zotero"
+    source_path = data_dir / "storage" / "SOURCE1" / "Article [SOURCE HTML].html"
+    report = {
+        "all_records": [
+            {
+                "key": "SOURCE1",
+                "library_id": "local_hash",
+                "parent_key": "PARENT1",
+                "path": str(source_path),
+                "is_source_html": True,
+                "is_arxiv_html": False,
+                "issues": [],
+            },
+            {
+                "key": "REMOTE1",
+                "library_id": "local_hash",
+                "parent_key": None,
+                "path": str(data_dir / "storage" / "REMOTE1" / "Article [ARXIV HTML].html"),
+                "is_source_html": False,
+                "is_arxiv_html": True,
+                "issues": ["missing_zotero_attachment_record"],
+            },
+        ]
+    }
+    binding = SimpleNamespace(library_id="RELAY_LIB", host_data_dir=data_dir)
+    remote_by_library = {
+        "RELAY_LIB": [
+            {
+                "key": "REMOTE1",
+                "parentItem": "PARENT1",
+                "title": "Article [FULL TEXT] [ARXIV HTML].html",
+                "filename": "Article [FULL TEXT] [ARXIV HTML].html",
+                "contentType": "text/html",
+                "version": 12,
+                "deleted": False,
+            },
+            {
+                "key": "REMOTE2",
+                "parentItem": "OTHER",
+                "title": "Other [ARXIV HTML].html",
+                "filename": "Other [ARXIV HTML].html",
+                "contentType": "text/html",
+                "version": 13,
+                "deleted": False,
+            },
+            {
+                "key": "REMOTE3",
+                "parentItem": "PARENT1",
+                "title": "Deleted [ARXIV HTML].html",
+                "filename": "Deleted [ARXIV HTML].html",
+                "contentType": "text/html",
+                "version": 14,
+                "deleted": True,
+            },
+        ]
+    }
+
+    records = remote_stale_arxiv_records(
+        report,
+        bindings=[binding],
+        remote_by_library=remote_by_library,
+    )
+
+    assert [record["key"] for record in records] == ["REMOTE1"]
+    assert records[0]["library_id"] == "RELAY_LIB"
+    assert records[0]["remote_only"] is True
+    assert records[0]["issues"] == [
+        "stale_arxiv_html_attachment",
+        "remote_only_arxiv_html_attachment",
     ]
 
 

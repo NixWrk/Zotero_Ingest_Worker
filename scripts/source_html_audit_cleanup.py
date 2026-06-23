@@ -45,6 +45,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--confirm", action="store_true")
     parser.add_argument("--delete-webdav", action="store_true")
     parser.add_argument("--skip-repolish", action="store_true")
+    parser.add_argument("--skip-remote-arxiv-check", action="store_true")
     parser.add_argument("--request-timeout", type=int, default=300)
     args = parser.parse_args(argv)
 
@@ -67,6 +68,31 @@ def main(argv: list[str] | None = None) -> int:
 
     report = _load_or_run_audit(args.audit_json, run_root=run_root)
     plan = cleanup_plan_from_audit(report)
+    relay = None
+    relay_bindings: list[Any] = []
+    if not args.skip_remote_arxiv_check:
+        try:
+            relay = bulk._relay_env()
+            relay_bindings = bulk._relay_bindings(relay)
+            remote_records = find_remote_stale_arxiv_html_records(
+                report,
+                relay=relay,
+                bindings=relay_bindings,
+                timeout=args.request_timeout,
+            )
+            if remote_records:
+                plan["stale_arxiv_html"] = _unique_records(
+                    [*plan["stale_arxiv_html"], *remote_records]
+                )
+            manifest["remote_stale_arxiv_check"] = {
+                "ok": True,
+                "added": len(remote_records),
+            }
+        except Exception as exc:
+            manifest["remote_stale_arxiv_check"] = {
+                "ok": False,
+                "error": f"{type(exc).__name__}: {exc}",
+            }
     _write_json(run_root / "cleanup_plan.json", plan)
     manifest["plan_counts"] = {name: len(items) for name, items in plan.items()}
     _write_json(manifest_path, manifest)
@@ -89,8 +115,9 @@ def main(argv: list[str] | None = None) -> int:
         _append_jsonl(results_path, {"action": "targeted_repolish", **repolish})
         ok = ok and bool(repolish.get("ok"))
 
-    relay = bulk._relay_env() if plan["stale_arxiv_html"] else None
-    relay_bindings = bulk._relay_bindings(relay) if relay is not None else []
+    if plan["stale_arxiv_html"] and relay is None:
+        relay = bulk._relay_env()
+        relay_bindings = bulk._relay_bindings(relay)
     for record in plan["stale_arxiv_html"]:
         item: dict[str, Any] = {"action": "trash_stale_arxiv_html", "record": _compact_record(record)}
         try:
@@ -123,12 +150,19 @@ def main(argv: list[str] | None = None) -> int:
                         binding=binding,
                         relay_result=relay_result,
                     )
-                item["local_quarantine"] = quarantine_storage_dir(
-                    record,
-                    run_root=run_root,
-                    dry_run=False,
-                    label="stale_arxiv_html",
-                )
+                if record.get("remote_only"):
+                    item["local_quarantine"] = {
+                        "ok": True,
+                        "skipped": True,
+                        "reason": "remote_only_attachment",
+                    }
+                else:
+                    item["local_quarantine"] = quarantine_storage_dir(
+                        record,
+                        run_root=run_root,
+                        dry_run=False,
+                        label="stale_arxiv_html",
+                    )
         except Exception as exc:
             item["ok"] = False
             item["error"] = f"{type(exc).__name__}: {exc}"
@@ -154,6 +188,22 @@ def main(argv: list[str] | None = None) -> int:
             ok = False
         _append_jsonl(results_path, item)
 
+    for record in plan["orphan_arxiv_html"]:
+        item = {"action": "quarantine_orphan_arxiv_html", "record": _compact_record(record)}
+        try:
+            item["local_quarantine"] = quarantine_storage_dir(
+                record,
+                run_root=run_root,
+                dry_run=False,
+                label="orphan_arxiv_html",
+            )
+            item["ok"] = True
+        except Exception as exc:
+            item["ok"] = False
+            item["error"] = f"{type(exc).__name__}: {exc}"
+            ok = False
+        _append_jsonl(results_path, item)
+
     manifest.update({"ok": ok, "finished_at": _utc_now(), "results_path": str(results_path)})
     _write_json(manifest_path, manifest)
     print(json.dumps(manifest, ensure_ascii=False, indent=2))
@@ -167,6 +217,11 @@ def cleanup_plan_from_audit(report: dict[str, Any]) -> dict[str, list[dict[str, 
             record
             for record in records
             if record.get("is_source_html") and _has_issue(record, "missing_zotero_attachment_record")
+        ],
+        "orphan_arxiv_html": [
+            record
+            for record in records
+            if record.get("is_arxiv_html") and _has_issue(record, "missing_zotero_attachment_record")
         ],
         "stale_arxiv_html": [
             record
@@ -184,10 +239,181 @@ def cleanup_plan_from_audit(report: dict[str, Any]) -> dict[str, list[dict[str, 
                     "latexml_figure_render_error",
                     "latexml_itemize_marker_layout",
                     "latexml_inline_black_text",
+                    "latexml_math_black_color",
+                    "missing_web_polish_style",
+                    "missing_web_doc_main",
+                    "missing_source_kind",
+                    "missing_latexml_table_style",
+                    "script_tags_present",
+                    "absolute_fragment_links_resolve_local",
                 )
             )
         ],
     }
+
+
+def find_remote_stale_arxiv_html_records(
+    report: dict[str, Any],
+    *,
+    relay: dict[str, str],
+    bindings: list[Any],
+    timeout: int,
+) -> list[dict[str, Any]]:
+    remote_by_library: dict[str, list[dict[str, Any]]] = {}
+    source_parent_keys = source_parent_keys_by_relay_library(report, bindings)
+    for library_id, parent_keys in source_parent_keys.items():
+        if not parent_keys:
+            continue
+        children: list[dict[str, Any]] = []
+        for parent_key in sorted(parent_keys):
+            for child in list_remote_item_children(
+                relay=relay,
+                library_id=library_id,
+                parent_key=parent_key,
+                timeout=timeout,
+            ):
+                child.setdefault("parentItem", parent_key)
+                children.append(child)
+        remote_by_library[library_id] = children
+    return remote_stale_arxiv_records(
+        report,
+        bindings=bindings,
+        remote_by_library=remote_by_library,
+    )
+
+
+def remote_stale_arxiv_records(
+    report: dict[str, Any],
+    *,
+    bindings: list[Any],
+    remote_by_library: dict[str, list[dict[str, Any]]],
+) -> list[dict[str, Any]]:
+    source_parent_keys = source_parent_keys_by_relay_library(report, bindings)
+    existing_stale_keys = {
+        str(record.get("key") or "")
+        for record in _unique_records(report.get("all_records") or report.get("critical_records") or [])
+        if _has_issue(record, "stale_arxiv_html_attachment")
+    }
+    records: list[dict[str, Any]] = []
+    for library_id, attachments in remote_by_library.items():
+        source_parents = source_parent_keys.get(library_id) or set()
+        if not source_parents:
+            continue
+        for attachment in attachments:
+            key = str(attachment.get("key") or "").strip()
+            parent_key = str(attachment.get("parentItem") or "").strip()
+            if not key or key in existing_stale_keys or parent_key not in source_parents:
+                continue
+            if attachment.get("deleted"):
+                continue
+            if not _remote_attachment_looks_like_arxiv_html(attachment):
+                continue
+            records.append(
+                {
+                    "library_id": library_id,
+                    "key": key,
+                    "parent_key": parent_key,
+                    "title": str(attachment.get("title") or attachment.get("filename") or key),
+                    "path": "",
+                    "is_source_html": False,
+                    "is_arxiv_html": True,
+                    "remote_only": True,
+                    "remote_version": attachment.get("version"),
+                    "issues": ["stale_arxiv_html_attachment", "remote_only_arxiv_html_attachment"],
+                }
+            )
+    return records
+
+
+def source_parent_keys_by_relay_library(
+    report: dict[str, Any],
+    bindings: list[Any],
+) -> dict[str, set[str]]:
+    by_library: dict[str, set[str]] = {}
+    records = _unique_records(report.get("all_records") or report.get("critical_records") or [])
+    for record in records:
+        if not record.get("is_source_html"):
+            continue
+        if _has_issue(record, "missing_zotero_attachment_record"):
+            continue
+        parent_key = str(record.get("parent_key") or "").strip()
+        if not parent_key:
+            continue
+        library_id = relay_library_id_for_record(record, bindings)
+        if not library_id:
+            continue
+        by_library.setdefault(library_id, set()).add(parent_key)
+    return by_library
+
+
+def list_remote_html_attachments(
+    *,
+    relay: dict[str, str],
+    library_id: str,
+    timeout: int,
+) -> list[dict[str, Any]]:
+    query = urllib.parse.urlencode({"contentType": "text/html", "maxItems": "50000"})
+    url = (
+        f"{relay['url'].rstrip('/')}/libraries/"
+        f"{urllib.parse.quote(library_id, safe='')}/remote/attachments?{query}"
+    )
+    request = urllib.request.Request(
+        url,
+        headers={
+            "Accept": "application/json",
+            "Authorization": f"Bearer {relay['token']}",
+        },
+        method="GET",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        raw = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"relay HTTP {exc.code}: {raw}") from exc
+    if not payload.get("ok"):
+        raise RuntimeError(f"relay remote attachment list failed: {payload}")
+    attachments = payload.get("attachments") or []
+    return [item for item in attachments if isinstance(item, dict)]
+
+
+def list_remote_item_children(
+    *,
+    relay: dict[str, str],
+    library_id: str,
+    parent_key: str,
+    timeout: int,
+) -> list[dict[str, Any]]:
+    query = urllib.parse.urlencode({"libraryId": library_id, "source": "web"})
+    url = (
+        f"{relay['url'].rstrip('/')}/items/"
+        f"{urllib.parse.quote(parent_key, safe='')}/children?{query}"
+    )
+    request = urllib.request.Request(
+        url,
+        headers={
+            "Accept": "application/json",
+            "Authorization": f"Bearer {relay['token']}",
+        },
+        method="GET",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=timeout) as response:
+            payload = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        raw = exc.read().decode("utf-8", errors="replace")
+        raise RuntimeError(f"relay HTTP {exc.code}: {raw}") from exc
+    if not payload.get("ok"):
+        raise RuntimeError(f"relay remote children list failed: {payload}")
+    children = payload.get("children") or []
+    return [item for item in children if isinstance(item, dict)]
+
+
+def _remote_attachment_looks_like_arxiv_html(attachment: dict[str, Any]) -> bool:
+    haystack = " ".join(
+        str(attachment.get(field) or "") for field in ("title", "filename", "contentType")
+    ).casefold()
+    return "[arxiv html]" in haystack and "text/html" in haystack
 
 
 def quarantine_storage_dir(
@@ -463,6 +689,8 @@ def _compact_record(record: dict[str, Any]) -> dict[str, Any]:
         "parent_key": record.get("parent_key"),
         "title": record.get("title"),
         "path": record.get("path"),
+        "remote_only": record.get("remote_only"),
+        "remote_version": record.get("remote_version"),
         "issues": record.get("issues") or [],
     }
 
