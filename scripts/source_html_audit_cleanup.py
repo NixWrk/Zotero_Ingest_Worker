@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 from typing import Any
 import shutil
+import sqlite3
 import subprocess
 import sys
 import urllib.error
@@ -77,6 +78,7 @@ def main(argv: list[str] | None = None) -> int:
         return 0
 
     ok = True
+    sqlite_backups: dict[Path, dict[str, Any]] = {}
     if plan["latexml_repolish"] and not args.skip_repolish:
         repolish = run_targeted_repolish(
             keys=[str(record["key"]) for record in plan["latexml_repolish"]],
@@ -104,6 +106,23 @@ def main(argv: list[str] | None = None) -> int:
             )
             item["relay"] = relay_result
             if relay_result.get("ok"):
+                binding = relay_binding_for_record(record, relay_bindings)
+                if binding is not None:
+                    sqlite_path = Path(binding.host_data_dir) / "zotero.sqlite"
+                    if sqlite_path not in sqlite_backups:
+                        sqlite_backups[sqlite_path] = bulk._sqlite_backup(
+                            sqlite_path,
+                            run_root
+                            / "sqlite"
+                            / f"{_safe_name(str(binding.library_id))}.sqlite",
+                        )
+                        manifest["sqlite_backups"] = list(sqlite_backups.values())
+                        _write_json(manifest_path, manifest)
+                    item["local_deleted"] = mark_local_attachment_deleted(
+                        record,
+                        binding=binding,
+                        relay_result=relay_result,
+                    )
                 item["local_quarantine"] = quarantine_storage_dir(
                     record,
                     run_root=run_root,
@@ -159,7 +178,14 @@ def cleanup_plan_from_audit(report: dict[str, Any]) -> dict[str, list[dict[str, 
             for record in records
             if record.get("is_source_html")
             and not _has_issue(record, "missing_zotero_attachment_record")
-            and _has_issue(record, "latexml_figure_render_error")
+            and any(
+                _has_issue(record, issue)
+                for issue in (
+                    "latexml_figure_render_error",
+                    "latexml_itemize_marker_layout",
+                    "latexml_inline_black_text",
+                )
+            )
         ],
     }
 
@@ -185,6 +211,14 @@ def quarantine_storage_dir(
             "dryRun": True,
             "wouldMove": str(storage_dir),
             "target": str(target),
+        }
+    if not storage_dir.exists():
+        return {
+            "ok": True,
+            "dryRun": False,
+            "skipped": True,
+            "reason": "storage_dir_missing",
+            "path": str(storage_dir),
         }
     target.parent.mkdir(parents=True, exist_ok=True)
     shutil.copytree(storage_dir, target)
@@ -238,6 +272,13 @@ def trash_stale_arxiv_html(
 
 
 def relay_library_id_for_record(record: dict[str, Any], bindings: list[Any]) -> str:
+    binding = relay_binding_for_record(record, bindings)
+    if binding is not None:
+        return str(binding.library_id)
+    return str(record.get("library_id") or "")
+
+
+def relay_binding_for_record(record: dict[str, Any], bindings: list[Any]) -> Any | None:
     path = Path(str(record.get("path") or "")).resolve(strict=False)
     for binding in bindings:
         root = Path(binding.host_data_dir).resolve(strict=False)
@@ -245,8 +286,53 @@ def relay_library_id_for_record(record: dict[str, Any], bindings: list[Any]) -> 
             path.relative_to(root)
         except ValueError:
             continue
-        return str(binding.library_id)
-    return str(record.get("library_id") or "")
+        return binding
+    return None
+
+
+def mark_local_attachment_deleted(
+    record: dict[str, Any],
+    *,
+    binding: Any,
+    relay_result: dict[str, Any],
+) -> dict[str, Any]:
+    key = str(record.get("key") or "").strip()
+    if not key:
+        raise RuntimeError("record is missing key")
+    new_version = _optional_int(relay_result.get("newVersion"))
+    sqlite_path = Path(binding.host_data_dir) / "zotero.sqlite"
+    connection = sqlite3.connect(str(sqlite_path), timeout=30)
+    connection.row_factory = sqlite3.Row
+    try:
+        row = connection.execute(
+            "select itemID, version from items where key = ? limit 1",
+            (key,),
+        ).fetchone()
+        if row is None:
+            return {"ok": True, "updated": False, "reason": "local_item_missing", "key": key}
+        item_id = int(row["itemID"])
+        connection.execute(
+            "insert or ignore into deletedItems (itemID, dateDeleted) values (?, CURRENT_TIMESTAMP)",
+            (item_id,),
+        )
+        if new_version is not None:
+            connection.execute(
+                "update items set version = ?, synced = 1 where itemID = ?",
+                (new_version, item_id),
+            )
+        else:
+            connection.execute("update items set synced = 1 where itemID = ?", (item_id,))
+        connection.commit()
+    finally:
+        connection.close()
+    return {
+        "ok": True,
+        "updated": True,
+        "sqlite_path": str(sqlite_path),
+        "key": key,
+        "item_id": item_id,
+        "zotero_version": new_version,
+    }
 
 
 def run_targeted_repolish(
@@ -337,11 +423,18 @@ def _first_available_docker_tex_image() -> str | None:
 
 def _storage_dir_for_record(record: dict[str, Any]) -> Path:
     key = str(record.get("key") or "").strip()
-    path = Path(str(record.get("path") or "")).resolve(strict=True)
+    path = Path(str(record.get("path") or "")).resolve(strict=False)
     storage_dir = path.parent
     if not key or storage_dir.name != key or storage_dir.parent.name.casefold() != "storage":
         raise RuntimeError(f"refusing to quarantine unexpected storage path: {path}")
     return storage_dir
+
+
+def _optional_int(value: Any) -> int | None:
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _unique_records(records: Any) -> list[dict[str, Any]]:

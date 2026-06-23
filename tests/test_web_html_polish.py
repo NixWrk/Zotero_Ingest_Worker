@@ -322,6 +322,69 @@ def test_polish_web_html_document_removes_latexml_table_color_artifacts() -> Non
     assert "RNN" in result.html
 
 
+def test_polish_web_html_document_styles_latexml_item_markers() -> None:
+    html = f"""
+    <html>
+      <head><title>List Article</title></head>
+      <body>
+        <div class="ltx_page_main">
+          <section id="S1">
+            <h1>List Article</h1>
+            <p>{" ".join([LONG_PARAGRAPH] * 18)}</p>
+            <ul class="ltx_itemize" id="S1.I1">
+              <li class="ltx_item" style="list-style-type:none;">
+                <span class="ltx_tag ltx_tag_item">•</span>
+                <div class="ltx_para"><p class="ltx_p">Visual landmarks are important.</p></div>
+              </li>
+            </ul>
+          </section>
+        </div>
+      </body>
+    </html>
+    """
+
+    result = polish_web_html_document(html, source_url="https://arxiv.org/html/2502.10561")
+
+    assert ".ltx_item > .ltx_tag_item" in result.html
+    assert "grid-template-columns: 1.35em minmax(0, 1fr)" in result.html
+    assert '<span class="ltx_tag ltx_tag_item">•</span>' in result.html
+    assert "Visual landmarks are important." in result.html
+
+
+def test_polish_web_html_document_removes_latexml_black_text_color() -> None:
+    html = f"""
+    <html>
+      <head><title>Black Text Article</title></head>
+      <body>
+        <div class="ltx_page_main">
+          <section id="S1">
+            <h1>Black Text Article</h1>
+            <p>{" ".join([LONG_PARAGRAPH] * 18)}</p>
+            <figure class="ltx_table" id="S1.T1">
+              <table class="ltx_tabular">
+                <tr>
+                  <td>
+                    <span class="ltx_rule" style="width:100%;height:0.8pt;color:#000000;background:#000000;display:inline-block;"> </span>
+                    <span class="ltx_text ltx_font_bold" style="font-size:90%;color:#000000;">Visual</span>
+                  </td>
+                </tr>
+              </table>
+              <figcaption class="ltx_caption">Table 1: Results.</figcaption>
+            </figure>
+          </section>
+        </div>
+      </body>
+    </html>
+    """
+
+    result = polish_web_html_document(html, source_url="https://arxiv.org/html/2502.10561")
+
+    assert '<span class="ltx_text ltx_font_bold" style="font-size:90%;">Visual</span>' in result.html
+    assert "ltx_rule" in result.html
+    assert "background:#000000" in result.html
+    assert "height:0.8pt;color:#000000" in result.html
+
+
 def test_polish_web_html_document_removes_latexml_description_error_panels() -> None:
     png_base64 = base64.b64encode(PNG_BYTES).decode("ascii")
     html = f"""

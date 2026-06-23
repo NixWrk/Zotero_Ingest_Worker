@@ -236,6 +236,31 @@ figure.ltx_table table {
   max-width: none;
   margin: 0 auto;
 }
+.ltx_itemize,
+.ltx_enumerate {
+  padding-left: 0;
+  list-style: none;
+}
+.ltx_item {
+  display: grid;
+  grid-template-columns: 1.35em minmax(0, 1fr);
+  column-gap: 0.45em;
+  align-items: baseline;
+  margin: 0.45em 0;
+}
+.ltx_item > .ltx_tag_item {
+  grid-column: 1;
+  color: #4b5563;
+  font-weight: 650;
+  text-align: center;
+}
+.ltx_item > .ltx_para {
+  grid-column: 2;
+}
+.ltx_item > .ltx_para,
+.ltx_item > .ltx_para > .ltx_p {
+  margin: 0;
+}
 table.ltx_equation,
 table.ltx_equationgroup {
   width: 100%;

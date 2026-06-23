@@ -114,6 +114,8 @@ _LTX_ROWCOLOR_ARTIFACT_RE = re.compile(
 )
 _LTX_ROWCOLOR_TEXT_RE = re.compile(r"\\rowcolor\s*[A-Za-z]+!\d+\s*", re.IGNORECASE)
 _LTX_DESCRIPTION_TEXT_RE = re.compile(r"\\Description\b", re.IGNORECASE)
+_CSS_DECLARATION_RE = re.compile(r"(?P<name>[-\w]+)\s*:\s*(?P<value>[^;]+)\s*;?", re.IGNORECASE)
+_ATTR_RE_TEMPLATE = r"\s+{name}\s*=\s*(['\"])(?P<value>.*?)\1"
 _ROOT_RELATIVE_URL_ATTR_RE = re.compile(
     r"(?P<prefix>(?<![\w:-])(?P<name>href|src|action|poster)\s*=\s*)"
     r"(?P<quote>['\"])(?P<url>.*?)(?P=quote)",
@@ -268,6 +270,7 @@ def polish_web_html_document(
         article_html = normalize_latexml_equation_alignment(article_html)
         article_html = remove_latexml_table_color_artifacts(article_html)
         article_html = remove_latexml_description_error_panels(article_html)
+        article_html = remove_latexml_inline_black_text_color(article_html)
     article_html = repair_empty_image_sources(article_html)
     article_html = remove_empty_tables(article_html)
     article_html = remove_empty_figure_shells(article_html)
@@ -1073,6 +1076,52 @@ def remove_empty_figure_shells(html: str) -> str:
 def remove_latexml_table_color_artifacts(html: str) -> str:
     html = _LTX_ROWCOLOR_ARTIFACT_RE.sub("", html)
     return _LTX_ROWCOLOR_TEXT_RE.sub("", html)
+
+
+def remove_latexml_inline_black_text_color(html: str) -> str:
+    """Let the readability theme control LaTeXML text color instead of hard-coded black."""
+
+    def replace(match: re.Match[str]) -> str:
+        tag = match.group(0)
+        if tag.startswith("</") or match.group("tag").lower() != "span":
+            return tag
+        attrs = match.group("attrs") or ""
+        if "ltx_text" not in (_attr_value(attrs, "class") or "").split():
+            return tag
+        style = _attr_value(attrs, "style") or ""
+        cleaned_style = _strip_black_foreground_declaration(style)
+        if cleaned_style == style:
+            return tag
+        if cleaned_style:
+            return _set_attr_value(tag, "style", cleaned_style)
+        return _remove_attr_value(tag, "style")
+
+    return _HTML_TAG_RE.sub(replace, html)
+
+
+def _strip_black_foreground_declaration(style: str) -> str:
+    declarations: list[str] = []
+    changed = False
+    for match in _CSS_DECLARATION_RE.finditer(style):
+        name = match.group("name").strip().casefold()
+        value = match.group("value").strip().casefold()
+        if name == "color" and value in {"#000", "#000000", "black"}:
+            changed = True
+            continue
+        declarations.append(f"{match.group('name').strip()}:{match.group('value').strip()}")
+    if not changed:
+        return style
+    return ";".join(declarations) + (";" if declarations else "")
+
+
+def _remove_attr_value(tag: str, name: str) -> str:
+    return re.sub(
+        _ATTR_RE_TEMPLATE.format(name=re.escape(name)),
+        "",
+        tag,
+        count=1,
+        flags=re.IGNORECASE | re.DOTALL,
+    )
 
 
 def remove_latexml_description_error_panels(html: str) -> str:

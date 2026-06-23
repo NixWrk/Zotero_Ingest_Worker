@@ -1,11 +1,13 @@
 from __future__ import annotations
 
+import sqlite3
 from pathlib import Path
 from types import SimpleNamespace
 
 from scripts.bulk_repolish_source_html import _source_url_hint
 from scripts.source_html_audit_cleanup import (
     cleanup_plan_from_audit,
+    mark_local_attachment_deleted,
     quarantine_storage_dir,
     relay_library_id_for_record,
     trash_stale_arxiv_html,
@@ -39,6 +41,22 @@ def test_cleanup_plan_groups_audit_records() -> None:
                 "is_arxiv_html": False,
                 "issues": ["latexml_figure_render_error"],
             },
+            {
+                "key": "LATEXML2",
+                "library_id": "LIB1",
+                "path": r"C:\Zotero\storage\LATEXML2\Article [SOURCE HTML].html",
+                "is_source_html": True,
+                "is_arxiv_html": False,
+                "issues": ["latexml_itemize_marker_layout"],
+            },
+            {
+                "key": "LATEXML3",
+                "library_id": "LIB1",
+                "path": r"C:\Zotero\storage\LATEXML3\Article [SOURCE HTML].html",
+                "is_source_html": True,
+                "is_arxiv_html": False,
+                "issues": ["latexml_inline_black_text"],
+            },
         ]
     }
 
@@ -46,7 +64,11 @@ def test_cleanup_plan_groups_audit_records() -> None:
 
     assert [record["key"] for record in plan["orphan_source_html"]] == ["ORPHAN1"]
     assert [record["key"] for record in plan["stale_arxiv_html"]] == ["ARXIVOLD"]
-    assert [record["key"] for record in plan["latexml_repolish"]] == ["LATEXML1"]
+    assert [record["key"] for record in plan["latexml_repolish"]] == [
+        "LATEXML1",
+        "LATEXML2",
+        "LATEXML3",
+    ]
 
 
 def test_quarantine_storage_dir_moves_whole_attachment_folder(tmp_path: Path) -> None:
@@ -101,6 +123,54 @@ def test_relay_library_id_for_record_uses_current_binding_path(tmp_path: Path) -
     )
 
     assert library_id == "current_relay_id"
+
+
+def test_mark_local_attachment_deleted_marks_deleted_item(tmp_path: Path) -> None:
+    db = tmp_path / "zotero.sqlite"
+    connection = sqlite3.connect(db)
+    try:
+        connection.executescript(
+            """
+            create table items (
+              itemID integer primary key,
+              key text,
+              version int not null default 0,
+              synced int not null default 0
+            );
+            create table deletedItems (
+              itemID integer primary key,
+              dateDeleted text not null default CURRENT_TIMESTAMP
+            );
+            """
+        )
+        connection.execute(
+            "insert into items (itemID, key, version, synced) values (1, 'ARXIVOLD', 10, 0)"
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    result = mark_local_attachment_deleted(
+        {"key": "ARXIVOLD"},
+        binding=SimpleNamespace(host_data_dir=tmp_path),
+        relay_result={"newVersion": 42},
+    )
+
+    connection = sqlite3.connect(db)
+    try:
+        row = connection.execute(
+            """
+            select i.version, i.synced, di.itemID as deletedItemID
+            from items i left join deletedItems di on di.itemID = i.itemID
+            where i.key = 'ARXIVOLD'
+            """
+        ).fetchone()
+    finally:
+        connection.close()
+
+    assert result["ok"] is True
+    assert result["updated"] is True
+    assert row == (42, 1, 1)
 
 
 def test_source_url_hint_prefers_arxiv_parent_metadata() -> None:

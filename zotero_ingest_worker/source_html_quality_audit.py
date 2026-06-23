@@ -39,6 +39,17 @@ LTX_ROWCOLOR_RE = re.compile(
     r"(?:\\rowcolor|<span\b(?=[^>]*\bltx_ERROR\b)[^>]*>\s*\\rowcolor\s*</span>)",
     re.IGNORECASE,
 )
+LTX_ITEMIZE_MARKER_BLOCK_RE = re.compile(
+    r"<li\b(?=[^>]*\bclass\s*=\s*['\"][^'\"]*\bltx_item\b)[^>]*>\s*"
+    r"<span\b(?=[^>]*\bclass\s*=\s*['\"][^'\"]*\bltx_tag_item\b)[^>]*>[\s\S]{0,120}</span>\s*"
+    r"<div\b(?=[^>]*\bclass\s*=\s*['\"][^'\"]*\bltx_para\b)",
+    re.IGNORECASE,
+)
+LTX_INLINE_BLACK_TEXT_RE = re.compile(
+    r"<span\b(?=[^>]*\bclass\s*=\s*['\"][^'\"]*\bltx_text\b)"
+    r"(?=[^>]*\bstyle\s*=\s*['\"][^'\"]*\bcolor\s*:\s*(?:#000(?:000)?|black)\b)",
+    re.IGNORECASE,
+)
 LOCAL_HTML_SUFFIXES = {".html", ".htm"}
 SUPPLEMENTARY_RESOURCE_SUFFIXES = {
     ".bib",
@@ -88,6 +99,9 @@ CRITICAL_ISSUES = {
     "script_tags_present",
     "table_without_rows",
     "springer_table_placeholder",
+    "html_attachment_missing_file",
+    "latexml_itemize_marker_layout",
+    "latexml_inline_black_text",
 }
 
 WARNING_ISSUES = {
@@ -145,6 +159,8 @@ class HtmlMetrics:
     def_lists: int = 0
     latexml_caption_transformed_blocks: int = 0
     latexml_tables: int = 0
+    latexml_itemize_marker_blocks: int = 0
+    latexml_inline_black_text_styles: int = 0
     disp_formula_tables: int = 0
     display_math_blocks: int = 0
     scripts: int = 0
@@ -181,6 +197,8 @@ class HtmlMetrics:
             "def_lists": self.def_lists,
             "latexml_caption_transformed_blocks": self.latexml_caption_transformed_blocks,
             "latexml_tables": self.latexml_tables,
+            "latexml_itemize_marker_blocks": self.latexml_itemize_marker_blocks,
+            "latexml_inline_black_text_styles": self.latexml_inline_black_text_styles,
             "disp_formula_tables": self.disp_formula_tables,
             "display_math_blocks": self.display_math_blocks,
             "scripts": self.scripts,
@@ -321,6 +339,8 @@ class ArticleHtmlAuditParser(HTMLParser):
         self.metrics.latexml_rowcolor_artifacts = len(LTX_ROWCOLOR_RE.findall(content_html))
         self.metrics.def_lists = len(DEF_LIST_RE.findall(content_html))
         self.metrics.latexml_tables = len(LTX_TABLE_RE.findall(content_html))
+        self.metrics.latexml_itemize_marker_blocks = len(LTX_ITEMIZE_MARKER_BLOCK_RE.findall(content_html))
+        self.metrics.latexml_inline_black_text_styles = len(LTX_INLINE_BLACK_TEXT_RE.findall(content_html))
         self.metrics.disp_formula_tables = len(DISP_FORMULA_TABLE_RE.findall(content_html))
         self.metrics.display_math_blocks = len(DISPLAY_MATH_RE.findall(content_html))
         if "ltx_caption" in content_html and "ltx_transformed_outer" in content_html:
@@ -414,14 +434,28 @@ def run_audit(
 
     for data_dir in zotero_data_dirs:
         attachment_index = _load_html_attachment_index(data_dir, db_errors=db_errors)
+        seen_attachment_paths: set[str] = set()
         for html_path in _iter_storage_html_files(data_dir / "storage", walk_errors=walk_errors):
+            attachment = attachment_index.get(_safe_resolve_key(html_path))
+            if attachment is not None:
+                seen_attachment_paths.add(_safe_resolve_key(attachment.file_path))
             record = _audit_html_file(
                 data_dir=data_dir,
                 html_path=html_path,
-                attachment=attachment_index.get(_safe_resolve_key(html_path)),
+                attachment=attachment,
                 job_index=job_index,
             )
             records.append(record)
+        for safe_path, attachment in attachment_index.items():
+            if safe_path in seen_attachment_paths or attachment.file_path.is_file():
+                continue
+            if not _looks_like_arxiv_html(
+                attachment.file_path,
+                title=attachment.title,
+                zotero_path=attachment.zotero_path,
+            ):
+                continue
+            records.append(_audit_missing_html_attachment(data_dir=data_dir, attachment=attachment))
     _mark_stale_arxiv_html_records(records)
 
     source_records = [record for record in records if record["is_source_html"]]
@@ -672,6 +706,10 @@ def _audit_html_file(
             issues.append("latexml_figure_render_error")
         if counts["latexml_rowcolor_artifacts"]:
             issues.append("latexml_rowcolor_artifact")
+        if counts["latexml_itemize_marker_blocks"] and not style_rules["latexml_itemize"]:
+            issues.append("latexml_itemize_marker_layout")
+        if counts["latexml_inline_black_text_styles"]:
+            issues.append("latexml_inline_black_text")
         if counts["frontiers_reference_buttons"]:
             issues.append("frontiers_reference_button")
         if counts["def_lists"] and not style_rules["def_list"]:
@@ -726,6 +764,50 @@ def _audit_html_file(
         "issues": issues,
         "warnings": warnings,
         "read_error": read_error,
+    }
+
+
+def _audit_missing_html_attachment(*, data_dir: Path, attachment: HtmlAttachmentRow) -> dict[str, Any]:
+    is_source_html = _looks_like_source_html(
+        attachment.file_path,
+        title=attachment.title,
+        zotero_path=attachment.zotero_path,
+    )
+    is_arxiv_html = _looks_like_arxiv_html(
+        attachment.file_path,
+        title=attachment.title,
+        zotero_path=attachment.zotero_path,
+    )
+    is_generated_html = _looks_like_generated_html(
+        attachment.file_path,
+        title=attachment.title,
+        zotero_path=attachment.zotero_path,
+    )
+    return {
+        "key": attachment.key,
+        "library": data_dir.name,
+        "library_id": library_id_for_data_dir(data_dir),
+        "parent_key": attachment.parent_key,
+        "title": attachment.title,
+        "path": str(attachment.file_path),
+        "is_source_html": is_source_html,
+        "is_arxiv_html": is_arxiv_html,
+        "is_generated_html": is_generated_html,
+        "source_kind": "unknown",
+        "text_length": 0,
+        "job_ok": None,
+        "style_ok": False,
+        "style_rules": _style_rule_presence(""),
+        "web_doc_main": False,
+        "counts": HtmlMetrics().as_dict(),
+        "samples": {
+            "unresolved_local_fragments": [],
+            "relative_missing_images": [],
+        },
+        "remote_image_hosts": [],
+        "issues": ["html_attachment_missing_file"],
+        "warnings": [],
+        "read_error": "attachment_file_missing",
     }
 
 
@@ -967,6 +1049,7 @@ def _style_rule_presence(html: str) -> dict[str, bool]:
         "latexml_caption": ".ltx_caption .ltx_transformed_outer" in html,
         "latexml_table": "figure.ltx_table > figcaption" in html
         and "figure.ltx_table table" in html,
+        "latexml_itemize": ".ltx_item > .ltx_tag_item" in html,
         "formula": "table.disp-formula td.label" in html,
     }
 

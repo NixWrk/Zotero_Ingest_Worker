@@ -210,6 +210,67 @@ def test_source_html_audit_flags_latexml_render_errors_inside_figures(tmp_path: 
     assert "latexml_figure_render_error" in report["critical_records"][0]["issues"]
 
 
+def test_source_html_audit_flags_latexml_item_marker_layout_without_style(tmp_path: Path) -> None:
+    data_dir = tmp_path / "Zotero_Test"
+    html = """<!doctype html>
+    <html>
+    <head><style data-z2m-style="web-html-polish">body { color: #111; }</style></head>
+    <body>
+    <main id="web-doc" data-z2m-source-kind="arxiv_latexml">
+      <h1>List Article</h1>
+      <ul class="ltx_itemize">
+        <li class="ltx_item" style="list-style-type:none;">
+          <span class="ltx_tag ltx_tag_item">•</span>
+          <div class="ltx_para"><p class="ltx_p">Visual landmarks.</p></div>
+        </li>
+      </ul>
+    </main>
+    </body>
+    </html>
+    """
+    _write_html_attachment(
+        data_dir,
+        key="LTXITEM1",
+        parent_key="PARENT1",
+        title="LaTeXML List [source HTML]",
+        html=html,
+    )
+
+    report = run_audit(zotero_data_dirs=(data_dir,), state_db=None)
+
+    assert report["summary"]["issue_counts"]["latexml_itemize_marker_layout"] == 1
+    assert report["critical_records"][0]["counts"]["latexml_itemize_marker_blocks"] == 1
+
+
+def test_source_html_audit_flags_latexml_inline_black_text(tmp_path: Path) -> None:
+    data_dir = tmp_path / "Zotero_Test"
+    html = GOOD_HTML.replace(
+        "<h1>Good Article</h1>",
+        """
+        <h1>Good Article</h1>
+        <figure class="ltx_table" id="S1.T1">
+          <table class="ltx_tabular"><tr><td>
+            <span class="ltx_rule" style="width:100%;height:0.8pt;color:#000000;background:#000000;display:inline-block;"> </span>
+            <span class="ltx_text ltx_font_bold" style="font-size:90%;color:#000000;">Visual</span>
+          </td></tr></table>
+          <figcaption>Table 1</figcaption>
+        </figure>
+        """,
+    )
+    _write_html_attachment(
+        data_dir,
+        key="LTXBLK01",
+        parent_key="PARENT1",
+        title="LaTeXML Black Text [source HTML]",
+        html=html,
+    )
+
+    report = run_audit(zotero_data_dirs=(data_dir,), state_db=None)
+
+    assert report["summary"]["issue_counts"]["latexml_inline_black_text"] == 1
+    assert report["critical_records"][0]["counts"]["latexml_inline_black_text_styles"] == 1
+
+
 def test_source_html_audit_flags_discovered_regression_defects(tmp_path: Path) -> None:
     data_dir = tmp_path / "Zotero_Test"
     webp = "UklGRhAAAABXRUJQVlA4IHoybQ=="
@@ -417,6 +478,45 @@ def test_source_html_audit_flags_stale_active_arxiv_html_sibling(tmp_path: Path)
     assert stale[0]["key"] == "ARXIV001"
     assert stale[0]["is_arxiv_html"] is True
     assert report["summary"]["issue_counts"]["stale_arxiv_html_attachment"] == 1
+
+
+def test_source_html_audit_flags_stale_arxiv_db_record_with_missing_file(tmp_path: Path) -> None:
+    data_dir = tmp_path / "Zotero_Test"
+    _write_html_attachment(
+        data_dir,
+        key="SOURCE1",
+        parent_key="PARENT1",
+        title="Article [source HTML]",
+        html=GOOD_HTML,
+    )
+    connection = sqlite3.connect(data_dir / "zotero.sqlite")
+    try:
+        connection.execute("insert into items (itemID, key, dateModified) values (3, 'ARXIV001', '')")
+        connection.execute(
+            """
+            insert into itemAttachments (itemID, parentItemID, linkMode, contentType, path)
+            values (3, 1, 1, 'text/html', 'storage:Article [ARXIV HTML].html')
+            """
+        )
+        connection.execute("insert into itemDataValues (valueID, value) values (2, 'Article [ARXIV HTML]')")
+        connection.execute("insert into itemData (itemID, fieldID, valueID) values (3, 1, 2)")
+        connection.commit()
+    finally:
+        connection.close()
+
+    report = run_audit(zotero_data_dirs=(data_dir,), state_db=None)
+    stale = [
+        record
+        for record in report["critical_records"]
+        if "stale_arxiv_html_attachment" in record["issues"]
+    ]
+
+    assert len(stale) == 1
+    assert stale[0]["key"] == "ARXIV001"
+    assert stale[0]["read_error"] == "attachment_file_missing"
+    assert "html_attachment_missing_file" in stale[0]["issues"]
+    assert report["summary"]["issue_counts"]["stale_arxiv_html_attachment"] == 1
+    assert report["summary"]["issue_counts"]["html_attachment_missing_file"] == 1
 
 
 def test_source_html_audit_does_not_flag_jobs_when_state_has_no_source_jobs(tmp_path: Path) -> None:
