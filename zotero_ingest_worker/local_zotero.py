@@ -287,9 +287,9 @@ class LocalZoteroStore:
 
     def get_attachment(self, key: str) -> LocalAttachment:
         key = key.strip()
-        for attachment in self._iter_sqlite_pdf_attachments(max_items=100000):
-            if attachment.key == key:
-                return attachment
+        attachment = self._get_sqlite_pdf_attachment(key)
+        if attachment is not None:
+            return attachment
         storage_dir = self.config.resolved_storage_dir / key
         if storage_dir.exists():
             if self._sqlite_attachment_key_exists(key):
@@ -732,6 +732,41 @@ class LocalZoteroStore:
             attachment = self._attachment_from_row(row)
             if attachment is not None:
                 yield attachment
+
+    def _get_sqlite_pdf_attachment(self, key: str) -> LocalAttachment | None:
+        connection = connect_readonly_sqlite(self.config.zotero_sqlite_path)
+        connection.row_factory = sqlite3.Row
+        try:
+            row = connection.execute(
+                """
+                select
+                  i.itemID,
+                  i.key,
+                  i.dateModified,
+                  ia.parentItemID,
+                  parent.key AS parentKey,
+                  ia.linkMode,
+                  ia.contentType,
+                  ia.path
+                from itemAttachments ia
+                join items i on i.itemID = ia.itemID
+                left join items parent on parent.itemID = ia.parentItemID
+                left join deletedItems di on di.itemID = i.itemID
+                where i.key = ?
+                  and di.itemID is null
+                  and (
+                    lower(coalesce(ia.contentType, '')) = 'application/pdf'
+                    or lower(coalesce(ia.path, '')) like '%.pdf%'
+                  )
+                limit 1
+                """,
+                (key,),
+            ).fetchone()
+        finally:
+            connection.close()
+        if row is None:
+            return None
+        return self._attachment_from_row(row)
 
     def _sqlite_attachment_keys(self) -> set[str]:
         connection = connect_readonly_sqlite(self.config.zotero_sqlite_path)

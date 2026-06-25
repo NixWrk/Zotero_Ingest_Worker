@@ -614,6 +614,40 @@ def test_parent_preflight_syncs_standalone_pdf_to_local_sqlite(
     assert refreshed.parent_item_id == metadata.item_id
 
 
+def test_local_zotero_get_attachment_uses_keyed_sqlite_lookup(
+    monkeypatch: Any,
+    tmp_path: Path,
+) -> None:
+    data_dir = _write_full_text_fixture(tmp_path, with_pdf=False)
+    (data_dir / "storage" / "PDF1234").mkdir()
+    pdf = data_dir / "storage" / "PDF1234" / "paper.pdf"
+    pdf.write_bytes(b"%PDF")
+    connection = sqlite3.connect(data_dir / "zotero.sqlite")
+    try:
+        connection.executescript(
+            """
+            insert into items values (20, 2, '2026-01-02', 'PDF1234', 1);
+            insert into itemAttachments values (20, null, 0, 'application/pdf', 'storage:paper.pdf');
+            """
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    store = LocalZoteroStore(_metadata_processor_test_config(tmp_path, data_dir))
+
+    def forbid_full_scan(**_kwargs: object) -> None:
+        raise AssertionError("full attachment scan should not run")
+
+    monkeypatch.setattr(store, "_iter_sqlite_pdf_attachments", forbid_full_scan)
+
+    attachment = store.get_attachment("PDF1234")
+
+    assert attachment.key == "PDF1234"
+    assert attachment.file_path == pdf
+    assert attachment.filename == "paper.pdf"
+
+
 def test_parent_preflight_syncs_storage_only_pdf_to_local_sqlite(
     monkeypatch: Any,
     tmp_path: Path,
