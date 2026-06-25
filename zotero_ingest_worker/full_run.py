@@ -134,12 +134,9 @@ class FullRunManager:
         scihub_pdf_backlog_scanned = False
 
         try:
-            self.state.update_full_run(
+            self._record_stage(
                 run_id=run_id,
                 phase="running",
-                current_job_kind=None,
-                current_job_id=None,
-                event="running",
                 message="Ingest controller entered the processing loop.",
             )
             while not self._stop_event.is_set() and not self.state.full_run_stop_requested(run_id):
@@ -166,11 +163,10 @@ class FullRunManager:
                     + int(scihub_pdf_queue.get("running") or 0)
                 )
                 if running_jobs > 0:
-                    self.state.update_full_run(
+                    self._record_stage(
                         run_id=run_id,
                         phase="waiting_for_running_job",
-                        current_job_kind=None,
-                        current_job_id=None,
+                        message="Ingest run is waiting for active metadata jobs to finish.",
                     )
                     time.sleep(options.poll_seconds)
                     continue
@@ -210,23 +206,18 @@ class FullRunManager:
                     "researchgate_pdf_queue": researchgate_pdf_queue,
                     "scihub_pdf_queue": scihub_pdf_queue,
                 }
-                self.state.update_full_run(
+                self._record_stage(
                     run_id=run_id,
                     phase="idle",
-                    current_job_kind=None,
-                    current_job_id=None,
-                    event="idle",
                     message=f"No queued ingest work. idle_cycles={idle_cycles}.",
                     metadata=idle_metadata,
                 )
                 if options.stop_when_idle and idle_cycles >= options.idle_cycles_to_complete:
                     completed_with_errors = run_failed > 0
-                    self.state.update_full_run(
+                    self._record_stage(
                         run_id=run_id,
                         status="completed_with_errors" if completed_with_errors else "succeeded",
                         phase="complete",
-                        current_job_kind=None,
-                        current_job_id=None,
                         finished=True,
                         event="complete_with_errors" if completed_with_errors else "complete",
                         message=(
@@ -244,26 +235,20 @@ class FullRunManager:
                     return
                 time.sleep(options.poll_seconds)
 
-            self.state.update_full_run(
+            self._record_stage(
                 run_id=run_id,
                 status="stopped",
                 phase="stopped",
-                current_job_kind=None,
-                current_job_id=None,
                 finished=True,
-                event="stopped",
                 message="Ingest run stopped by request.",
             )
         except Exception as exc:
-            self.state.update_full_run(
+            self._record_stage(
                 run_id=run_id,
                 status="failed",
                 phase="failed",
-                current_job_kind=None,
-                current_job_id=None,
                 last_error=str(exc),
                 finished=True,
-                event="failed",
                 message=str(exc),
             )
         finally:
@@ -310,15 +295,22 @@ class FullRunManager:
         *,
         phase: str,
         message: str,
+        status: str | None = None,
         event: str | None = None,
         current_job_kind: str | None = None,
+        current_job_id: str | None = None,
+        last_error: str | None = None,
+        finished: bool = False,
         metadata: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         return self.state.update_full_run(
             run_id=run_id,
+            status=status,
             phase=phase,
             current_job_kind=current_job_kind,
-            current_job_id=None,
+            current_job_id=current_job_id,
+            last_error=last_error,
+            finished=finished,
             event=event or phase,
             message=message,
             metadata=metadata,
