@@ -17,12 +17,14 @@ class LocalZoteroReader:
         self.sqlite_path = self.data_dir / "zotero.sqlite"
         self.library_id = library_id_for_data_dir(self.data_dir)
 
-    def iter_pdf_attachments(self, *, max_items: int = 100000) -> Iterable[LocalAttachment]:
+    def iter_pdf_attachments(self, *, max_items: int | None = None) -> Iterable[LocalAttachment]:
         connection = connect_readonly(self.sqlite_path)
         connection.row_factory = sqlite3.Row
         try:
+            limit_clause = "" if max_items is None else "limit ?"
+            params: tuple[int, ...] = () if max_items is None else (max_items,)
             rows = connection.execute(
-                """
+                f"""
                 select
                   i.itemID,
                   i.key,
@@ -42,9 +44,9 @@ class LocalZoteroReader:
                     or lower(coalesce(ia.path, '')) like '%.pdf%'
                   )
                 order by i.dateModified desc
-                limit ?
+                {limit_clause}
                 """,
-                (max_items,),
+                params,
             ).fetchall()
         finally:
             connection.close()
@@ -60,15 +62,21 @@ class LocalZoteroReader:
     def iter_regular_items(
         self,
         *,
-        max_items: int = 100000,
+        max_items: int | None = None,
         collection: str | None = None,
     ) -> Iterable[LocalItemMetadata]:
         connection = connect_readonly(self.sqlite_path)
         connection.row_factory = sqlite3.Row
         try:
+            limit_clause = "" if max_items is None else "limit ?"
             if collection:
+                params: tuple[object, ...] = (
+                    (collection, collection)
+                    if max_items is None
+                    else (collection, collection, max_items)
+                )
                 rows = connection.execute(
-                    """
+                    f"""
                     select distinct i.itemID, i.key, i.version, i.dateModified, it.typeName
                     from collections c
                     join collectionItems ci on ci.collectionID = c.collectionID
@@ -79,13 +87,14 @@ class LocalZoteroReader:
                       and di.itemID is null
                       and coalesce(it.typeName, '') not in ('attachment', 'note', 'annotation')
                     order by i.dateModified desc
-                    limit ?
+                    {limit_clause}
                     """,
-                    (collection, collection, max_items),
+                    params,
                 ).fetchall()
             else:
+                params = () if max_items is None else (max_items,)
                 rows = connection.execute(
-                    """
+                    f"""
                     select i.itemID, i.key, i.version, i.dateModified, it.typeName
                     from items i
                     left join itemTypes it on it.itemTypeID = i.itemTypeID
@@ -93,9 +102,9 @@ class LocalZoteroReader:
                     where di.itemID is null
                       and coalesce(it.typeName, '') not in ('attachment', 'note', 'annotation')
                     order by i.dateModified desc
-                    limit ?
+                    {limit_clause}
                     """,
-                    (max_items,),
+                    params,
                 ).fetchall()
             for row in rows:
                 item_id = int(row["itemID"])

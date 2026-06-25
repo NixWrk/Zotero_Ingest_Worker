@@ -272,12 +272,9 @@ class FullRunManager:
                     self._active_run_id = None
 
     def _run_intake(self, run_id: str, options: FullRunOptions) -> None:
-        self.state.update_full_run(
+        self._record_stage(
             run_id=run_id,
             phase="intake",
-            current_job_kind=None,
-            current_job_id=None,
-            event="intake",
             message="Ingest queue intake tick started.",
         )
         metadata = ZoteroMetadataProcessor(self.config)
@@ -300,14 +297,31 @@ class FullRunManager:
                 limit=options.queue_limit,
                 force=options.force,
             )
-        self.state.update_full_run(
+        self._record_stage(
             run_id=run_id,
             phase="intake_done",
-            current_job_kind=None,
-            current_job_id=None,
-            event="intake_done",
             message="Ingest queue intake tick finished.",
             metadata={key: _result_summary(value) for key, value in results.items()},
+        )
+
+    def _record_stage(
+        self,
+        run_id: str,
+        *,
+        phase: str,
+        message: str,
+        event: str | None = None,
+        current_job_kind: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        return self.state.update_full_run(
+            run_id=run_id,
+            phase=phase,
+            current_job_kind=current_job_kind,
+            current_job_id=None,
+            event=event or phase,
+            message=message,
+            metadata=metadata,
         )
 
     def _drain_action(
@@ -383,21 +397,16 @@ class FullRunManager:
             raise ValueError(f"Unsupported ingest action: {action}")
 
         phase, kind, message, callback = actions[action]
-        self.state.update_full_run(
+        self._record_stage(
             run_id=run_id,
             phase=phase,
             current_job_kind=kind,
-            current_job_id=None,
-            event=phase,
             message=message,
         )
         result = callback()
-        self.state.update_full_run(
+        self._record_stage(
             run_id=run_id,
             phase=f"{phase}_done",
-            current_job_kind=None,
-            current_job_id=None,
-            event=f"{phase}_done",
             message=_result_message(result),
             metadata=_result_summary(result),
         )

@@ -11,6 +11,9 @@ def test_local_zotero_reader_reads_extended_parent_metadata(tmp_path: Path) -> N
     storage_dir = data_dir / "storage" / "PDF1234"
     storage_dir.mkdir(parents=True)
     (storage_dir / "paper.pdf").write_bytes(b"%PDF")
+    newer_storage_dir = data_dir / "storage" / "PDFNEW1"
+    newer_storage_dir.mkdir(parents=True)
+    (newer_storage_dir / "newer.pdf").write_bytes(b"%PDF")
     html_storage_dir = data_dir / "storage" / "HTMLPDF1"
     html_storage_dir.mkdir(parents=True)
     (html_storage_dir / "paper.pdf.html").write_text("<html><body>article</body></html>", encoding="utf-8")
@@ -50,8 +53,10 @@ def test_local_zotero_reader_reads_extended_parent_metadata(tmp_path: Path) -> N
             insert into itemTypes values (1, 'journalArticle'), (2, 'attachment');
             insert into items values (10, 1, '2026-01-01', 'PARENT1', 42);
             insert into items values (20, 2, '2026-01-02', 'PDF1234', 7);
+            insert into items values (21, 2, '2026-01-03', 'PDFNEW1', 7);
             insert into items values (22, 2, '2026-01-02', 'HTMLPDF1', 7);
             insert into itemAttachments values (20, 10, 0, 'application/pdf', 'storage:paper.pdf');
+            insert into itemAttachments values (21, null, 0, 'application/pdf', 'storage:newer.pdf');
             insert into itemAttachments values (22, 10, 0, 'text/html', 'storage:paper.pdf.html');
             insert into fields values (1, 'title'), (2, 'DOI'), (3, 'extra');
             insert into itemDataValues values
@@ -88,7 +93,8 @@ def test_local_zotero_reader_reads_extended_parent_metadata(tmp_path: Path) -> N
     assert metadata.collections[0]["name"] == "Meine"
     assert metadata.relations[0]["object"] == "https://arxiv.org/abs/2401.01234"
     assert [item.key for item in items] == ["PARENT1"]
-    assert [item.key for item in pdf_attachments] == ["PDF1234"]
+    assert [item.key for item in pdf_attachments] == ["PDFNEW1", "PDF1234"]
+    assert [item.key for item in reader.iter_pdf_attachments(max_items=1)] == ["PDFNEW1"]
     inventory = reader.item_full_text_inventory(metadata)
     assert inventory["has_pdf"] is True
     assert inventory["has_html"] is True
@@ -99,8 +105,8 @@ def test_local_zotero_reader_reads_extended_parent_metadata(tmp_path: Path) -> N
     try:
         connection.executescript(
             """
-            insert into items values (21, 2, '2026-01-03', 'HTMLMHT1', 8);
-            insert into itemAttachments values (21, 10, 0, 'multipart/related', 'storage:article [SOURCE HTML].mhtml');
+            insert into items values (23, 2, '2026-01-04', 'HTMLMHT1', 8);
+            insert into itemAttachments values (23, 10, 0, 'multipart/related', 'storage:article [SOURCE HTML].mhtml');
             """
         )
         connection.commit()

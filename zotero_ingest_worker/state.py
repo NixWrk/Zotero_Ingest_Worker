@@ -1100,7 +1100,7 @@ class PipelineStateStore:
         *,
         job_type: str | None = None,
         statuses: set[str] | None = None,
-        limit: int = 100,
+        limit: int | None = 100,
     ) -> list[dict[str, Any]]:
         params: list[Any] = []
         clauses: list[str] = []
@@ -1112,7 +1112,9 @@ class PipelineStateStore:
             clauses.append(f"status in ({placeholders})")
             params.extend(sorted(statuses))
         where = f"where {' and '.join(clauses)}" if clauses else ""
-        params.append(limit)
+        limit_clause = "" if limit is None else "limit ?"
+        if limit is not None:
+            params.append(limit)
         with self._connect() as connection:
             rows = connection.execute(
                 f"""
@@ -1120,7 +1122,7 @@ class PipelineStateStore:
                 from metadata_jobs
                 {where}
                 order by created_at asc
-                limit ?
+                {limit_clause}
                 """,
                 params,
             ).fetchall()

@@ -33,6 +33,67 @@ from zotero_ingest_worker.relay_client import ZoteroRelayClient
 from zotero_ingest_worker.state import FileSignature, OcrStateStore
 
 
+def test_local_zotero_iter_pdf_attachments_accepts_unbounded_limit(tmp_path: Path) -> None:
+    data_dir = tmp_path / "Zotero_Test_Data"
+    storage_dir = data_dir / "storage"
+    for key, filename in {
+        "PDFNEW": "new.pdf",
+        "PDFOLD": "old.pdf",
+        "ORPHAN": "orphan.pdf",
+    }.items():
+        folder = storage_dir / key
+        folder.mkdir(parents=True)
+        (folder / filename).write_bytes(b"%PDF")
+    sqlite_path = data_dir / "zotero.sqlite"
+    connection = sqlite3.connect(sqlite_path)
+    try:
+        connection.executescript(
+            """
+            create table items (
+                itemID integer primary key,
+                key text not null,
+                dateModified timestamp
+            );
+            create table itemAttachments (
+                itemID integer primary key,
+                parentItemID int,
+                linkMode int,
+                contentType text,
+                path text
+            );
+            create table deletedItems (
+                itemID int primary key
+            );
+            insert into items (itemID, key, dateModified) values
+                (1, 'PDFOLD', '2026-01-01'),
+                (2, 'PDFNEW', '2026-01-02');
+            insert into itemAttachments
+                (itemID, parentItemID, linkMode, contentType, path)
+                values
+                (1, null, 0, 'application/pdf', 'storage:old.pdf'),
+                (2, null, 0, 'application/pdf', 'storage:new.pdf');
+            """
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    store = LocalZoteroStore(
+        SimpleNamespace(
+            zotero_data_dir=data_dir,
+            zotero_sqlite_path=sqlite_path,
+            resolved_storage_dir=storage_dir,
+        )
+    )
+
+    assert [item.key for item in store.iter_pdf_attachments(max_items=None)] == [
+        "PDFNEW",
+        "PDFOLD",
+        "ORPHAN",
+    ]
+    assert [item.key for item in store.iter_pdf_attachments(max_items=1)] == ["PDFNEW"]
+
+
 def _valid_full_article_assessment() -> dict[str, object]:
     return {
         "ok": True,

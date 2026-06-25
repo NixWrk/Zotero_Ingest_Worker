@@ -8,6 +8,14 @@ from zotero_ingest_worker.full_run import FullRunManager
 from zotero_ingest_worker.full_run_options import FullRunOptions
 from zotero_ingest_worker.full_run_plan import next_ingest_action
 from zotero_ingest_worker.full_run_results import _result_summary
+from zotero_ingest_worker.metadata_jobs import (
+    METADATA_JOB_ARXIV_HTML,
+    METADATA_JOB_ENRICH,
+    METADATA_JOB_FULL_TEXT,
+    METADATA_JOB_RESEARCHGATE_PDF,
+    METADATA_JOB_SCIHUB_PDF,
+    metadata_job_drain_handler,
+)
 from zotero_ingest_worker.metadata_processor import ZoteroMetadataProcessor
 
 
@@ -40,6 +48,15 @@ def test_result_summary_keeps_only_controller_event_fields() -> None:
     )
 
     assert summary == {"ok": True, "processed": 2, "failed": 1}
+
+
+def test_metadata_job_drain_dispatch_table_covers_active_job_types() -> None:
+    assert metadata_job_drain_handler(METADATA_JOB_ENRICH) == "_drain_enrich_job"
+    assert metadata_job_drain_handler(METADATA_JOB_ARXIV_HTML) == "_drain_arxiv_html_job"
+    assert metadata_job_drain_handler(METADATA_JOB_FULL_TEXT) == "_drain_full_text_job"
+    assert metadata_job_drain_handler(METADATA_JOB_RESEARCHGATE_PDF) == "_drain_researchgate_pdf_job"
+    assert metadata_job_drain_handler(METADATA_JOB_SCIHUB_PDF) == "_drain_scihub_pdf_job"
+    assert metadata_job_drain_handler("unknown") is None
 
 
 def test_full_text_backlog_scan_delegates_to_scanner(monkeypatch: Any) -> None:

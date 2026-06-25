@@ -113,15 +113,16 @@ class LocalZoteroStore:
         finally:
             connection.close()
 
-    def iter_pdf_attachments(self, *, max_items: int) -> Iterable[LocalAttachment]:
+    def iter_pdf_attachments(self, *, max_items: int | None) -> Iterable[LocalAttachment]:
         seen: set[str] = set()
-        known_sqlite_keys = self._sqlite_attachment_keys()
         for attachment in self._iter_sqlite_pdf_attachments(max_items=max_items):
             seen.add(attachment.key)
             yield attachment
-        if len(seen) >= max_items:
+        if max_items is not None and len(seen) >= max_items:
             return
-        for attachment in self._iter_storage_pdf_fallback(max_items=max_items - len(seen)):
+        remaining = None if max_items is None else max_items - len(seen)
+        known_sqlite_keys = self._sqlite_attachment_keys()
+        for attachment in self._iter_storage_pdf_fallback(max_items=remaining):
             if attachment.key not in seen and attachment.key not in known_sqlite_keys:
                 yield attachment
 
@@ -147,14 +148,16 @@ class LocalZoteroStore:
     def iter_html_attachments(
         self,
         *,
-        max_items: int,
+        max_items: int | None,
         generated_only: bool = False,
     ) -> Iterable[LocalAttachment]:
         connection = connect_readonly_sqlite(self.config.zotero_sqlite_path)
         connection.row_factory = sqlite3.Row
         try:
+            limit_clause = "" if max_items is None else "limit ?"
+            params: tuple[int, ...] = () if max_items is None else (max_items,)
             rows = connection.execute(
-                """
+                f"""
                 select
                   i.itemID,
                   i.key,
@@ -175,9 +178,9 @@ class LocalZoteroStore:
                     or lower(coalesce(ia.path, '')) like '%.htm%'
                   )
                 order by i.dateModified desc
-                limit ?
+                {limit_clause}
                 """,
-                (max_items,),
+                params,
             ).fetchall()
         finally:
             connection.close()
@@ -346,7 +349,7 @@ class LocalZoteroStore:
         *,
         collection: str,
         filename_contains: str | None = None,
-        max_items: int = 100,
+        max_items: int | None = 100,
     ) -> Iterable[LocalAttachment]:
         collection = collection.strip()
         if not collection:
@@ -355,8 +358,14 @@ class LocalZoteroStore:
         connection = connect_readonly_sqlite(self.config.zotero_sqlite_path)
         connection.row_factory = sqlite3.Row
         try:
+            limit_clause = "" if max_items is None else "limit ?"
+            params: tuple[object, ...] = (
+                (collection, collection)
+                if max_items is None
+                else (collection, collection, max_items)
+            )
             rows = connection.execute(
-                """
+                f"""
                 select distinct
                   i.itemID,
                   i.key,
@@ -381,9 +390,9 @@ class LocalZoteroStore:
                     or lower(coalesce(ia.path, '')) like '%.pdf%'
                   )
                 order by i.dateModified desc
-                limit ?
+                {limit_clause}
                 """,
-                (collection, collection, max_items),
+                params,
             ).fetchall()
         finally:
             connection.close()
@@ -423,16 +432,22 @@ class LocalZoteroStore:
     def iter_regular_items(
         self,
         *,
-        max_items: int,
+        max_items: int | None,
         collection: str | None = None,
     ) -> Iterable[LocalItemMetadata]:
         connection = connect_readonly_sqlite(self.config.zotero_sqlite_path)
         connection.row_factory = sqlite3.Row
         try:
+            limit_clause = "" if max_items is None else "limit ?"
             if collection:
                 collection = collection.strip()
+                params: tuple[object, ...] = (
+                    (collection, collection)
+                    if max_items is None
+                    else (collection, collection, max_items)
+                )
                 rows = connection.execute(
-                    """
+                    f"""
                     select distinct
                       i.itemID,
                       i.key,
@@ -448,13 +463,14 @@ class LocalZoteroStore:
                       and di.itemID is null
                       and coalesce(it.typeName, '') not in ('attachment', 'note', 'annotation')
                     order by i.dateModified desc
-                    limit ?
+                    {limit_clause}
                     """,
-                    (collection, collection, max_items),
+                    params,
                 ).fetchall()
             else:
+                params = () if max_items is None else (max_items,)
                 rows = connection.execute(
-                    """
+                    f"""
                     select
                       i.itemID,
                       i.key,
@@ -467,9 +483,9 @@ class LocalZoteroStore:
                     where di.itemID is null
                       and coalesce(it.typeName, '') not in ('attachment', 'note', 'annotation')
                     order by i.dateModified desc
-                    limit ?
+                    {limit_clause}
                     """,
-                    (max_items,),
+                    params,
                 ).fetchall()
             for row in rows:
                 item_id = int(row["itemID"])
@@ -663,7 +679,7 @@ class LocalZoteroStore:
         if not attachment.parent_item_id:
             return None
         target = filename.casefold()
-        for candidate in self._iter_sqlite_pdf_attachments(max_items=100000):
+        for candidate in self._iter_sqlite_pdf_attachments(max_items=None):
             if candidate.key == attachment.key:
                 continue
             if candidate.parent_item_id != attachment.parent_item_id:
@@ -680,14 +696,14 @@ class LocalZoteroStore:
     ) -> LocalAttachment | None:
         target = filename.casefold()
         exclude = exclude_key.strip() if exclude_key else None
-        for candidate in self._iter_sqlite_pdf_attachments(max_items=100000):
+        for candidate in self._iter_sqlite_pdf_attachments(max_items=None):
             if exclude and candidate.key == exclude:
                 continue
             if candidate.filename.casefold() == target:
                 return candidate
 
         known_sqlite_keys = self._sqlite_attachment_keys()
-        for candidate in self._iter_storage_pdf_fallback(max_items=100000):
+        for candidate in self._iter_storage_pdf_fallback(max_items=None):
             if exclude and candidate.key == exclude:
                 continue
             if candidate.key in known_sqlite_keys:
@@ -696,12 +712,14 @@ class LocalZoteroStore:
                 return candidate
         return None
 
-    def _iter_sqlite_pdf_attachments(self, *, max_items: int) -> Iterable[LocalAttachment]:
+    def _iter_sqlite_pdf_attachments(self, *, max_items: int | None) -> Iterable[LocalAttachment]:
         connection = connect_readonly_sqlite(self.config.zotero_sqlite_path)
         connection.row_factory = sqlite3.Row
         try:
+            limit_clause = "" if max_items is None else "limit ?"
+            params: tuple[int, ...] = () if max_items is None else (max_items,)
             rows = connection.execute(
-                """
+                f"""
                 select
                   i.itemID,
                   i.key,
@@ -721,9 +739,9 @@ class LocalZoteroStore:
                     or lower(coalesce(ia.path, '')) like '%.pdf%'
                   )
                 order by i.dateModified desc
-                limit ?
+                {limit_clause}
                 """,
-                (max_items,),
+                params,
             ).fetchall()
         finally:
             connection.close()
@@ -871,7 +889,7 @@ class LocalZoteroStore:
             require_exists=require_exists,
         )
 
-    def _iter_storage_pdf_fallback(self, *, max_items: int) -> Iterable[LocalAttachment]:
+    def _iter_storage_pdf_fallback(self, *, max_items: int | None) -> Iterable[LocalAttachment]:
         storage_root = self.config.resolved_storage_dir
         candidates: list[Path] = []
         try:
@@ -890,7 +908,7 @@ class LocalZoteroStore:
             except OSError:
                 continue
         candidates.sort(key=safe_mtime, reverse=True)
-        for file_path in candidates[:max_items]:
+        for file_path in candidates if max_items is None else candidates[:max_items]:
             yield LocalAttachment(
                 library_id=self.library_id,
                 data_dir=self.config.zotero_data_dir,

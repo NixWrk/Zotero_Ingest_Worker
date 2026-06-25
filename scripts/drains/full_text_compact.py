@@ -475,7 +475,7 @@ def _metadata_queue_summary(
             running_jobs = list_jobs(
                 job_type=job_type,
                 statuses={"running"},
-                limit=100000,
+                limit=None,
             )
             queue["owned_running"] = sum(
                 1 for job in running_jobs if job.get("lease_owner") == lease_owner
@@ -560,7 +560,8 @@ def _run_dynamic_parallel(args: argparse.Namespace) -> int:
                 break
 
             unleased_inflight = max(0, len(inflight) - owned_running)
-            available_queued = max(0, queued - unleased_inflight)
+            active_queue_claim = min(queued, max(running, owned_running))
+            available_queued = max(0, queued - active_queue_claim - unleased_inflight)
             desired_active = min(max_workers, len(inflight) + available_queued)
             while (
                 queued > 0

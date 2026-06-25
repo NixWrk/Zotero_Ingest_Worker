@@ -31,10 +31,7 @@ def attachment_backlog_scan(
 
     for library_config in processor._library_configs(library_id=library_id, data_dir=data_dir):
         zotero = LocalZoteroStore(library_config)
-        scan_limit = max_items if max_items is not None else max(
-            zotero.count_sqlite_pdf_attachments(),
-            1_000_000,
-        )
+        scan_limit = max_items if max_items is not None else None
         attachments = (
             zotero.iter_collection_pdf_attachments(
                 collection=collection,
@@ -94,7 +91,7 @@ def full_text_backlog_scan(
 
     for library_config in processor._library_configs(library_id=library_id, data_dir=data_dir):
         zotero = LocalZoteroStore(library_config)
-        scan_limit = max_items if max_items is not None else 1_000_000
+        scan_limit = max_items if max_items is not None else None
         for metadata in zotero.iter_regular_items(
             max_items=scan_limit,
             collection=collection,
@@ -158,7 +155,7 @@ def scihub_pdf_backlog_scan(
 
     for library_config in processor._library_configs(library_id=library_id, data_dir=data_dir):
         zotero = LocalZoteroStore(library_config)
-        scan_limit = max_items if max_items is not None else 1_000_000
+        scan_limit = max_items if max_items is not None else None
         for metadata in zotero.iter_regular_items(
             max_items=scan_limit,
             collection=collection,

@@ -58,6 +58,7 @@ from .metadata_jobs import (
     METADATA_JOB_RESEARCHGATE_PDF,
     METADATA_JOB_SCIHUB_PDF,
     metadata_enricher_config_kwargs,
+    metadata_job_drain_handler,
     metadata_queue_key,
 )
 from .metadata_processor_helpers import (
@@ -688,7 +689,7 @@ class ZoteroMetadataProcessor:
         recovered = self.state.recover_expired_metadata_jobs(job_type=job_type)
         owner = metadata_job_owner()
         lease_seconds = max(int(getattr(self.config, "metadata_job_lease_seconds", 900)), 60)
-        effective_limit = limit if limit > 0 else 1_000_000
+        effective_limit = limit if limit > 0 else None
         workers = self._drain_worker_count(limit=effective_limit)
 
         if workers == 1:
@@ -730,24 +731,24 @@ class ZoteroMetadataProcessor:
             "results": results,
         }
 
-    def _drain_worker_count(self, *, limit: int) -> int:
+    def _drain_worker_count(self, *, limit: int | None) -> int:
         max_workers = max(int(getattr(self.config, "metadata_drain_max_workers", 1)), 1)
-        if limit <= 1:
+        if limit is not None and limit <= 1:
             return 1
-        return min(limit, max_workers)
+        return max_workers if limit is None else min(limit, max_workers)
 
     def _drain_leased_jobs_sequential(
         self,
         *,
         job_type: str,
-        limit: int,
+        limit: int | None,
         owner: str,
         lease_seconds: int,
         require_relay: bool,
         policy: str | None,
     ) -> list[dict[str, Any]]:
         results: list[dict[str, Any]] = []
-        while len(results) < limit:
+        while limit is None or len(results) < limit:
             job = self.state.lease_next_metadata_job(
                 job_type=job_type,
                 owner=owner,
@@ -769,7 +770,7 @@ class ZoteroMetadataProcessor:
         self,
         *,
         job_type: str,
-        limit: int,
+        limit: int | None,
         workers: int,
         owner: str,
         lease_seconds: int,
@@ -785,10 +786,11 @@ class ZoteroMetadataProcessor:
             local_results: list[dict[str, Any]] = []
             worker_owner = f"{owner}-{worker_index + 1}"
             while True:
-                with counter_lock:
-                    if leased_slots >= limit:
-                        return local_results
-                    leased_slots += 1
+                if limit is not None:
+                    with counter_lock:
+                        if leased_slots >= limit:
+                            return local_results
+                        leased_slots += 1
                 job = processor.state.lease_next_metadata_job(
                     job_type=job_type,
                     owner=worker_owner,
@@ -823,25 +825,38 @@ class ZoteroMetadataProcessor:
         require_relay: bool,
         policy: str | None,
     ) -> dict[str, Any]:
-        if job_type == METADATA_JOB_ENRICH:
-            return self._drain_enrich_job(
+        handler_name = metadata_job_drain_handler(job_type)
+        handler = getattr(self, handler_name, None) if handler_name else None
+        if handler is not None:
+            return handler(
                 job,
-                require_relay=require_relay,
-                policy=policy or self.config.metadata_policy,
+                **self._drain_job_kwargs(
+                    job_type=job_type,
+                    require_relay=require_relay,
+                    policy=policy,
+                ),
             )
-        if job_type == METADATA_JOB_ARXIV_HTML:
-            return self._drain_arxiv_html_job(job, require_relay=require_relay)
-        if job_type == METADATA_JOB_FULL_TEXT:
-            return self._drain_full_text_job(job)
-        if job_type == METADATA_JOB_RESEARCHGATE_PDF:
-            return self._drain_researchgate_pdf_job(job)
-        if job_type == METADATA_JOB_SCIHUB_PDF:
-            return self._drain_scihub_pdf_job(job)
         return self.state.mark_metadata_job_failed(
             job_id=str(job["job_id"]),
             message=f"Unknown metadata job type: {job_type}",
             retryable=False,
         )
+
+    def _drain_job_kwargs(
+        self,
+        *,
+        job_type: str,
+        require_relay: bool,
+        policy: str | None,
+    ) -> dict[str, Any]:
+        if job_type == METADATA_JOB_ENRICH:
+            return {
+                "require_relay": require_relay,
+                "policy": policy or self.config.metadata_policy,
+            }
+        if job_type == METADATA_JOB_ARXIV_HTML:
+            return {"require_relay": require_relay}
+        return {}
 
     def _drain_enrich_job(
         self,
@@ -1780,7 +1795,7 @@ class ZoteroMetadataProcessor:
             return None
         target = filename.casefold()
         zotero = LocalZoteroStore(self._config_for_attachment(attachment))
-        for candidate in zotero.iter_html_attachments(max_items=100000):
+        for candidate in zotero.iter_html_attachments(max_items=None):
             if candidate.parent_item_id != attachment.parent_item_id:
                 continue
             if candidate.filename.casefold() == target:

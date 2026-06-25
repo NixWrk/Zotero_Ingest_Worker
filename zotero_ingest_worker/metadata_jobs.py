@@ -10,6 +10,18 @@ METADATA_JOB_FULL_TEXT = "full_text"
 METADATA_JOB_RESEARCHGATE_PDF = "researchgate_pdf"
 METADATA_JOB_SCIHUB_PDF = "scihub_pdf"
 
+_METADATA_JOB_DRAIN_HANDLERS = {
+    METADATA_JOB_ENRICH: "_drain_enrich_job",
+    METADATA_JOB_ARXIV_HTML: "_drain_arxiv_html_job",
+    METADATA_JOB_FULL_TEXT: "_drain_full_text_job",
+    METADATA_JOB_RESEARCHGATE_PDF: "_drain_researchgate_pdf_job",
+    METADATA_JOB_SCIHUB_PDF: "_drain_scihub_pdf_job",
+}
+
+
+def metadata_job_drain_handler(job_type: str) -> str | None:
+    return _METADATA_JOB_DRAIN_HANDLERS.get(job_type)
+
 
 def metadata_enricher_config_kwargs(config: Any) -> dict[str, Any]:
     return {

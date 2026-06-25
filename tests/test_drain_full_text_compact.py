@@ -211,7 +211,7 @@ def test_full_text_queue_summary_counts_owned_running_jobs(monkeypatch) -> None:
         ) -> list[dict[str, object]]:
             assert job_type == "full_text"
             assert statuses == {"running"}
-            assert limit == 100000
+            assert limit is None
             return [
                 {"lease_owner": "owner-a"},
                 {"lease_owner": "owner-b"},
@@ -550,7 +550,7 @@ def test_dynamic_scihub_run_uses_scihub_queue(monkeypatch, tmp_path) -> None:
         ) -> list[dict[str, object]]:
             assert job_type == "scihub_pdf"
             assert statuses == {"running"}
-            assert limit == 100000
+            assert limit is None
             with lock:
                 return [{"lease_owner": drain_full_text_compact.metadata_job_owner()}] * state["active"]
 
