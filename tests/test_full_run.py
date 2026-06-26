@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Any
 
 from zotero_ingest_worker.full_run import FullRunManager, FullRunOptions, _result_failure_count
 from zotero_ingest_worker.state import OcrStateStore
@@ -54,6 +55,19 @@ def test_ingest_run_next_action_prioritizes_metadata_then_file_discovery() -> No
     assert full_text_action == "full_text"
 
 
+def test_ingest_run_ready_actions_skip_stages_already_running() -> None:
+    options = FullRunOptions(metadata_drain=True, full_text_drain=True, arxiv_html_drain=True)
+
+    actions = FullRunManager._ready_actions(
+        options,
+        metadata_queue={"queued": 1, "running": 1},
+        full_text_queue={"queued": 1, "running": 0},
+        arxiv_html_queue={"queued": 1, "running": 0},
+    )
+
+    assert actions == ["full_text", "arxiv_html"]
+
+
 def test_ingest_run_next_action_covers_file_fallbacks() -> None:
     options = FullRunOptions(
         metadata_drain=True,
@@ -104,6 +118,37 @@ def test_ingest_run_next_action_covers_file_fallbacks() -> None:
 def test_ingest_run_counts_batch_failures_for_completion_status() -> None:
     assert _result_failure_count({"processed": 1, "failed": 1}) == 1
     assert _result_failure_count({"processed": 1, "failed": 0}) == 0
+
+
+def test_ingest_run_drains_ready_actions_together(monkeypatch) -> None:
+    manager = object.__new__(FullRunManager)
+    manager.config = object()
+    calls: list[str] = []
+
+    def fake_processor(config: object) -> object:
+        return object()
+
+    def fake_drain_action(
+        *,
+        run_id: str,
+        action: str,
+        options: FullRunOptions,
+        metadata: object,
+    ) -> dict[str, Any]:
+        calls.append(action)
+        return {"processed": 1, "failed": 0}
+
+    monkeypatch.setattr("zotero_ingest_worker.full_run.ZoteroMetadataProcessor", fake_processor)
+    manager._drain_action = fake_drain_action
+
+    results = manager._drain_parallel_actions(
+        run_id="run-1",
+        actions=["metadata", "full_text"],
+        options=FullRunOptions(),
+    )
+
+    assert set(results) == {"metadata", "full_text"}
+    assert sorted(calls) == ["full_text", "metadata"]
 
 
 def test_ingest_run_state_records_status_and_events(tmp_path: Path) -> None:

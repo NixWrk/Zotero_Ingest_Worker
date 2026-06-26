@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import concurrent.futures
 import threading
 import time
 from dataclasses import asdict
@@ -7,7 +8,7 @@ from typing import Any
 
 from .config import WorkerConfig
 from .full_run_options import FullRunOptions
-from .full_run_plan import next_ingest_action
+from .full_run_plan import next_ingest_action, ready_ingest_actions
 from .full_run_results import _result_failure_count, _result_message, _result_summary
 from .metadata_jobs import (
     METADATA_JOB_ARXIV_HTML,
@@ -126,7 +127,6 @@ class FullRunManager:
         return result
 
     def _run(self, run_id: str, options: FullRunOptions) -> None:
-        metadata = ZoteroMetadataProcessor(self.config)
         last_intake = 0.0
         idle_cycles = 0
         run_processed = 0
@@ -155,23 +155,7 @@ class FullRunManager:
                 scihub_pdf_queue = self.state.metadata_queue_summary(
                     job_type=METADATA_JOB_SCIHUB_PDF
                 )
-                running_jobs = (
-                    int(metadata_queue.get("running") or 0)
-                    + int(arxiv_html_queue.get("running") or 0)
-                    + int(full_text_queue.get("running") or 0)
-                    + int(researchgate_pdf_queue.get("running") or 0)
-                    + int(scihub_pdf_queue.get("running") or 0)
-                )
-                if running_jobs > 0:
-                    self._record_stage(
-                        run_id=run_id,
-                        phase="waiting_for_running_job",
-                        message="Ingest run is waiting for active metadata jobs to finish.",
-                    )
-                    time.sleep(options.poll_seconds)
-                    continue
-
-                action = self._next_action(
+                actions = self._ready_actions(
                     options,
                     metadata_queue=metadata_queue,
                     arxiv_html_queue=arxiv_html_queue,
@@ -183,19 +167,36 @@ class FullRunManager:
                         and not scihub_pdf_backlog_scanned
                     ),
                 )
-                if action is not None:
-                    result = self._drain_action(
+                if actions:
+                    results = self._drain_parallel_actions(
                         run_id=run_id,
-                        action=action,
+                        actions=actions,
                         options=options,
-                        metadata=metadata,
                     )
-                    if action == "scihub_pdf_backlog":
+                    if "scihub_pdf_backlog" in results:
                         scihub_pdf_backlog_scanned = True
-                    else:
+                    for action, result in results.items():
+                        if action == "scihub_pdf_backlog":
+                            continue
                         run_processed += int(result.get("processed") or 0)
                         run_failed += _result_failure_count(result)
                     idle_cycles = 0
+                    continue
+
+                running_jobs = self._running_jobs(
+                    metadata_queue=metadata_queue,
+                    arxiv_html_queue=arxiv_html_queue,
+                    full_text_queue=full_text_queue,
+                    researchgate_pdf_queue=researchgate_pdf_queue,
+                    scihub_pdf_queue=scihub_pdf_queue,
+                )
+                if running_jobs > 0:
+                    self._record_stage(
+                        run_id=run_id,
+                        phase="waiting_for_running_job",
+                        message="Ingest run is waiting for active metadata jobs to finish.",
+                    )
+                    time.sleep(options.poll_seconds)
                     continue
 
                 idle_cycles += 1
@@ -404,6 +405,43 @@ class FullRunManager:
         )
         return result
 
+    def _drain_parallel_actions(
+        self,
+        *,
+        run_id: str,
+        actions: list[str],
+        options: FullRunOptions,
+    ) -> dict[str, dict[str, Any]]:
+        if not actions:
+            return {}
+        if len(actions) == 1:
+            action = actions[0]
+            return {
+                action: self._drain_action(
+                    run_id=run_id,
+                    action=action,
+                    options=options,
+                    metadata=ZoteroMetadataProcessor(self.config),
+                )
+            }
+
+        results: dict[str, dict[str, Any]] = {}
+        with concurrent.futures.ThreadPoolExecutor(max_workers=len(actions)) as executor:
+            futures = {
+                executor.submit(
+                    self._drain_action,
+                    run_id=run_id,
+                    action=action,
+                    options=options,
+                    metadata=ZoteroMetadataProcessor(self.config),
+                ): action
+                for action in actions
+            }
+            for future in concurrent.futures.as_completed(futures):
+                action = futures[future]
+                results[action] = future.result()
+        return results
+
     @staticmethod
     def _next_action(
         options: FullRunOptions,
@@ -423,4 +461,42 @@ class FullRunManager:
             researchgate_pdf_queue=researchgate_pdf_queue,
             scihub_pdf_queue=scihub_pdf_queue,
             scihub_pdf_backlog_pending=scihub_pdf_backlog_pending,
+        )
+
+    @staticmethod
+    def _ready_actions(
+        options: FullRunOptions,
+        *,
+        metadata_queue: dict[str, Any] | None = None,
+        arxiv_html_queue: dict[str, Any] | None = None,
+        full_text_queue: dict[str, Any] | None = None,
+        researchgate_pdf_queue: dict[str, Any] | None = None,
+        scihub_pdf_queue: dict[str, Any] | None = None,
+        scihub_pdf_backlog_pending: bool = False,
+    ) -> list[str]:
+        return ready_ingest_actions(
+            options,
+            metadata_queue=metadata_queue,
+            arxiv_html_queue=arxiv_html_queue,
+            full_text_queue=full_text_queue,
+            researchgate_pdf_queue=researchgate_pdf_queue,
+            scihub_pdf_queue=scihub_pdf_queue,
+            scihub_pdf_backlog_pending=scihub_pdf_backlog_pending,
+        )
+
+    @staticmethod
+    def _running_jobs(
+        *,
+        metadata_queue: dict[str, Any],
+        arxiv_html_queue: dict[str, Any],
+        full_text_queue: dict[str, Any],
+        researchgate_pdf_queue: dict[str, Any],
+        scihub_pdf_queue: dict[str, Any],
+    ) -> int:
+        return (
+            int(metadata_queue.get("running") or 0)
+            + int(arxiv_html_queue.get("running") or 0)
+            + int(full_text_queue.get("running") or 0)
+            + int(researchgate_pdf_queue.get("running") or 0)
+            + int(scihub_pdf_queue.get("running") or 0)
         )
