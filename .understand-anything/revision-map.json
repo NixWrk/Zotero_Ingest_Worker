@@ -1,0 +1,508 @@
+{
+  "repo": "Zotero_Automation/zotero-ingest-worker",
+  "root": "D:\\Elvis_projects\\Zotero_Automation\\zotero-ingest-worker",
+  "files": 157,
+  "skippedFiles": [],
+  "nodes": 1342,
+  "edges": 2208,
+  "functions": 1085,
+  "classes": 100,
+  "exports": 1185,
+  "callEntries": 11299,
+  "sections": 83,
+  "definitions": 0,
+  "endpoints": 0,
+  "services": 1,
+  "resources": 0,
+  "imports": 295,
+  "categories": {
+    "infra": 2,
+    "config": 3,
+    "docs": 11,
+    "code": 140,
+    "markup": 1
+  },
+  "highRiskFiles": [
+    {
+      "id": "file:repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/html_sources.py",
+      "filePath": "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/html_sources.py",
+      "score": 16,
+      "metrics": {
+        "lines": 1241,
+        "nonEmptyLines": 1101,
+        "functions": 54,
+        "classes": 5,
+        "exports": 59,
+        "calls": 473,
+        "sections": 0,
+        "definitions": 0,
+        "reviewMarkers": 0
+      }
+    },
+    {
+      "id": "file:zotero_ingest_worker/source_html_quality_audit.py",
+      "filePath": "zotero_ingest_worker/source_html_quality_audit.py",
+      "score": 16,
+      "metrics": {
+        "lines": 1125,
+        "nonEmptyLines": 1025,
+        "functions": 26,
+        "classes": 4,
+        "exports": 30,
+        "calls": 393,
+        "sections": 0,
+        "definitions": 0,
+        "reviewMarkers": 0
+      }
+    },
+    {
+      "id": "file:zoteropdf2md/arxiv_source_recovery.py",
+      "filePath": "zoteropdf2md/arxiv_source_recovery.py",
+      "score": 16,
+      "metrics": {
+        "lines": 784,
+        "nonEmptyLines": 683,
+        "functions": 34,
+        "classes": 4,
+        "exports": 38,
+        "calls": 271,
+        "sections": 0,
+        "definitions": 0,
+        "reviewMarkers": 0
+      }
+    },
+    {
+      "id": "file:tests/test_metadata_processor.py",
+      "filePath": "tests/test_metadata_processor.py",
+      "score": 14,
+      "metrics": {
+        "lines": 1921,
+        "nonEmptyLines": 1654,
+        "functions": 58,
+        "classes": 0,
+        "exports": 58,
+        "calls": 405,
+        "sections": 0,
+        "definitions": 0,
+        "reviewMarkers": 0
+      }
+    },
+    {
+      "id": "file:zoteropdf2md/web_html_polish.py",
+      "filePath": "zoteropdf2md/web_html_polish.py",
+      "score": 14,
+      "metrics": {
+        "lines": 1482,
+        "nonEmptyLines": 1281,
+        "functions": 65,
+        "classes": 2,
+        "exports": 67,
+        "calls": 560,
+        "sections": 0,
+        "definitions": 0,
+        "reviewMarkers": 0
+      }
+    },
+    {
+      "id": "file:zotero_ingest_worker/full_text_attachment.py",
+      "filePath": "zotero_ingest_worker/full_text_attachment.py",
+      "score": 14,
+      "metrics": {
+        "lines": 755,
+        "nonEmptyLines": 663,
+        "functions": 30,
+        "classes": 1,
+        "exports": 31,
+        "calls": 301,
+        "sections": 0,
+        "definitions": 0,
+        "reviewMarkers": 0
+      }
+    },
+    {
+      "id": "file:scripts/source_html_audit_cleanup.py",
+      "filePath": "scripts/source_html_audit_cleanup.py",
+      "score": 14,
+      "metrics": {
+        "lines": 735,
+        "nonEmptyLines": 661,
+        "functions": 28,
+        "classes": 0,
+        "exports": 28,
+        "calls": 302,
+        "sections": 0,
+        "definitions": 0,
+        "reviewMarkers": 0
+      }
+    },
+    {
+      "id": "file:tests/test_web_html_polish.py",
+      "filePath": "tests/test_web_html_polish.py",
+      "score": 12,
+      "metrics": {
+        "lines": 1566,
+        "nonEmptyLines": 1364,
+        "functions": 49,
+        "classes": 0,
+        "exports": 49,
+        "calls": 128,
+        "sections": 0,
+        "definitions": 0,
+        "reviewMarkers": 0
+      }
+    },
+    {
+      "id": "file:zotero_ingest_worker/local_attachment_sync.py",
+      "filePath": "zotero_ingest_worker/local_attachment_sync.py",
+      "score": 11,
+      "metrics": {
+        "lines": 929,
+        "nonEmptyLines": 860,
+        "functions": 18,
+        "classes": 0,
+        "exports": 18,
+        "calls": 276,
+        "sections": 0,
+        "definitions": 0,
+        "reviewMarkers": 0
+      }
+    },
+    {
+      "id": "file:scripts/drains/full_text_compact.py",
+      "filePath": "scripts/drains/full_text_compact.py",
+      "score": 11,
+      "metrics": {
+        "lines": 846,
+        "nonEmptyLines": 761,
+        "functions": 18,
+        "classes": 1,
+        "exports": 19,
+        "calls": 442,
+        "sections": 0,
+        "definitions": 0,
+        "reviewMarkers": 0
+      }
+    },
+    {
+      "id": "file:scripts/bulk_repolish_source_html.py",
+      "filePath": "scripts/bulk_repolish_source_html.py",
+      "score": 11,
+      "metrics": {
+        "lines": 715,
+        "nonEmptyLines": 642,
+        "functions": 24,
+        "classes": 2,
+        "exports": 26,
+        "calls": 255,
+        "sections": 0,
+        "definitions": 0,
+        "reviewMarkers": 0
+      }
+    },
+    {
+      "id": "file:zotero_ingest_worker/metadata_processor_helpers.py",
+      "filePath": "zotero_ingest_worker/metadata_processor_helpers.py",
+      "score": 11,
+      "metrics": {
+        "lines": 569,
+        "nonEmptyLines": 479,
+        "functions": 38,
+        "classes": 0,
+        "exports": 38,
+        "calls": 177,
+        "sections": 0,
+        "definitions": 0,
+        "reviewMarkers": 0
+      }
+    },
+    {
+      "id": "file:zotero_ingest_worker/state.py",
+      "filePath": "zotero_ingest_worker/state.py",
+      "score": 9,
+      "metrics": {
+        "lines": 1971,
+        "nonEmptyLines": 1860,
+        "functions": 9,
+        "classes": 2,
+        "exports": 11,
+        "calls": 519,
+        "sections": 0,
+        "definitions": 0,
+        "reviewMarkers": 0
+      }
+    },
+    {
+      "id": "file:zotero_ingest_worker/metadata_processor.py",
+      "filePath": "zotero_ingest_worker/metadata_processor.py",
+      "score": 9,
+      "metrics": {
+        "lines": 1884,
+        "nonEmptyLines": 1785,
+        "functions": 3,
+        "classes": 1,
+        "exports": 4,
+        "calls": 443,
+        "sections": 0,
+        "definitions": 0,
+        "reviewMarkers": 0
+      }
+    },
+    {
+      "id": "file:zotero_ingest_worker/local_zotero.py",
+      "filePath": "zotero_ingest_worker/local_zotero.py",
+      "score": 9,
+      "metrics": {
+        "lines": 1034,
+        "nonEmptyLines": 965,
+        "functions": 6,
+        "classes": 3,
+        "exports": 9,
+        "calls": 218,
+        "sections": 0,
+        "definitions": 0,
+        "reviewMarkers": 0
+      }
+    },
+    {
+      "id": "file:tests/test_drain_full_text_compact.py",
+      "filePath": "tests/test_drain_full_text_compact.py",
+      "score": 9,
+      "metrics": {
+        "lines": 737,
+        "nonEmptyLines": 651,
+        "functions": 11,
+        "classes": 0,
+        "exports": 11,
+        "calls": 105,
+        "sections": 0,
+        "definitions": 0,
+        "reviewMarkers": 0
+      }
+    },
+    {
+      "id": "file:tests/test_source_html_quality_audit.py",
+      "filePath": "tests/test_source_html_quality_audit.py",
+      "score": 9,
+      "metrics": {
+        "lines": 707,
+        "nonEmptyLines": 617,
+        "functions": 23,
+        "classes": 0,
+        "exports": 23,
+        "calls": 106,
+        "sections": 0,
+        "definitions": 0,
+        "reviewMarkers": 0
+      }
+    },
+    {
+      "id": "file:zotero_ingest_worker/full_text_discovery.py",
+      "filePath": "zotero_ingest_worker/full_text_discovery.py",
+      "score": 8,
+      "metrics": {
+        "lines": 537,
+        "nonEmptyLines": 478,
+        "functions": 19,
+        "classes": 2,
+        "exports": 21,
+        "calls": 222,
+        "sections": 0,
+        "definitions": 0,
+        "reviewMarkers": 0
+      }
+    },
+    {
+      "id": "file:scripts/providers/researchgate_pdf_browser_download.py",
+      "filePath": "scripts/providers/researchgate_pdf_browser_download.py",
+      "score": 8,
+      "metrics": {
+        "lines": 465,
+        "nonEmptyLines": 423,
+        "functions": 15,
+        "classes": 0,
+        "exports": 15,
+        "calls": 151,
+        "sections": 0,
+        "definitions": 0,
+        "reviewMarkers": 0
+      }
+    },
+    {
+      "id": "file:zotero_ingest_worker/config.py",
+      "filePath": "zotero_ingest_worker/config.py",
+      "score": 8,
+      "metrics": {
+        "lines": 463,
+        "nonEmptyLines": 396,
+        "functions": 18,
+        "classes": 1,
+        "exports": 19,
+        "calls": 227,
+        "sections": 0,
+        "definitions": 0,
+        "reviewMarkers": 0
+      }
+    },
+    {
+      "id": "file:zoteropdf2md/web_polish/core.py",
+      "filePath": "zoteropdf2md/web_polish/core.py",
+      "score": 8,
+      "metrics": {
+        "lines": 405,
+        "nonEmptyLines": 350,
+        "functions": 12,
+        "classes": 4,
+        "exports": 16,
+        "calls": 94,
+        "sections": 0,
+        "definitions": 0,
+        "reviewMarkers": 0
+      }
+    },
+    {
+      "id": "file:zotero_ingest_worker/article_standard.py",
+      "filePath": "zotero_ingest_worker/article_standard.py",
+      "score": 8,
+      "metrics": {
+        "lines": 370,
+        "nonEmptyLines": 320,
+        "functions": 21,
+        "classes": 0,
+        "exports": 21,
+        "calls": 159,
+        "sections": 0,
+        "definitions": 0,
+        "reviewMarkers": 0
+      }
+    },
+    {
+      "id": "file:repositories/zotero-metadata-enrichment/tests/test_html_sources.py",
+      "filePath": "repositories/zotero-metadata-enrichment/tests/test_html_sources.py",
+      "score": 6,
+      "metrics": {
+        "lines": 692,
+        "nonEmptyLines": 577,
+        "functions": 23,
+        "classes": 1,
+        "exports": 24,
+        "calls": 129,
+        "sections": 0,
+        "definitions": 0,
+        "reviewMarkers": 0
+      }
+    },
+    {
+      "id": "file:repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/enrichment.py",
+      "filePath": "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/enrichment.py",
+      "score": 6,
+      "metrics": {
+        "lines": 582,
+        "nonEmptyLines": 536,
+        "functions": 9,
+        "classes": 2,
+        "exports": 11,
+        "calls": 197,
+        "sections": 0,
+        "definitions": 0,
+        "reviewMarkers": 0
+      }
+    },
+    {
+      "id": "file:tests/test_full_text_attachment.py",
+      "filePath": "tests/test_full_text_attachment.py",
+      "score": 6,
+      "metrics": {
+        "lines": 551,
+        "nonEmptyLines": 482,
+        "functions": 14,
+        "classes": 0,
+        "exports": 14,
+        "calls": 104,
+        "sections": 0,
+        "definitions": 0,
+        "reviewMarkers": 0
+      }
+    },
+    {
+      "id": "file:zotero_ingest_worker/scihub_pdf.py",
+      "filePath": "zotero_ingest_worker/scihub_pdf.py",
+      "score": 6,
+      "metrics": {
+        "lines": 445,
+        "nonEmptyLines": 385,
+        "functions": 13,
+        "classes": 3,
+        "exports": 16,
+        "calls": 142,
+        "sections": 0,
+        "definitions": 0,
+        "reviewMarkers": 0
+      }
+    },
+    {
+      "id": "file:repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/discovery.py",
+      "filePath": "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/discovery.py",
+      "score": 6,
+      "metrics": {
+        "lines": 425,
+        "nonEmptyLines": 402,
+        "functions": 3,
+        "classes": 2,
+        "exports": 5,
+        "calls": 151,
+        "sections": 0,
+        "definitions": 0,
+        "reviewMarkers": 0
+      }
+    },
+    {
+      "id": "file:zoteropdf2md/html_links.py",
+      "filePath": "zoteropdf2md/html_links.py",
+      "score": 6,
+      "metrics": {
+        "lines": 365,
+        "nonEmptyLines": 306,
+        "functions": 19,
+        "classes": 1,
+        "exports": 20,
+        "calls": 124,
+        "sections": 0,
+        "definitions": 0,
+        "reviewMarkers": 0
+      }
+    },
+    {
+      "id": "file:zoteropdf2md/web_polish/iop.py",
+      "filePath": "zoteropdf2md/web_polish/iop.py",
+      "score": 6,
+      "metrics": {
+        "lines": 340,
+        "nonEmptyLines": 291,
+        "functions": 18,
+        "classes": 0,
+        "exports": 18,
+        "calls": 130,
+        "sections": 0,
+        "definitions": 0,
+        "reviewMarkers": 0
+      }
+    },
+    {
+      "id": "file:zoteropdf2md/web_polish/springer_nature.py",
+      "filePath": "zoteropdf2md/web_polish/springer_nature.py",
+      "score": 6,
+      "metrics": {
+        "lines": 301,
+        "nonEmptyLines": 264,
+        "functions": 12,
+        "classes": 0,
+        "exports": 12,
+        "calls": 107,
+        "sections": 0,
+        "definitions": 0,
+        "reviewMarkers": 0
+      }
+    }
+  ],
+  "graphPath": "D:\\Elvis_projects\\Zotero_Automation\\zotero-ingest-worker\\.understand-anything\\knowledge-graph.json"
+}

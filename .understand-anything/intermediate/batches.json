@@ -1,0 +1,4047 @@
+{
+  "schemaVersion": 1,
+  "algorithm": "louvain",
+  "totalFiles": 157,
+  "totalBatches": 10,
+  "exportsByPath": {
+    "repositories/zotero-arxiv-html-ingest/src/zotero_arxiv_html_ingest/__init__.py": [],
+    "repositories/zotero-arxiv-html-ingest/src/zotero_arxiv_html_ingest/cli.py": [
+      "main"
+    ],
+    "repositories/zotero-arxiv-html-ingest/src/zotero_arxiv_html_ingest/html_fetch.py": [
+      "ArxivHtmlClient",
+      "validate_arxiv_html"
+    ],
+    "repositories/zotero-arxiv-html-ingest/src/zotero_arxiv_html_ingest/identifiers.py": [
+      "extract_arxiv_id_from_text",
+      "normalize_arxiv_id"
+    ],
+    "repositories/zotero-arxiv-html-ingest/src/zotero_arxiv_html_ingest/ingest.py": [
+      "IngestConfig",
+      "ArxivHtmlIngestor",
+      "artifact_from_existing"
+    ],
+    "repositories/zotero-arxiv-html-ingest/src/zotero_arxiv_html_ingest/lookup.py": [
+      "ArxivLookupClient",
+      "parse_arxiv_atom",
+      "entry_text"
+    ],
+    "repositories/zotero-arxiv-html-ingest/src/zotero_arxiv_html_ingest/models.py": [
+      "LocalAttachment",
+      "ArxivCandidate",
+      "ArxivHtmlArtifact"
+    ],
+    "repositories/zotero-arxiv-html-ingest/src/zotero_arxiv_html_ingest/relay.py": [
+      "ZoteroRelayClient"
+    ],
+    "repositories/zotero-arxiv-html-ingest/src/zotero_arxiv_html_ingest/storage.py": [
+      "write_arxiv_html_artifact",
+      "arxiv_html_filename",
+      "copy_relay_sibling_local",
+      "file_signature",
+      "safe_filename"
+    ],
+    "repositories/zotero-arxiv-html-ingest/src/zotero_arxiv_html_ingest/text.py": [
+      "normalize_space",
+      "strip_html",
+      "normalize_title",
+      "title_match_score"
+    ],
+    "repositories/zotero-arxiv-html-ingest/tests/test_html_storage.py": [
+      "test_validate_arxiv_html",
+      "test_arxiv_html_filename",
+      "test_write_artifact"
+    ],
+    "repositories/zotero-arxiv-html-ingest/tests/test_identifiers_lookup.py": [
+      "test_extract_arxiv_id_prefers_doi_identifier",
+      "test_parse_arxiv_atom"
+    ],
+    "repositories/zotero-arxiv-html-ingest/tests/test_ingest.py": [
+      "FakeLookup",
+      "FakeHtml",
+      "test_lookup_candidate_from_metadata_text",
+      "test_ingest_without_relay_writes_artifact"
+    ],
+    "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/__init__.py": [],
+    "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/attachment_types.py": [
+      "is_pdf_attachment",
+      "is_html_attachment",
+      "base_content_type",
+      "has_path_suffix"
+    ],
+    "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/cli.py": [
+      "main",
+      "_discover_for_args",
+      "_attachment_and_metadata_for_args"
+    ],
+    "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/diff.py": [
+      "build_metadata_patch",
+      "build_metadata_diff",
+      "merge_extra",
+      "filter_redundant_extra_lines"
+    ],
+    "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/discovery.py": [
+      "SourceDiscoveryResult",
+      "SourceDiscovery",
+      "dedupe_locations",
+      "expand_identifiers_from_candidates",
+      "provider_http_event"
+    ],
+    "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/enrichment.py": [
+      "EnricherConfig",
+      "MetadataEnricher",
+      "best_candidate",
+      "candidate_has_patch",
+      "merge_metadata_candidates",
+      "provider_priority",
+      "metadata_haystack",
+      "title_for_lookup",
+      "translation_server_identifiers",
+      "split_identifier_values",
+      "metadata_http_url"
+    ],
+    "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/fulltext.py": [
+      "FullTextDownloadResult",
+      "discover_and_download_full_text",
+      "full_text_pdf_locations",
+      "dedupe_full_text_locations"
+    ],
+    "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/html_sources.py": [
+      "ArticleHtmlAssessment",
+      "HtmlSourceFetchResult",
+      "download_html_sources",
+      "_html_probe_priority",
+      "expanded_html_probe_locations",
+      "alternate_html_probe_locations",
+      "dedupe_html_probe_locations",
+      "normalized_probe_url",
+      "fetch_html_source",
+      "should_probe_for_html",
+      "resolved_html_kind",
+      "landing_html_rejection_reason",
+      "is_pdf_location",
+      "is_probable_pdf_url",
+      "derived_pdf_locations_from_html_body",
+      "citation_pdf_urls_from_html",
+      "iop_pdf_url_from_article_url",
+      "is_supplement_pdf_url",
+      "dedupe_derived_pdf_locations",
+      "is_arxiv_abs_landing_url",
+      "arxiv_id_from_html_candidate_url",
+      "canonical_article_html_url",
+      "looks_like_full_article_url",
+      "looks_like_ojs_article_view_url",
+      "looks_like_access_landing",
+      "looks_like_publisher_abstract_or_chapter",
+      "looks_like_html",
+      "assess_article_html",
+      "html_profile_for_location",
+      "normalize_html_profile",
+      "article_min_text_chars",
+      "article_markers",
+      "article_section_markers",
+      "has_article_structure",
+      "has_article_body_evidence",
+      "is_challenge_html",
+      "is_limited_access_preview_html",
+      "html_matches_expected_title",
+      "html_title",
+      "html_text",
+      "visible_html_text",
+      "significant_title_tokens",
+      "html_source_filename",
+      "safe_filename_part",
+      "write_html_snapshot",
+      "CitationPdfUrlParser",
+      "ResourceReferenceParser",
+      "document_resource_base_url",
+      "strip_base_tag",
+      "SnapshotAssetDownloader",
+      "parse_srcset",
+      "css_url_references",
+      "css_import_references",
+      "css_resource_references",
+      "should_skip_asset_url",
+      "resource_priority",
+      "is_css_resource",
+      "asset_filename",
+      "suffix_for_content_type"
+    ],
+    "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/identifiers.py": [
+      "extract_doi_from_text",
+      "normalize_doi",
+      "extract_arxiv_id_from_text",
+      "normalize_arxiv_id",
+      "extract_pmid_from_text",
+      "normalize_pmid",
+      "extract_pmcid_from_text",
+      "normalize_pmcid",
+      "extract_isbn_from_text",
+      "normalize_isbn"
+    ],
+    "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/local_zotero.py": [
+      "LocalZoteroReader",
+      "library_id_for_data_dir",
+      "connect_readonly",
+      "resolve_attachment_path",
+      "item_fields",
+      "item_creators",
+      "item_tags",
+      "item_collections",
+      "item_relations",
+      "optional_int"
+    ],
+    "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/models.py": [
+      "LocalAttachment",
+      "LocalItemMetadata",
+      "MetadataCandidate",
+      "FullTextLocation",
+      "EnrichmentResult"
+    ],
+    "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/pdf_sources.py": [
+      "PdfSourceFetchResult",
+      "download_pdf_sources",
+      "fetch_pdf_source",
+      "should_probe_for_pdf",
+      "is_pdf_response",
+      "pdf_source_filename",
+      "safe_filename_part",
+      "assess_pdf_bytes_identity",
+      "extract_pdf_text_sample",
+      "title_tokens_present"
+    ],
+    "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/providers/__init__.py": [],
+    "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/providers/arxiv.py": [
+      "ArxivClient",
+      "parse_arxiv_atom",
+      "entry_text",
+      "date_part"
+    ],
+    "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/providers/biorxiv.py": [
+      "BioRxivClient",
+      "biorxiv_record_to_candidate"
+    ],
+    "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/providers/common.py": [
+      "first_value",
+      "first_text",
+      "date_from_parts",
+      "compact_pages",
+      "location_dicts",
+      "candidate_with_locations"
+    ],
+    "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/providers/core.py": [
+      "CoreClient",
+      "core_work_to_candidate",
+      "core_locations"
+    ],
+    "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/providers/crossref.py": [
+      "CrossrefClient",
+      "crossref_work_to_candidate",
+      "crossref_date",
+      "crossref_locations",
+      "crossref_link_kind"
+    ],
+    "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/providers/datacite.py": [
+      "DataCiteClient",
+      "datacite_record_to_candidate",
+      "datacite_locations",
+      "guess_kind"
+    ],
+    "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/providers/doaj.py": [
+      "DoajClient",
+      "doaj_payload_to_candidate",
+      "doaj_bibjson_to_candidate",
+      "doaj_identifier",
+      "doaj_best_url",
+      "doaj_locations"
+    ],
+    "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/providers/europe_pmc.py": [
+      "EuropePmcClient",
+      "europe_pmc_result_to_candidate",
+      "europe_pmc_url",
+      "europe_pmc_locations"
+    ],
+    "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/providers/openaire.py": [
+      "OpenAireClient",
+      "openaire_payload_to_candidate",
+      "openaire_text",
+      "openaire_identifier",
+      "openaire_best_url",
+      "openaire_locations"
+    ],
+    "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/providers/openalex.py": [
+      "OpenAlexClient",
+      "openalex_work_to_candidate",
+      "openalex_source",
+      "openalex_locations",
+      "openalex_abstract"
+    ],
+    "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/providers/opencitations.py": [
+      "OpenCitationsClient"
+    ],
+    "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/providers/pubmed.py": [
+      "PubMedClient",
+      "parse_pubmed_xml",
+      "pubmed_article_fields",
+      "pubmed_article_ids",
+      "pubmed_abstract",
+      "pubmed_authors",
+      "pubmed_date",
+      "month_number",
+      "text",
+      "element_text"
+    ],
+    "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/providers/semantic_scholar.py": [
+      "SemanticScholarClient",
+      "semantic_scholar_paper_to_candidate"
+    ],
+    "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/providers/unpaywall.py": [
+      "UnpaywallClient",
+      "unpaywall_item_to_candidate",
+      "unpaywall_locations"
+    ],
+    "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/providers/zotero_translation_server.py": [
+      "TranslationServerClient",
+      "zotero_translator_item_to_candidate",
+      "zotero_translator_locations",
+      "first_attachment_url",
+      "guess_translator_attachment_kind",
+      "guess_translator_url_kind",
+      "metadata_text_from_item"
+    ],
+    "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/text.py": [
+      "normalize_space",
+      "strip_html",
+      "normalize_title",
+      "title_match_score",
+      "first_text",
+      "join_values"
+    ],
+    "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/url_safety.py": [
+      "UrlSafetyResult",
+      "validate_fetch_url",
+      "assert_fetch_url_safe",
+      "_parse_ip",
+      "_resolve_host_addresses",
+      "_is_blocked_ip"
+    ],
+    "repositories/zotero-metadata-enrichment/tests/test_attachment_types.py": [
+      "test_attachment_type_classifier_does_not_treat_pdf_html_as_pdf",
+      "test_attachment_type_classifier_normalizes_mime_values"
+    ],
+    "repositories/zotero-metadata-enrichment/tests/test_discovery.py": [
+      "NoopDoiProvider",
+      "FakeOpenCitations",
+      "NoopOpenCitations",
+      "ExplodingProvider",
+      "ExplodingOpenCitations",
+      "test_source_discovery_adds_opencitations_auxiliary_metadata",
+      "test_source_discovery_respects_disabled_extended_providers",
+      "test_source_discovery_uses_zotero_translator_full_text_locations",
+      "test_source_discovery_expands_pmid_to_doi_before_doi_providers"
+    ],
+    "repositories/zotero-metadata-enrichment/tests/test_enrichment.py": [
+      "FakeCrossref",
+      "FakeArxiv",
+      "test_enricher_returns_diff_from_provider_candidate",
+      "test_enricher_falls_back_to_arxiv_when_crossref_doi_404",
+      "test_merge_candidate_combines_metadata_and_arxiv_fields"
+    ],
+    "repositories/zotero-metadata-enrichment/tests/test_fulltext.py": [
+      "_metadata",
+      "_attachment",
+      "_patch_discovery",
+      "test_discovers_pdf_even_when_html_was_found",
+      "test_discovers_pdf_derived_from_html_download",
+      "test_skips_pdf_download_when_pdf_limit_is_zero"
+    ],
+    "repositories/zotero-metadata-enrichment/tests/test_html_sources.py": [
+      "FakeResponse",
+      "test_fetch_html_source_saves_html",
+      "test_fetch_html_source_uses_base_href_for_relative_assets",
+      "test_fetch_html_source_saves_style_import_assets",
+      "test_fetch_html_source_rejects_title_mismatch",
+      "test_assess_article_html_rejects_metadata_landing_page",
+      "test_assess_article_html_accepts_arxiv_latex_profile",
+      "test_assess_article_html_rejects_subscription_preview_page",
+      "test_fetch_html_source_rejects_arxiv_abs_landing",
+      "test_download_html_sources_falls_back_to_ar5iv_for_arxiv_abs",
+      "test_download_html_sources_reclassifies_ojs_article_view",
+      "test_fetch_html_source_follows_thieme_abstract_html_link",
+      "test_fetch_html_source_rejects_tandfonline_get_access",
+      "test_fetch_html_source_reclassifies_frontiers_full_article",
+      "test_fetch_html_source_derives_pdf_from_citation_pdf_url",
+      "test_fetch_html_source_reclassifies_iop_article_and_derives_pdf",
+      "test_fetch_html_source_rejects_springer_chapter_landing",
+      "test_fetch_html_source_does_not_use_pmc_profile_for_non_pmc_europe_pmc_url",
+      "test_download_html_sources_skips_pdf_locations",
+      "test_download_html_sources_prioritizes_direct_arxiv_html",
+      "test_download_html_sources_can_stop_after_first_valid_html",
+      "test_fetch_html_source_rejects_unsafe_url",
+      "test_parse_srcset_keeps_iiif_commas_inside_url",
+      "test_resource_parser_prioritizes_article_figures_before_icons"
+    ],
+    "repositories/zotero-metadata-enrichment/tests/test_identifiers_diff.py": [
+      "test_extract_identifiers",
+      "test_metadata_diff_and_patch",
+      "test_metadata_diff_does_not_duplicate_structured_identifier_in_extra",
+      "test_title_score"
+    ],
+    "repositories/zotero-metadata-enrichment/tests/test_local_zotero.py": [
+      "test_local_zotero_reader_reads_extended_parent_metadata"
+    ],
+    "repositories/zotero-metadata-enrichment/tests/test_pdf_sources.py": [
+      "FakeResponse",
+      "test_fetch_pdf_source_saves_confirmed_pdf",
+      "test_download_pdf_sources_zero_limit_skips_all",
+      "test_fetch_pdf_source_rejects_html_response",
+      "test_fetch_pdf_source_rejects_unsafe_url"
+    ],
+    "repositories/zotero-metadata-enrichment/tests/test_providers.py": [
+      "test_parse_arxiv_atom",
+      "test_zotero_translator_item_to_candidate",
+      "test_zotero_translator_item_includes_attachment_locations",
+      "test_parse_pubmed_xml",
+      "test_unpaywall_candidate_includes_oa_locations",
+      "test_crossref_candidate_includes_full_text_locations",
+      "test_openalex_candidate_includes_pdf_location_and_abstract",
+      "test_openalex_client_adds_mailto_and_api_key_params",
+      "test_europe_pmc_candidate_adds_pmc_xml_location",
+      "test_semantic_scholar_candidate_includes_open_access_pdf",
+      "test_datacite_candidate_uses_content_urls",
+      "test_preprint_and_repository_provider_parsers",
+      "test_doaj_and_openaire_parsers"
+    ],
+    "scripts/__init__.py": [],
+    "scripts/bulk_repolish_source_html.py": [
+      "RelayBinding",
+      "SourceAttachment",
+      "main",
+      "_relay_env",
+      "_relay_bindings",
+      "_discover_attachments",
+      "_resolve_host_attachment_path",
+      "_source_url_hint",
+      "_arxiv_id_from_metadata_value",
+      "_host_to_container_path",
+      "_relay_replace",
+      "_sync_local_storage_metadata",
+      "_patched_sync_cache_json",
+      "_backup_attachment_file",
+      "_sqlite_backup",
+      "_attachment_plan",
+      "_run_root",
+      "_completed_keys",
+      "_redacted_relay_result",
+      "_sha256",
+      "_optional_int",
+      "_safe_name",
+      "_utc_now",
+      "_write_json",
+      "_append_jsonl",
+      "_progress_line"
+    ],
+    "scripts/drains/__init__.py": [],
+    "scripts/drains/full_text_compact.py": [
+      "_load_payload",
+      "summarize_job",
+      "summarize_scihub_pdf_job",
+      "summarize_researchgate_pdf_job",
+      "compact_batch",
+      "ParallelDrainCoordinator",
+      "_job_label",
+      "_job_exit_code",
+      "_drain_metadata_batch",
+      "_drain_parallel_worker",
+      "_run_parallel",
+      "_metadata_queue_summary",
+      "_full_text_queue_summary",
+      "_drain_dynamic_batch",
+      "_run_dynamic_parallel",
+      "_run_single_job_type",
+      "_run_full_text_pdf_cycle",
+      "run",
+      "parse_args"
+    ],
+    "scripts/providers/__init__.py": [],
+    "scripts/providers/researchgate_pdf_browser_download.py": [
+      "main",
+      "run",
+      "preflight_pdf_attach",
+      "download_researchgate_pdf",
+      "visible_download_candidates",
+      "click_download_candidate",
+      "save_download",
+      "attach_pdf_to_zotero_parent",
+      "create_parent_pdf_attachment",
+      "find_item",
+      "synthetic_attachment_for_item",
+      "inventory_probe_attachment_key",
+      "shared_relay_path",
+      "safe_title",
+      "safe_filename_part"
+    ],
+    "scripts/source_html_audit_cleanup.py": [
+      "main",
+      "cleanup_plan_from_audit",
+      "find_remote_stale_arxiv_html_records",
+      "remote_stale_arxiv_records",
+      "source_parent_keys_by_relay_library",
+      "list_remote_html_attachments",
+      "list_remote_item_children",
+      "_remote_attachment_looks_like_arxiv_html",
+      "quarantine_storage_dir",
+      "trash_stale_arxiv_html",
+      "relay_library_id_for_record",
+      "relay_binding_for_record",
+      "mark_local_attachment_deleted",
+      "run_targeted_repolish",
+      "_load_or_run_audit",
+      "_source_recovery_env",
+      "_first_available_docker_tex_image",
+      "_storage_dir_for_record",
+      "_optional_int",
+      "_unique_records",
+      "_has_issue",
+      "_compact_record",
+      "_unique_path",
+      "_safe_name",
+      "_run_root",
+      "_utc_now",
+      "_write_json",
+      "_append_jsonl"
+    ],
+    "tests/test_article_standard.py": [
+      "test_standardize_native_html_download_writes_article_package",
+      "test_standard_article_html_assets_can_be_embedded_for_zotero_attachment"
+    ],
+    "tests/test_arxiv_html_service.py": [
+      "test_arxiv_html_service_looks_up_identifier_and_writes_manifest"
+    ],
+    "tests/test_arxiv_source_recovery.py": [
+      "FakeRenderer",
+      "test_collect_source_figures_keeps_single_file_setup_preamble",
+      "test_standalone_figure_document_renders_float_body_without_float_environment",
+      "test_recover_latexml_figure_from_arxiv_source_package",
+      "test_recover_latexml_figure_is_noop_without_arxiv_id",
+      "test_latex_source_renderer_can_use_docker_tex_image",
+      "_source_tarball"
+    ],
+    "tests/test_config.py": [
+      "_write_zotero_data_dir",
+      "test_from_env_prefers_relay_library_bindings_over_recursive_discovery"
+    ],
+    "tests/test_drain_full_text_compact.py": [
+      "test_compact_full_text_summary_uses_worker_status_and_accepted_html",
+      "test_compact_full_text_summary_reports_combined_html_pdf_attachment",
+      "test_compact_full_text_summary_counts_browser_pdf_fallbacks",
+      "test_compact_scihub_pdf_summary_reports_attached_pdf",
+      "test_full_text_queue_summary_recovers_expired_jobs",
+      "test_full_text_queue_summary_counts_owned_running_jobs",
+      "test_parallel_run_processes_limit_inside_one_process",
+      "test_dynamic_run_does_not_start_more_batches_than_queue",
+      "test_dynamic_run_caps_active_batches_at_worker_limit",
+      "test_dynamic_scihub_run_uses_scihub_queue",
+      "test_full_text_pdf_cycle_scans_scihub_after_researchgate"
+    ],
+    "tests/test_full_run.py": [
+      "test_ingest_run_options_default_to_metadata_and_files",
+      "test_ingest_run_options_enable_researchgate_pdf_with_full_text_drain",
+      "test_ingest_run_options_do_not_enqueue_scihub_backlog_when_scihub_drain_is_disabled",
+      "test_ingest_run_next_action_prioritizes_metadata_then_file_discovery",
+      "test_ingest_run_next_action_covers_file_fallbacks",
+      "test_ingest_run_counts_batch_failures_for_completion_status",
+      "test_ingest_run_state_records_status_and_events"
+    ],
+    "tests/test_full_text_attachment.py": [
+      "_article_html",
+      "test_article_verdict_rejects_weak_publisher_landing",
+      "test_article_verdict_accepts_full_article_html",
+      "test_article_verdict_accepts_doi_redirect_to_full_article",
+      "test_full_text_attachment_service_attaches_html_without_processor",
+      "test_full_text_attachment_service_skips_html_when_source_html_exists",
+      "test_full_text_attachment_service_trashes_dangling_source_html_before_attach",
+      "test_full_text_attachment_service_still_attaches_pdf_when_html_already_exists",
+      "test_full_text_attachment_service_reports_local_metadata_failure",
+      "test_full_text_attachment_service_enqueues_attached_html_for_translation",
+      "test_full_text_attachment_service_pdf_needing_ocr_uses_callback",
+      "test_full_text_attachment_service_attaches_pdf_when_parent_only_has_html",
+      "test_full_text_attachment_service_attaches_html_and_pdf_when_both_found",
+      "test_full_text_attachment_service_skips_pdf_when_parent_has_pdf"
+    ],
+    "tests/test_full_text_discovery.py": [
+      "test_full_text_orchestrator_does_not_retry_pdf_when_pdf_pass_already_ran",
+      "test_full_text_summary_reports_researchgate_browser_fallback",
+      "test_full_text_summary_suppresses_browser_fallback_when_pdf_exists"
+    ],
+    "tests/test_full_text_inventory.py": [
+      "test_full_text_inventory_distinguishes_source_html_from_other_html",
+      "test_full_text_inventory_skips_scan_only_when_pdf_and_source_html_exist",
+      "test_html_file_with_pdf_in_name_does_not_count_as_pdf",
+      "test_pdf_detection_uses_exact_suffix_for_unknown_content_type",
+      "test_attachment_content_type_detection_normalizes_mime_values"
+    ],
+    "tests/test_ingest_refactor_boundaries.py": [
+      "test_metadata_processor_reexports_helper_functions_for_legacy_imports",
+      "test_full_run_manager_uses_extracted_action_policy",
+      "test_result_summary_keeps_only_controller_event_fields",
+      "test_full_text_backlog_scan_delegates_to_scanner"
+    ],
+    "tests/test_local_attachment_sync.py": [
+      "test_patched_sync_cache_json_updates_nested_file_metadata",
+      "test_replace_original_file_overwrites_pdf"
+    ],
+    "tests/test_local_zotero_paths.py": [
+      "test_looks_like_generated_html_accepts_language_suffixes",
+      "test_resolve_attachment_path_for_storage_path"
+    ],
+    "tests/test_metadata_jobs.py": [
+      "test_metadata_enricher_config_kwargs_falls_back_to_crossref_email",
+      "test_metadata_queue_key_tracks_provider_settings"
+    ],
+    "tests/test_metadata_processor.py": [
+      "_valid_full_article_assessment",
+      "test_extract_identifiers_from_extended_metadata_text",
+      "test_parse_arxiv_atom_maps_zotero_like_fields",
+      "test_metadata_patch_respects_policy_and_allowed_fields",
+      "test_metadata_diff_explains_patch_and_skips",
+      "test_metadata_diff_filters_fields_not_valid_for_preprints",
+      "test_metadata_diff_filters_runtime_invalid_fields_for_other_item_types",
+      "test_zotero_translator_item_maps_translation_server_payload",
+      "test_title_match_score_combines_ratio_and_tokens",
+      "test_metadata_lookup_uses_shared_enricher",
+      "test_metadata_enricher_config_maps_worker_settings",
+      "test_metadata_drain_queue_uses_bounded_parallel_workers",
+      "test_relay_url_candidates_add_localhost_for_compose_service_name",
+      "test_web_api_config_errors_are_not_retryable",
+      "test_metadata_patch_relay_payload_includes_library_id",
+      "test_metadata_drain_ensures_parent_for_standalone_pdf",
+      "test_parent_preflight_syncs_standalone_pdf_to_local_sqlite",
+      "test_local_zotero_get_attachment_uses_keyed_sqlite_lookup",
+      "test_parent_preflight_syncs_storage_only_pdf_to_local_sqlite",
+      "test_arxiv_html_filename_uses_distinct_suffix",
+      "test_validate_arxiv_html_rejects_non_html_and_short_pages",
+      "test_local_zotero_reads_extended_parent_metadata",
+      "test_local_zotero_treats_deleted_parent_metadata_as_missing",
+      "test_metadata_state_queue_lifecycle",
+      "test_metadata_state_parent_scope_dedupes_changed_container_signature",
+      "test_metadata_backlog_scan_dedupes_multiple_pdfs_for_same_parent",
+      "test_local_zotero_iter_regular_items_and_inventory",
+      "test_full_text_backlog_scan_queues_parent_items_without_html",
+      "test_full_text_backlog_scan_queues_parent_items_with_html_but_without_pdf",
+      "test_full_text_backlog_scan_queues_parent_items_with_pdf_but_without_source_html",
+      "test_full_text_backlog_scan_skips_parent_items_with_html_and_pdf",
+      "test_scihub_backlog_scan_skips_parent_items_with_pdf",
+      "test_scihub_backlog_scan_queues_identifier_queries_when_html_exists_but_pdf_missing",
+      "test_scihub_drain_grouped_job_tries_next_identifier",
+      "test_full_text_backlog_scan_dedupes_parent_when_sqlite_mtime_changes",
+      "test_full_text_drain_parent_job_uses_inventory_to_avoid_pdf_duplicate",
+      "test_rejected_full_text_html_does_not_enqueue_existing_pdf_conversion",
+      "test_existing_pdf_worker_status_reports_html_precheck_without_job",
+      "test_full_text_worker_status_reports_html_and_pdf_together",
+      "test_parent_attachment_relay_payload_includes_parent_item_key",
+      "test_html_attachment_source_embeds_local_assets",
+      "test_html_attachment_source_inlines_style_import_assets",
+      "test_full_text_attach_html_uses_embedded_asset_file",
+      "test_html_attachment_source_without_assets_uses_original_file",
+      "test_html_attachment_source_with_empty_assets_uses_original_file",
+      "test_html_attachment_source_reports_missing_css_asset_and_keeps_external_url",
+      "test_full_text_attach_returns_none_without_relay",
+      "test_full_text_attach_reports_missing_html_source",
+      "test_full_text_attach_html_without_assets_sends_original_file",
+      "test_full_text_attach_attaches_pdf_alongside_html",
+      "test_full_text_attach_returns_none_when_no_download_succeeded",
+      "test_full_text_attach_pdf_needing_ocr_returns_downstream_reference",
+      "test_full_text_attach_pdf_with_text_returns_downstream_html_reference",
+      "test_full_text_html_selection_prefers_full_arxiv_article",
+      "test_full_text_html_selection_rejects_arxiv_abs_landing",
+      "_write_full_text_fixture",
+      "_add_full_text_html_attachment",
+      "_metadata_processor_test_config"
+    ],
+    "tests/test_provider_scripts.py": [
+      "test_provider_script_path_falls_back_to_workdir_scripts"
+    ],
+    "tests/test_relay_client.py": [
+      "_FakeResponse",
+      "test_relay_client_create_html_sibling_uses_custom_dedupe",
+      "test_relay_client_ensure_parent_payload",
+      "test_relay_client_trash_generated_parent_payload",
+      "test_request_json_retries_transient_relay_network_result",
+      "test_request_json_does_not_retry_non_transient_relay_result"
+    ],
+    "tests/test_researchgate_pdf_browser_download.py": [
+      "test_shared_relay_path_maps_ingest_data_dir",
+      "test_create_parent_pdf_attachment_uses_relay_visible_source_path",
+      "test_run_skips_browser_download_when_parent_already_has_pdf"
+    ],
+    "tests/test_researchgate_pdf_job.py": [
+      "test_researchgate_pdf_adapter_uses_passed_config",
+      "test_researchgate_pdf_drain_job_marks_success",
+      "test_researchgate_fallback_ignores_non_researchgate_urls"
+    ],
+    "tests/test_service_actions.py": [
+      "_FakeFullRunManager",
+      "test_post_action_paths_are_ingest_only",
+      "test_run_post_action_routes_metadata_queue",
+      "test_run_post_action_routes_full_text_backlog_with_auto_drain",
+      "test_run_post_action_routes_source_html_cleanup",
+      "test_run_post_action_routes_full_run_status"
+    ],
+    "tests/test_source_html_audit_cleanup.py": [
+      "test_cleanup_plan_groups_audit_records",
+      "test_remote_stale_arxiv_records_include_remote_only_siblings",
+      "test_quarantine_storage_dir_moves_whole_attachment_folder",
+      "test_trash_stale_arxiv_html_dry_run_does_not_need_relay",
+      "test_relay_library_id_for_record_uses_current_binding_path",
+      "test_mark_local_attachment_deleted_marks_deleted_item",
+      "test_source_url_hint_prefers_arxiv_parent_metadata"
+    ],
+    "tests/test_source_html_maintenance.py": [
+      "test_cleanup_source_html_records_trashes_missing_and_duplicate_records",
+      "test_cleanup_source_html_records_fails_closed_when_trash_fails",
+      "test_cleanup_source_html_library_reports_nested_failure"
+    ],
+    "tests/test_source_html_quality_audit.py": [
+      "test_source_html_audit_accepts_standard_polished_html",
+      "test_source_html_audit_reports_quality_defects",
+      "test_source_html_audit_accepts_nested_figure_media",
+      "test_source_html_audit_accepts_latexml_table_and_listing_figures",
+      "test_source_html_audit_accepts_supplementary_file_boxes",
+      "test_source_html_audit_accepts_video_figure_boxes",
+      "test_source_html_audit_flags_latexml_render_errors_inside_figures",
+      "test_source_html_audit_flags_latexml_item_marker_layout_without_style",
+      "test_source_html_audit_flags_latexml_inline_black_text",
+      "test_source_html_audit_flags_latexml_black_mathcolor",
+      "test_source_html_audit_flags_discovered_regression_defects",
+      "test_source_html_audit_flags_frontiers_reference_buttons",
+      "test_source_html_audit_flags_discovered_js_wrapped_source_html",
+      "test_source_html_audit_flags_discovered_js_wrapped_generated_html",
+      "test_source_html_audit_flags_stale_active_arxiv_html_sibling",
+      "test_source_html_audit_flags_stale_arxiv_db_record_with_missing_file",
+      "test_source_html_audit_does_not_flag_jobs_when_state_has_no_source_jobs",
+      "test_source_html_audit_flags_orphan_source_html_file",
+      "test_source_html_audit_flags_orphan_arxiv_html_file",
+      "_write_html_attachment",
+      "_write_zotero_schema",
+      "_write_html_job",
+      "_write_state_schema"
+    ],
+    "tests/test_state_store.py": [
+      "test_pipeline_state_store_sets_schema_version",
+      "test_pipeline_state_connect_closes_connection",
+      "test_legacy_state_store_alias_remains_compatible",
+      "test_pipeline_state_schema_creates_core_tables",
+      "test_pipeline_state_repository_facades_delegate_to_store",
+      "test_metadata_job_lease_is_unique_under_parallel_workers"
+    ],
+    "tests/test_web_html_polish.py": [
+      "test_web_html_polish_reexports_core_types",
+      "test_web_polish_registry_covers_publisher_handlers",
+      "test_web_polish_registry_rejects_known_landing_pages",
+      "test_detect_web_html_kind_distinguishes_arxiv_latexml_from_abs_page",
+      "test_detect_web_html_kind_accepts_iop_full_article_not_iop_assets",
+      "test_polish_web_html_document_rejects_arxiv_abs_page",
+      "test_canonicalize_same_document_links_rewrites_only_self_fragments",
+      "test_canonicalize_same_document_links_allows_versionless_arxiv_source_url",
+      "test_same_document_link_helpers_are_source_agnostic",
+      "test_canonicalize_same_document_links_preserves_unresolved_self_fragments",
+      "test_polish_web_html_document_extracts_arxiv_latexml_article",
+      "test_polish_web_html_document_normalizes_latexml_equation_layout",
+      "test_polish_web_html_document_removes_latexml_table_color_artifacts",
+      "test_polish_web_html_document_styles_latexml_item_markers",
+      "test_polish_web_html_document_removes_latexml_black_text_color",
+      "test_polish_web_html_document_removes_latexml_black_mathcolor",
+      "test_polish_web_html_document_removes_latexml_description_error_panels",
+      "test_polish_web_html_file_inlines_arxiv_extracted_remote_images",
+      "test_polish_web_html_file_runs_arxiv_source_recovery",
+      "test_polish_web_html_document_removes_empty_arxiv_missing_image_placeholder",
+      "test_polish_web_html_document_removes_empty_table_shells",
+      "test_polish_web_html_document_absolutizes_root_relative_publisher_urls",
+      "test_polish_web_html_document_removes_metrics_and_disables_missing_local_fragments",
+      "test_polish_web_html_document_unwraps_frontiers_and_links_references",
+      "test_polish_web_html_document_removes_discovered_js_chrome_and_supplementary_refs",
+      "test_polish_web_html_document_does_not_inject_mathjax_when_static_katex_unavailable",
+      "test_polish_web_html_document_extracts_pmc_article",
+      "test_polish_web_html_document_removes_empty_pmc_figure_shells",
+      "test_pmc_polish_ignores_invalid_float_href",
+      "test_polish_web_html_document_extracts_taylor_francis_nlm_fulltext",
+      "test_taylor_francis_polish_rewrites_script_backed_internal_controls",
+      "test_taylor_francis_polish_targets_existing_table_and_figure_wrappers",
+      "test_taylor_francis_polish_uses_publisher_origin_for_doi_source_root_links",
+      "test_polish_web_html_document_extracts_springer_nature_body",
+      "test_polish_web_html_document_inlines_springer_full_size_tables",
+      "test_polish_web_html_document_extracts_iop_article_content",
+      "test_polish_web_html_document_builds_iop_references_from_metadata",
+      "test_canonicalize_same_document_links_counts_broken_local_fragments",
+      "test_inline_remote_images_from_web_html_document_allows_scoped_hosts",
+      "test_polish_web_html_document_rejects_known_non_full_text_web_pages",
+      "test_sciendo_abstract_page_wins_over_article_body_css_noise",
+      "test_sciendo_abstract_page_fetches_citation_full_html_url",
+      "test_sciendo_article_tab_is_not_rejected_as_abstract",
+      "test_researchgate_detector_does_not_reject_plain_mentions",
+      "test_polish_web_html_file_inlines_local_images_without_marker_polish",
+      "test_polish_web_html_file_repairs_generic_inline_image_data_mime",
+      "test_polish_web_html_file_inlines_local_srcset_images",
+      "test_inline_local_images_skips_inline_data_srcset",
+      "test_generic_canonicalizer_infers_repeated_non_arxiv_self_links"
+    ],
+    "tests/test_worker_roles.py": [
+      "test_metadata_role_exposes_only_metadata_actions",
+      "test_fulltext_role_exposes_native_fulltext_actions",
+      "test_role_guard_blocks_wrong_queue_type"
+    ],
+    "zotero_ingest_worker/__init__.py": [],
+    "zotero_ingest_worker/__main__.py": [
+      "main",
+      "_add_backlog_parser",
+      "_add_drain_args",
+      "_run_shared_cli_action",
+      "_cli_action_payload",
+      "_backlog_payload",
+      "_print_json",
+      "_configured_role_value"
+    ],
+    "zotero_ingest_worker/article_standard.py": [
+      "standardize_native_html_download",
+      "write_article_package",
+      "build_article_manifest",
+      "evaluate_article_html",
+      "_article_html_with_standard_assets",
+      "_package_dirname",
+      "_metadata_value",
+      "_metadata_authors",
+      "_metadata_identifiers",
+      "_visible_text",
+      "_html_title",
+      "_html_attr_values",
+      "_resource_refs",
+      "_missing_local_refs",
+      "_internal_links",
+      "_anchors",
+      "urllib_fragment",
+      "_bibliography_anchor_count",
+      "_math_strategy",
+      "_int_value",
+      "_safe_part"
+    ],
+    "zotero_ingest_worker/arxiv_html.py": [
+      "ArxivHtmlJobService",
+      "parse_arxiv_atom",
+      "arxiv_html_filename",
+      "validate_arxiv_html",
+      "metadata_haystack",
+      "title_for_lookup",
+      "safe_filename"
+    ],
+    "zotero_ingest_worker/config.py": [
+      "load_dotenv",
+      "env_bool",
+      "env_int",
+      "env_float",
+      "env_path",
+      "env_first_path",
+      "env_path_list",
+      "env_zfr_library_data_dirs",
+      "env_string_prefix_map",
+      "unique_paths",
+      "default_discovery_roots",
+      "is_zotero_data_dir",
+      "discover_zotero_data_dirs",
+      "WorkerConfig",
+      "parse_scihub_mirrors",
+      "from_env",
+      "apply_request_overrides",
+      "_normalize_prefix_path",
+      "_translate_prefix_path"
+    ],
+    "zotero_ingest_worker/full_run_options.py": [
+      "FullRunOptions",
+      "_bool",
+      "_int",
+      "_optional_int"
+    ],
+    "zotero_ingest_worker/full_run_plan.py": [
+      "next_ingest_action",
+      "_queued_count"
+    ],
+    "zotero_ingest_worker/full_run_results.py": [
+      "_result_summary",
+      "_result_failure_count",
+      "_result_message"
+    ],
+    "zotero_ingest_worker/full_run.py": [
+      "FullRunManager"
+    ],
+    "zotero_ingest_worker/full_text_article.py": [
+      "html_download_article_verdict",
+      "annotate_html_download_article_verdicts",
+      "is_arxiv_abs_landing_download",
+      "arxiv_abs_ids_from_html_downloads",
+      "arxiv_id_from_abs_url",
+      "_is_arxiv_html_download",
+      "_is_unresolved_doi_landing",
+      "_has_substantial_body",
+      "_has_article_evidence",
+      "_looks_like_access_landing",
+      "_candidate_urls",
+      "_normalized_set",
+      "_int_value"
+    ],
+    "zotero_ingest_worker/full_text_attachment.py": [
+      "FullTextAttachmentService",
+      "_local_failure",
+      "_skipped_existing_pdf_result",
+      "_skipped_existing_html_result",
+      "_with_pdf_attachment_result",
+      "write_parent_attachment_local_copy",
+      "local_attachment_from_relay",
+      "_first_successful_download",
+      "_html_attachment_preferred_source_path",
+      "_best_successful_html_download",
+      "_html_download_score",
+      "_html_attachment_source_with_embedded_assets",
+      "_replace_stylesheet_links_with_style_tags",
+      "_replace_style_imports_with_embedded_css",
+      "_css_with_embedded_local_assets",
+      "_css_import_pattern",
+      "_css_import_replacement",
+      "_css_text_for_style_tag",
+      "_css_text_for_reference",
+      "_local_asset_target",
+      "_asset_html_relpath",
+      "_asset_reference_variants",
+      "_data_uri_for_file",
+      "_data_uri",
+      "_is_css_asset",
+      "_is_external_or_data_url",
+      "_download_needs_ocr",
+      "_inventory_probe_attachment_key",
+      "_full_text_attachment_filename",
+      "_relay_attachment_key",
+      "_safe_filename"
+    ],
+    "zotero_ingest_worker/full_text_discovery.py": [
+      "FullTextPayloadSummary",
+      "FullTextDiscoveryOrchestrator",
+      "summarize_full_text_payload",
+      "standardize_accepted_html_downloads",
+      "full_text_ocr_candidates",
+      "full_text_worker_status",
+      "first_full_text_output_path",
+      "researchgate_browser_fallbacks",
+      "_first_full_text_output_path_from_summary",
+      "_full_text_worker_status_from_summary",
+      "_existing_pdf_enqueue_status",
+      "_accepted_html_downloads",
+      "_rejected_html_downloads",
+      "_successful_pdf_downloads",
+      "_ocr_candidates_from_pdf_downloads",
+      "_browser_fallback_entries",
+      "_is_researchgate_url",
+      "_pdf_download_needs_ocr",
+      "_safe_status_suffix",
+      "_safe_filename",
+      "_arxiv_rescue_html_path"
+    ],
+    "zotero_ingest_worker/full_text_inventory.py": [
+      "FullTextAttachmentRecord",
+      "FullTextInventory",
+      "inventory_has_pdf",
+      "inventory_has_source_html",
+      "should_skip_full_text_scan",
+      "pdf_download_limit",
+      "inventory_fingerprint",
+      "resolved_attachment_path"
+    ],
+    "zotero_ingest_worker/fulltext_main.py": [
+      "main"
+    ],
+    "zotero_ingest_worker/local_attachment_sync.py": [
+      "replace_original_file",
+      "write_new_attachment_local_copy",
+      "sync_local_zotero_storage_metadata",
+      "sync_parent_attachment_local",
+      "sync_ensured_parent_local",
+      "sync_parent_metadata_local",
+      "patched_sync_cache_json",
+      "_field_id",
+      "_item_data_value_id",
+      "_upsert_item_data",
+      "_insert_parent_item",
+      "_insert_attachment_item",
+      "_sync_parent_collections",
+      "_read_item_field_values",
+      "_patch_parent_sync_cache",
+      "_table_exists",
+      "_table_columns",
+      "_optional_int"
+    ],
+    "zotero_ingest_worker/local_zotero_paths.py": [
+      "library_id_for_data_dir",
+      "safe_mtime",
+      "safe_exists",
+      "looks_like_generated_html",
+      "resolve_attachment_path_for_suffixes"
+    ],
+    "zotero_ingest_worker/local_zotero_sqlite.py": [
+      "connect_readonly_sqlite"
+    ],
+    "zotero_ingest_worker/local_zotero.py": [
+      "LocalAttachment",
+      "LocalItemMetadata",
+      "LocalZoteroStore",
+      "_optional_int",
+      "_item_fields",
+      "_item_creators",
+      "_item_tags",
+      "_item_collections",
+      "_item_relations"
+    ],
+    "zotero_ingest_worker/metadata_backlog_scanner.py": [
+      "attachment_backlog_scan",
+      "full_text_backlog_scan",
+      "scihub_pdf_backlog_scan",
+      "_effective_limit",
+      "_limit_reached"
+    ],
+    "zotero_ingest_worker/metadata_jobs.py": [
+      "metadata_enricher_config_kwargs",
+      "metadata_queue_key"
+    ],
+    "zotero_ingest_worker/metadata_processor_helpers.py": [
+      "metadata_job_owner",
+      "build_metadata_patch",
+      "build_metadata_diff",
+      "filter_metadata_diff_for_item_type",
+      "extract_doi_from_text",
+      "normalize_doi",
+      "extract_arxiv_id_from_text",
+      "normalize_arxiv_id",
+      "crossref_work_to_candidate",
+      "zotero_translator_item_to_candidate",
+      "title_match_score",
+      "_metadata_haystack",
+      "_is_nonretryable_worker_error",
+      "_title_for_lookup",
+      "_first_researchgate_browser_fallback",
+      "_is_researchgate_url",
+      "_researchgate_url_from_job",
+      "_researchgate_result_retryable",
+      "_first_successful_pdf_download",
+      "_doi_for_scihub",
+      "_scihub_query_candidates",
+      "_encode_scihub_query_candidates",
+      "_scihub_queries_from_job",
+      "_scihub_doi_from_job",
+      "_scihub_query_from_job",
+      "_scihub_query_type_from_job",
+      "_normalize_identifier",
+      "_scihub_result_retryable",
+      "_enqueue_result",
+      "_enqueue_item_result",
+      "_full_text_ocr_candidates",
+      "_normalize_space",
+      "_merge_extra",
+      "_safe_filename",
+      "_patch_digest",
+      "full_text_worker_status",
+      "first_full_text_output_path",
+      "_http_error_body"
+    ],
+    "zotero_ingest_worker/metadata_processor.py": [
+      "ZoteroMetadataProcessor",
+      "_relay_result_with_attachment_key",
+      "_optional_int",
+      "_safe_path_exists"
+    ],
+    "zotero_ingest_worker/package_paths.py": [
+      "ensure_local_package_paths"
+    ],
+    "zotero_ingest_worker/provider_scripts.py": [
+      "provider_script_path",
+      "_unique_paths"
+    ],
+    "zotero_ingest_worker/relay_client.py": [
+      "ZoteroRelayClient",
+      "relay_url_candidates",
+      "_is_retryable_relay_result",
+      "_sleep_before_retry"
+    ],
+    "zotero_ingest_worker/researchgate_pdf.py": [
+      "ResearchGatePdfOptions",
+      "download_and_attach_researchgate_pdf",
+      "_script_module"
+    ],
+    "zotero_ingest_worker/scihub_pdf.py": [
+      "SciHubError",
+      "SciHubResolveResult",
+      "SciHubPdfOptions",
+      "normalize_base_url",
+      "normalize_doi_value",
+      "url_to_https",
+      "extract_raw_pdf_url_from_html",
+      "to_absolute_pdf_url",
+      "is_pdf_not_available_markup",
+      "resolve_pdf_url",
+      "_resolve_on_mirror",
+      "download_scihub_pdf",
+      "download_and_attach_scihub_pdf",
+      "doi_from_metadata",
+      "_safe_doi",
+      "_script_module"
+    ],
+    "zotero_ingest_worker/service_actions.py": [
+      "run_post_action",
+      "_optional_str",
+      "_optional_int",
+      "_int_value",
+      "_status_filter"
+    ],
+    "zotero_ingest_worker/service.py": [
+      "run_server",
+      "_build_handler",
+      "_default_queue_job_type"
+    ],
+    "zotero_ingest_worker/source_html_maintenance.py": [
+      "cleanup_source_html_inventory",
+      "cleanup_source_html_records",
+      "cleanup_source_html_library",
+      "_source_html_records_from_inventory",
+      "_source_html_keep_key",
+      "_source_html_rank",
+      "_should_trash_source_html",
+      "_cleanup_candidate",
+      "_record_attachment",
+      "_cleanup_result",
+      "_optional_bool"
+    ],
+    "zotero_ingest_worker/source_html_quality_audit.py": [
+      "HtmlAttachmentRow",
+      "SourceHtmlJobIndex",
+      "HtmlMetrics",
+      "ArticleHtmlAuditParser",
+      "run_audit",
+      "load_source_html_job_index",
+      "main",
+      "_audit_html_file",
+      "_audit_missing_html_attachment",
+      "_load_html_attachment_index",
+      "_iter_storage_html_files",
+      "_resolve_zotero_html_path",
+      "_resolve_zotero_data_dirs",
+      "_duplicate_source_parents",
+      "_mark_stale_arxiv_html_records",
+      "_source_html_job_label",
+      "_looks_like_source_html",
+      "_looks_like_arxiv_html",
+      "_looks_like_generated_html",
+      "_is_frontiers_figure_js_control",
+      "_is_pmc_dead_ui_control",
+      "_style_rule_presence",
+      "_html_without_ignored_blocks",
+      "_is_data_url",
+      "_resolve_relative_asset",
+      "_figure_tag_has_intrinsic_content",
+      "_looks_like_supplementary_resource_href",
+      "_safe_resolve_key",
+      "_write_json",
+      "_first_existing_path"
+    ],
+    "zotero_ingest_worker/state_repositories.py": [
+      "WatchFileRepository",
+      "ProblemDocumentRepository",
+      "OcrJobRepository",
+      "HtmlJobRepository",
+      "MetadataJobRepository",
+      "FullRunRepository"
+    ],
+    "zotero_ingest_worker/state_schema.py": [
+      "initialize_pipeline_state_schema",
+      "_add_column_if_missing"
+    ],
+    "zotero_ingest_worker/state.py": [
+      "FileSignature",
+      "PipelineStateStore",
+      "_utc_now",
+      "_row_dict",
+      "_json_or_none",
+      "_html_relay_status",
+      "_metadata_relay_status",
+      "_job_dedupe_key",
+      "_html_job_dedupe_key",
+      "_metadata_job_dedupe_key",
+      "_safe_job_type"
+    ],
+    "zotero_ingest_worker/worker_roles.py": [
+      "normalize_worker_role",
+      "post_action_paths_for_role",
+      "role_mode_label",
+      "ensure_role_allows_action",
+      "cli_command_role",
+      "_optional_job_type"
+    ],
+    "zoteropdf2md/__init__.py": [],
+    "zoteropdf2md/arxiv_source_recovery.py": [
+      "ArxivSourceRecoveryResult",
+      "BrokenLatexmlFigure",
+      "SourceFigure",
+      "LatexSourceFigureRenderer",
+      "recover_latexml_figures_from_arxiv_source_html",
+      "fetch_arxiv_source_package",
+      "extract_arxiv_source_package",
+      "collect_source_figures",
+      "select_source_figure",
+      "_find_broken_latexml_figures",
+      "_latexml_error_tokens",
+      "_source_figure_score",
+      "_token_overlap_score",
+      "_meaningful_tokens",
+      "_recovered_figure_html",
+      "_arxiv_id_from_source_url",
+      "_standalone_figure_document",
+      "_minimal_figure_preamble",
+      "_source_macro_preamble",
+      "_preview_and_caption_suppression",
+      "_renderable_figure_tex",
+      "_synthesized_aux",
+      "_synthesized_section_labels",
+      "_expanded_tex_document",
+      "_synthesized_bibcites",
+      "_parse_bibitem_label",
+      "_extract_latex_caption",
+      "_balanced_brace_content",
+      "_latex_visible_text",
+      "_find_main_tex",
+      "_pdf_first_page_to_png",
+      "_safe_extract_tar_member",
+      "_safe_extract_zip_member",
+      "_safe_member_path",
+      "_relative_source_path",
+      "_strip_latex_comment",
+      "_env_bool",
+      "_env_int"
+    ],
+    "zoteropdf2md/html_images.py": [
+      "InlineHtmlResult",
+      "is_inline_or_remote",
+      "detect_image_signature",
+      "detect_jpeg_colorspace",
+      "to_data_url",
+      "validate_data_url",
+      "decode_data_image_payload",
+      "data_image_src_looks_renderable",
+      "html_node_image_srcs",
+      "html_node_has_renderable_image",
+      "html_node_has_broken_data_image"
+    ],
+    "zoteropdf2md/html_links.py": [
+      "SameDocumentLinkCanonicalization",
+      "canonicalize_same_document_links",
+      "count_same_document_absolute_fragment_links",
+      "extract_html_fragment_targets",
+      "declared_document_urls",
+      "document_url_candidates",
+      "attr_value",
+      "href_attr_literal",
+      "escape_html_attr_literal",
+      "replace_href_attr_literal",
+      "is_same_document",
+      "is_plain_local_fragment",
+      "is_root_relative_url",
+      "relative_same_document",
+      "same_arxiv_html_document",
+      "arxiv_html_parts",
+      "arxiv_abs_parts",
+      "base_key_for_url",
+      "base_url_from_parsed",
+      "urlsplit_or_none"
+    ],
+    "zoteropdf2md/html_theme.py": [
+      "web_readability_style"
+    ],
+    "zoteropdf2md/raw_html_polish/__init__.py": [],
+    "zoteropdf2md/raw_html_polish/html_fragments.py": [
+      "visible_text",
+      "update_skip_stack_for_tags",
+      "append_class_to_attrs",
+      "add_body_class",
+      "has_id_attr",
+      "add_id_attr",
+      "add_class_attr",
+      "remove_id_attr",
+      "node_id_value",
+      "node_open_id_value",
+      "node_has_class",
+      "transform_node_open",
+      "strip_node_id_and_add_class",
+      "matching_div_close_span",
+      "node_close_end"
+    ],
+    "zoteropdf2md/raw_html_polish/katex.py": [
+      "katex_inlined_css",
+      "katex_v8_context",
+      "close_katex_v8_context",
+      "strip_mathjax_scripts",
+      "inject_mathjax",
+      "inject_katex_css",
+      "render_katex_html"
+    ],
+    "zoteropdf2md/web_html_polish.py": [
+      "WebHtmlPolishResult",
+      "WebHtmlFilePolishResult",
+      "detect_web_html_kind",
+      "require_web_article_html",
+      "polish_web_html_document",
+      "polish_web_html_file",
+      "unwrap_existing_web_polish_document",
+      "unwrap_elements_by_attr_tokens",
+      "normalize_frontiers_reference_links",
+      "_frontiers_reference_id_from_attrs",
+      "inline_local_images_from_web_html_document",
+      "_normalize_inline_data_image_mime_types",
+      "_prefer_picture_inline_img_sources",
+      "_normalize_inline_data_image_src",
+      "_decode_base64_prefix",
+      "_image_mime_from_blob_prefix",
+      "inline_remote_images_from_web_html_document",
+      "_remote_image_hosts_for_kind",
+      "_is_allowed_remote_image_url",
+      "_fetch_remote_image",
+      "_fetch_remote_html",
+      "_sciendo_full_text_url",
+      "_meta_contents",
+      "_valid_sciendo_article_url",
+      "_is_sciendo_or_reference_global_host",
+      "_remote_image_data_url",
+      "_remote_image_mime",
+      "absolutize_root_relative_urls",
+      "absolutize_arxiv_extracted_asset_urls",
+      "_root_relative_url_base",
+      "_publisher_default_origin",
+      "_is_doi_host",
+      "extract_web_article_fragment",
+      "normalize_web_article_fragment",
+      "remove_publisher_ui_fragments",
+      "remove_unresolved_local_fragment_hrefs",
+      "repair_empty_image_sources",
+      "remove_empty_tables",
+      "remove_empty_figure_shells",
+      "remove_latexml_table_color_artifacts",
+      "remove_latexml_inline_black_text_color",
+      "_strip_black_foreground_declaration",
+      "_remove_attr_value",
+      "remove_latexml_description_error_panels",
+      "_looks_like_latexml_description_panel",
+      "_latexml_description_panel_replacement",
+      "_rewrite_latexml_description_panel_children",
+      "_has_structural_latexml_content",
+      "normalize_latexml_equation_alignment",
+      "_extract_source_specific_article_fragment",
+      "_looks_like_arxiv_abs_page",
+      "_looks_like_arxiv_latexml",
+      "_looks_like_pmc_article",
+      "_looks_like_taylor_francis_article",
+      "_looks_like_springer_nature_article",
+      "_looks_like_iop_article",
+      "_has_iop_full_text_markers",
+      "_looks_like_researchgate_page",
+      "_looks_like_sciendo_abstract_page",
+      "_looks_like_sciendo_article_page",
+      "_looks_like_ojs_abstract_page",
+      "_document_title",
+      "_wrap_web_article_html",
+      "_ensure_web_html_head",
+      "_is_nonlocal_image_src",
+      "_resolve_local_asset",
+      "_add_src_hint"
+    ],
+    "zoteropdf2md/web_polish/__init__.py": [],
+    "zoteropdf2md/web_polish/arxiv.py": [
+      "extract_article_fragment",
+      "normalize_article_fragment"
+    ],
+    "zoteropdf2md/web_polish/cli.py": [
+      "run_web_polish_cli",
+      "main",
+      "main_arxiv",
+      "main_pmc",
+      "main_taylor_francis",
+      "main_springer_nature",
+      "main_iop",
+      "main_researchgate",
+      "main_ojs",
+      "main_sciendo"
+    ],
+    "zoteropdf2md/web_polish/core.py": [
+      "WebHtmlKind",
+      "WebHtmlPolishError",
+      "WebArticleExtraction",
+      "ArticleCandidate",
+      "extract_generic_web_article_fragment",
+      "extract_fragment_by_attr_tokens",
+      "remove_elements_by_attr_tokens",
+      "attr_value",
+      "set_attr_value",
+      "strip_non_article_payloads",
+      "body_inner",
+      "balanced_element_from_match",
+      "score_article_candidate",
+      "promising_article_start",
+      "visible_text_length",
+      "visible_text"
+    ],
+    "zoteropdf2md/web_polish/iop.py": [
+      "extract_article_fragment",
+      "normalize_article_fragment",
+      "_promote_lazy_image_sources",
+      "_is_remote_url",
+      "_is_placeholder_src",
+      "_remove_empty_references_shells",
+      "_replace_iop_tex_fallbacks",
+      "_tex_replacement",
+      "_normalize_tex_source",
+      "_append_meta_references",
+      "_citation_reference_values",
+      "_iop_bib_id_base",
+      "_has_reference_targets",
+      "_render_reference",
+      "_parse_reference_fields",
+      "_first",
+      "_reference_authors",
+      "_reference_pages"
+    ],
+    "zoteropdf2md/web_polish/ojs.py": [
+      "raise_not_full_text"
+    ],
+    "zoteropdf2md/web_polish/pmc.py": [
+      "extract_article_fragment",
+      "normalize_article_fragment",
+      "_rewrite_float_path_links",
+      "_float_target_for_href",
+      "_resolve_float_target"
+    ],
+    "zoteropdf2md/web_polish/registry.py": [
+      "WebPolishHandler",
+      "registered_web_polish_handlers",
+      "handler_for_kind",
+      "default_origin_for_kind",
+      "rejection_message_for_kind",
+      "extract_source_specific_article_fragment",
+      "normalize_source_specific_article_fragment"
+    ],
+    "zoteropdf2md/web_polish/researchgate.py": [
+      "raise_not_full_text"
+    ],
+    "zoteropdf2md/web_polish/sciendo.py": [
+      "raise_not_full_text"
+    ],
+    "zoteropdf2md/web_polish/springer_nature.py": [
+      "extract_article_fragment",
+      "normalize_article_fragment",
+      "_inline_full_size_tables",
+      "_springer_table_page_url",
+      "_fetch_springer_table_payload",
+      "_extract_springer_table_payload",
+      "_merge_springer_table_payload",
+      "_retarget_float_label_links_to_containers",
+      "_rewrite_springer_same_document_absolute_fragments",
+      "_springer_article_path_tokens",
+      "_springer_float_label_target_map",
+      "_springer_float_container_kind"
+    ],
+    "zoteropdf2md/web_polish/taylor_francis.py": [
+      "extract_article_fragment",
+      "normalize_article_fragment",
+      "_rewrite_data_rid_links",
+      "_rewrite_data_behaviour_ref_links",
+      "_rewrite_data_id_links",
+      "_rewrite_table_figure_buttons",
+      "_target_href_for_data_id"
+    ]
+  },
+  "batches": [
+    {
+      "batchIndex": 1,
+      "files": [
+        {
+          "path": "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/__init__.py",
+          "language": "python",
+          "sizeLines": 42,
+          "fileCategory": "code"
+        },
+        {
+          "path": "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/attachment_types.py",
+          "language": "python",
+          "sizeLines": 53,
+          "fileCategory": "code"
+        },
+        {
+          "path": "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/cli.py",
+          "language": "python",
+          "sizeLines": 266,
+          "fileCategory": "code"
+        },
+        {
+          "path": "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/diff.py",
+          "language": "python",
+          "sizeLines": 147,
+          "fileCategory": "code"
+        },
+        {
+          "path": "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/discovery.py",
+          "language": "python",
+          "sizeLines": 425,
+          "fileCategory": "code"
+        },
+        {
+          "path": "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/enrichment.py",
+          "language": "python",
+          "sizeLines": 582,
+          "fileCategory": "code"
+        },
+        {
+          "path": "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/fulltext.py",
+          "language": "python",
+          "sizeLines": 124,
+          "fileCategory": "code"
+        },
+        {
+          "path": "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/html_sources.py",
+          "language": "python",
+          "sizeLines": 1241,
+          "fileCategory": "code"
+        },
+        {
+          "path": "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/identifiers.py",
+          "language": "python",
+          "sizeLines": 106,
+          "fileCategory": "code"
+        },
+        {
+          "path": "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/local_zotero.py",
+          "language": "python",
+          "sizeLines": 402,
+          "fileCategory": "code"
+        },
+        {
+          "path": "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/models.py",
+          "language": "python",
+          "sizeLines": 112,
+          "fileCategory": "code"
+        },
+        {
+          "path": "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/pdf_sources.py",
+          "language": "python",
+          "sizeLines": 284,
+          "fileCategory": "code"
+        },
+        {
+          "path": "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/providers/__init__.py",
+          "language": "python",
+          "sizeLines": 43,
+          "fileCategory": "code"
+        },
+        {
+          "path": "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/providers/arxiv.py",
+          "language": "python",
+          "sizeLines": 170,
+          "fileCategory": "code"
+        },
+        {
+          "path": "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/providers/biorxiv.py",
+          "language": "python",
+          "sizeLines": 93,
+          "fileCategory": "code"
+        },
+        {
+          "path": "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/providers/common.py",
+          "language": "python",
+          "sizeLines": 72,
+          "fileCategory": "code"
+        },
+        {
+          "path": "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/providers/core.py",
+          "language": "python",
+          "sizeLines": 119,
+          "fileCategory": "code"
+        },
+        {
+          "path": "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/providers/crossref.py",
+          "language": "python",
+          "sizeLines": 186,
+          "fileCategory": "code"
+        },
+        {
+          "path": "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/providers/datacite.py",
+          "language": "python",
+          "sizeLines": 97,
+          "fileCategory": "code"
+        },
+        {
+          "path": "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/providers/doaj.py",
+          "language": "python",
+          "sizeLines": 121,
+          "fileCategory": "code"
+        },
+        {
+          "path": "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/providers/europe_pmc.py",
+          "language": "python",
+          "sizeLines": 163,
+          "fileCategory": "code"
+        },
+        {
+          "path": "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/providers/openaire.py",
+          "language": "python",
+          "sizeLines": 116,
+          "fileCategory": "code"
+        },
+        {
+          "path": "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/providers/openalex.py",
+          "language": "python",
+          "sizeLines": 179,
+          "fileCategory": "code"
+        },
+        {
+          "path": "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/providers/opencitations.py",
+          "language": "python",
+          "sizeLines": 53,
+          "fileCategory": "code"
+        },
+        {
+          "path": "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/providers/pubmed.py",
+          "language": "python",
+          "sizeLines": 264,
+          "fileCategory": "code"
+        },
+        {
+          "path": "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/providers/semantic_scholar.py",
+          "language": "python",
+          "sizeLines": 142,
+          "fileCategory": "code"
+        },
+        {
+          "path": "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/providers/unpaywall.py",
+          "language": "python",
+          "sizeLines": 111,
+          "fileCategory": "code"
+        },
+        {
+          "path": "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/providers/zotero_translation_server.py",
+          "language": "python",
+          "sizeLines": 277,
+          "fileCategory": "code"
+        },
+        {
+          "path": "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/text.py",
+          "language": "python",
+          "sizeLines": 49,
+          "fileCategory": "code"
+        },
+        {
+          "path": "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/url_safety.py",
+          "language": "python",
+          "sizeLines": 100,
+          "fileCategory": "code"
+        }
+      ],
+      "batchImportData": {
+        "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/__init__.py": [
+          "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/diff.py",
+          "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/discovery.py",
+          "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/enrichment.py",
+          "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/fulltext.py",
+          "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/identifiers.py",
+          "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/models.py"
+        ],
+        "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/attachment_types.py": [],
+        "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/cli.py": [
+          "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/diff.py",
+          "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/discovery.py",
+          "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/enrichment.py",
+          "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/fulltext.py",
+          "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/html_sources.py",
+          "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/local_zotero.py",
+          "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/models.py",
+          "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/pdf_sources.py"
+        ],
+        "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/diff.py": [
+          "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/models.py",
+          "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/text.py"
+        ],
+        "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/discovery.py": [
+          "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/enrichment.py",
+          "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/identifiers.py",
+          "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/models.py",
+          "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/providers/__init__.py"
+        ],
+        "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/enrichment.py": [
+          "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/diff.py",
+          "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/identifiers.py",
+          "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/models.py",
+          "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/providers/__init__.py",
+          "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/text.py"
+        ],
+        "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/fulltext.py": [
+          "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/discovery.py",
+          "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/enrichment.py",
+          "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/html_sources.py",
+          "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/models.py",
+          "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/pdf_sources.py"
+        ],
+        "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/html_sources.py": [
+          "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/models.py",
+          "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/text.py",
+          "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/url_safety.py"
+        ],
+        "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/identifiers.py": [],
+        "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/local_zotero.py": [
+          "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/attachment_types.py",
+          "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/models.py"
+        ],
+        "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/models.py": [],
+        "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/pdf_sources.py": [
+          "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/html_sources.py",
+          "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/models.py",
+          "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/text.py",
+          "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/url_safety.py"
+        ],
+        "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/providers/__init__.py": [
+          "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/providers/arxiv.py",
+          "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/providers/biorxiv.py",
+          "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/providers/core.py",
+          "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/providers/crossref.py",
+          "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/providers/datacite.py",
+          "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/providers/doaj.py",
+          "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/providers/europe_pmc.py",
+          "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/providers/openaire.py",
+          "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/providers/openalex.py",
+          "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/providers/opencitations.py",
+          "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/providers/pubmed.py",
+          "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/providers/semantic_scholar.py",
+          "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/providers/unpaywall.py",
+          "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/providers/zotero_translation_server.py"
+        ],
+        "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/providers/arxiv.py": [
+          "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/identifiers.py",
+          "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/models.py",
+          "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/providers/common.py",
+          "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/text.py"
+        ],
+        "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/providers/biorxiv.py": [
+          "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/identifiers.py",
+          "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/models.py",
+          "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/providers/common.py"
+        ],
+        "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/providers/common.py": [
+          "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/models.py",
+          "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/text.py"
+        ],
+        "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/providers/core.py": [
+          "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/identifiers.py",
+          "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/models.py",
+          "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/providers/common.py",
+          "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/text.py"
+        ],
+        "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/providers/crossref.py": [
+          "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/identifiers.py",
+          "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/models.py",
+          "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/providers/common.py",
+          "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/text.py"
+        ],
+        "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/providers/datacite.py": [
+          "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/identifiers.py",
+          "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/models.py",
+          "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/providers/common.py"
+        ],
+        "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/providers/doaj.py": [
+          "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/identifiers.py",
+          "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/models.py",
+          "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/providers/common.py",
+          "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/text.py"
+        ],
+        "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/providers/europe_pmc.py": [
+          "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/identifiers.py",
+          "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/models.py",
+          "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/providers/common.py"
+        ],
+        "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/providers/openaire.py": [
+          "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/identifiers.py",
+          "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/models.py",
+          "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/providers/common.py"
+        ],
+        "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/providers/openalex.py": [
+          "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/identifiers.py",
+          "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/models.py",
+          "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/providers/common.py",
+          "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/text.py"
+        ],
+        "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/providers/opencitations.py": [
+          "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/identifiers.py"
+        ],
+        "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/providers/pubmed.py": [
+          "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/identifiers.py",
+          "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/models.py",
+          "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/text.py"
+        ],
+        "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/providers/semantic_scholar.py": [
+          "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/identifiers.py",
+          "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/models.py",
+          "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/providers/common.py",
+          "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/text.py"
+        ],
+        "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/providers/unpaywall.py": [
+          "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/identifiers.py",
+          "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/models.py",
+          "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/providers/common.py"
+        ],
+        "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/providers/zotero_translation_server.py": [
+          "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/diff.py",
+          "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/identifiers.py",
+          "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/models.py",
+          "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/text.py"
+        ],
+        "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/text.py": [],
+        "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/url_safety.py": []
+      },
+      "neighborMap": {}
+    },
+    {
+      "batchIndex": 2,
+      "files": [
+        {
+          "path": "scripts/bulk_repolish_source_html.py",
+          "language": "python",
+          "sizeLines": 715,
+          "fileCategory": "code"
+        },
+        {
+          "path": "scripts/source_html_audit_cleanup.py",
+          "language": "python",
+          "sizeLines": 735,
+          "fileCategory": "code"
+        },
+        {
+          "path": "tests/test_arxiv_source_recovery.py",
+          "language": "python",
+          "sizeLines": 191,
+          "fileCategory": "code"
+        },
+        {
+          "path": "tests/test_local_zotero_paths.py",
+          "language": "python",
+          "sizeLines": 32,
+          "fileCategory": "code"
+        },
+        {
+          "path": "tests/test_source_html_audit_cleanup.py",
+          "language": "python",
+          "sizeLines": 297,
+          "fileCategory": "code"
+        },
+        {
+          "path": "tests/test_source_html_quality_audit.py",
+          "language": "python",
+          "sizeLines": 707,
+          "fileCategory": "code"
+        },
+        {
+          "path": "tests/test_web_html_polish.py",
+          "language": "python",
+          "sizeLines": 1566,
+          "fileCategory": "code"
+        },
+        {
+          "path": "zotero_ingest_worker/local_zotero_paths.py",
+          "language": "python",
+          "sizeLines": 68,
+          "fileCategory": "code"
+        },
+        {
+          "path": "zotero_ingest_worker/source_html_quality_audit.py",
+          "language": "python",
+          "sizeLines": 1125,
+          "fileCategory": "code"
+        },
+        {
+          "path": "zoteropdf2md/arxiv_source_recovery.py",
+          "language": "python",
+          "sizeLines": 784,
+          "fileCategory": "code"
+        },
+        {
+          "path": "zoteropdf2md/html_images.py",
+          "language": "python",
+          "sizeLines": 238,
+          "fileCategory": "code"
+        },
+        {
+          "path": "zoteropdf2md/html_links.py",
+          "language": "python",
+          "sizeLines": 365,
+          "fileCategory": "code"
+        },
+        {
+          "path": "zoteropdf2md/html_theme.py",
+          "language": "python",
+          "sizeLines": 346,
+          "fileCategory": "code"
+        },
+        {
+          "path": "zoteropdf2md/raw_html_polish/html_fragments.py",
+          "language": "python",
+          "sizeLines": 160,
+          "fileCategory": "code"
+        },
+        {
+          "path": "zoteropdf2md/raw_html_polish/katex.py",
+          "language": "python",
+          "sizeLines": 183,
+          "fileCategory": "code"
+        },
+        {
+          "path": "zoteropdf2md/web_html_polish.py",
+          "language": "python",
+          "sizeLines": 1482,
+          "fileCategory": "code"
+        },
+        {
+          "path": "zoteropdf2md/web_polish/__init__.py",
+          "language": "python",
+          "sizeLines": 21,
+          "fileCategory": "code"
+        },
+        {
+          "path": "zoteropdf2md/web_polish/arxiv.py",
+          "language": "python",
+          "sizeLines": 44,
+          "fileCategory": "code"
+        },
+        {
+          "path": "zoteropdf2md/web_polish/cli.py",
+          "language": "python",
+          "sizeLines": 100,
+          "fileCategory": "code"
+        },
+        {
+          "path": "zoteropdf2md/web_polish/core.py",
+          "language": "python",
+          "sizeLines": 405,
+          "fileCategory": "code"
+        },
+        {
+          "path": "zoteropdf2md/web_polish/iop.py",
+          "language": "python",
+          "sizeLines": 340,
+          "fileCategory": "code"
+        },
+        {
+          "path": "zoteropdf2md/web_polish/ojs.py",
+          "language": "python",
+          "sizeLines": 11,
+          "fileCategory": "code"
+        },
+        {
+          "path": "zoteropdf2md/web_polish/pmc.py",
+          "language": "python",
+          "sizeLines": 129,
+          "fileCategory": "code"
+        },
+        {
+          "path": "zoteropdf2md/web_polish/registry.py",
+          "language": "python",
+          "sizeLines": 154,
+          "fileCategory": "code"
+        },
+        {
+          "path": "zoteropdf2md/web_polish/researchgate.py",
+          "language": "python",
+          "sizeLines": 15,
+          "fileCategory": "code"
+        },
+        {
+          "path": "zoteropdf2md/web_polish/sciendo.py",
+          "language": "python",
+          "sizeLines": 11,
+          "fileCategory": "code"
+        },
+        {
+          "path": "zoteropdf2md/web_polish/springer_nature.py",
+          "language": "python",
+          "sizeLines": 301,
+          "fileCategory": "code"
+        },
+        {
+          "path": "zoteropdf2md/web_polish/taylor_francis.py",
+          "language": "python",
+          "sizeLines": 145,
+          "fileCategory": "code"
+        }
+      ],
+      "batchImportData": {
+        "scripts/bulk_repolish_source_html.py": [
+          "zoteropdf2md/web_html_polish.py"
+        ],
+        "scripts/source_html_audit_cleanup.py": [
+          "zotero_ingest_worker/source_html_quality_audit.py"
+        ],
+        "tests/test_arxiv_source_recovery.py": [
+          "zoteropdf2md/arxiv_source_recovery.py"
+        ],
+        "tests/test_local_zotero_paths.py": [
+          "zotero_ingest_worker/local_zotero_paths.py"
+        ],
+        "tests/test_source_html_audit_cleanup.py": [
+          "scripts/bulk_repolish_source_html.py",
+          "scripts/source_html_audit_cleanup.py"
+        ],
+        "tests/test_source_html_quality_audit.py": [
+          "zotero_ingest_worker/local_zotero_paths.py",
+          "zotero_ingest_worker/source_html_quality_audit.py",
+          "zoteropdf2md/html_theme.py"
+        ],
+        "tests/test_web_html_polish.py": [
+          "zoteropdf2md/html_links.py",
+          "zoteropdf2md/html_theme.py",
+          "zoteropdf2md/web_html_polish.py",
+          "zoteropdf2md/web_polish/core.py",
+          "zoteropdf2md/web_polish/registry.py"
+        ],
+        "zotero_ingest_worker/local_zotero_paths.py": [],
+        "zotero_ingest_worker/source_html_quality_audit.py": [
+          "zotero_ingest_worker/config.py",
+          "zotero_ingest_worker/local_zotero_paths.py",
+          "zoteropdf2md/html_links.py"
+        ],
+        "zoteropdf2md/arxiv_source_recovery.py": [
+          "zoteropdf2md/html_links.py",
+          "zoteropdf2md/web_polish/core.py"
+        ],
+        "zoteropdf2md/html_images.py": [],
+        "zoteropdf2md/html_links.py": [],
+        "zoteropdf2md/html_theme.py": [],
+        "zoteropdf2md/raw_html_polish/html_fragments.py": [],
+        "zoteropdf2md/raw_html_polish/katex.py": [
+          "zoteropdf2md/html_links.py",
+          "zoteropdf2md/raw_html_polish/html_fragments.py"
+        ],
+        "zoteropdf2md/web_html_polish.py": [
+          "zoteropdf2md/arxiv_source_recovery.py",
+          "zoteropdf2md/html_images.py",
+          "zoteropdf2md/html_links.py",
+          "zoteropdf2md/html_theme.py",
+          "zoteropdf2md/raw_html_polish/katex.py",
+          "zoteropdf2md/web_polish/core.py",
+          "zoteropdf2md/web_polish/registry.py"
+        ],
+        "zoteropdf2md/web_polish/__init__.py": [
+          "zoteropdf2md/web_polish/core.py",
+          "zoteropdf2md/web_polish/registry.py"
+        ],
+        "zoteropdf2md/web_polish/arxiv.py": [
+          "zoteropdf2md/web_polish/core.py"
+        ],
+        "zoteropdf2md/web_polish/cli.py": [
+          "zoteropdf2md/web_html_polish.py",
+          "zoteropdf2md/web_polish/core.py"
+        ],
+        "zoteropdf2md/web_polish/core.py": [],
+        "zoteropdf2md/web_polish/iop.py": [
+          "zoteropdf2md/web_polish/core.py"
+        ],
+        "zoteropdf2md/web_polish/ojs.py": [
+          "zoteropdf2md/web_polish/core.py"
+        ],
+        "zoteropdf2md/web_polish/pmc.py": [
+          "zoteropdf2md/html_links.py",
+          "zoteropdf2md/web_polish/core.py"
+        ],
+        "zoteropdf2md/web_polish/registry.py": [
+          "zoteropdf2md/web_polish/core.py"
+        ],
+        "zoteropdf2md/web_polish/researchgate.py": [
+          "zoteropdf2md/web_polish/core.py"
+        ],
+        "zoteropdf2md/web_polish/sciendo.py": [
+          "zoteropdf2md/web_polish/core.py"
+        ],
+        "zoteropdf2md/web_polish/springer_nature.py": [
+          "zoteropdf2md/html_links.py",
+          "zoteropdf2md/web_polish/core.py"
+        ],
+        "zoteropdf2md/web_polish/taylor_francis.py": [
+          "zoteropdf2md/html_links.py",
+          "zoteropdf2md/web_polish/core.py"
+        ]
+      },
+      "neighborMap": {
+        "zotero_ingest_worker/local_zotero_paths.py": [
+          {
+            "path": "zotero_ingest_worker/local_zotero.py",
+            "batchIndex": 4,
+            "symbols": [
+              "LocalAttachment",
+              "LocalItemMetadata",
+              "LocalZoteroStore",
+              "_optional_int",
+              "_item_fields",
+              "_item_creators",
+              "_item_tags",
+              "_item_collections",
+              "_item_relations"
+            ]
+          }
+        ],
+        "zotero_ingest_worker/source_html_quality_audit.py": [
+          {
+            "path": "zotero_ingest_worker/config.py",
+            "batchIndex": 3,
+            "symbols": [
+              "load_dotenv",
+              "env_bool",
+              "env_int",
+              "env_float",
+              "env_path",
+              "env_first_path",
+              "env_path_list",
+              "env_zfr_library_data_dirs",
+              "env_string_prefix_map",
+              "unique_paths",
+              "default_discovery_roots",
+              "is_zotero_data_dir",
+              "discover_zotero_data_dirs",
+              "WorkerConfig",
+              "parse_scihub_mirrors",
+              "from_env",
+              "apply_request_overrides",
+              "_normalize_prefix_path",
+              "_translate_prefix_path"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "batchIndex": 3,
+      "files": [
+        {
+          "path": "scripts/drains/full_text_compact.py",
+          "language": "python",
+          "sizeLines": 846,
+          "fileCategory": "code"
+        },
+        {
+          "path": "tests/test_config.py",
+          "language": "python",
+          "sizeLines": 48,
+          "fileCategory": "code"
+        },
+        {
+          "path": "tests/test_drain_full_text_compact.py",
+          "language": "python",
+          "sizeLines": 737,
+          "fileCategory": "code"
+        },
+        {
+          "path": "tests/test_full_text_discovery.py",
+          "language": "python",
+          "sizeLines": 112,
+          "fileCategory": "code"
+        },
+        {
+          "path": "tests/test_ingest_refactor_boundaries.py",
+          "language": "python",
+          "sizeLines": 68,
+          "fileCategory": "code"
+        },
+        {
+          "path": "tests/test_metadata_jobs.py",
+          "language": "python",
+          "sizeLines": 47,
+          "fileCategory": "code"
+        },
+        {
+          "path": "tests/test_provider_scripts.py",
+          "language": "python",
+          "sizeLines": 22,
+          "fileCategory": "code"
+        },
+        {
+          "path": "tests/test_researchgate_pdf_job.py",
+          "language": "python",
+          "sizeLines": 116,
+          "fileCategory": "code"
+        },
+        {
+          "path": "tests/test_service_actions.py",
+          "language": "python",
+          "sizeLines": 166,
+          "fileCategory": "code"
+        },
+        {
+          "path": "tests/test_worker_roles.py",
+          "language": "python",
+          "sizeLines": 44,
+          "fileCategory": "code"
+        },
+        {
+          "path": "zotero_ingest_worker/__init__.py",
+          "language": "python",
+          "sizeLines": 5,
+          "fileCategory": "code"
+        },
+        {
+          "path": "zotero_ingest_worker/__main__.py",
+          "language": "python",
+          "sizeLines": 358,
+          "fileCategory": "code"
+        },
+        {
+          "path": "zotero_ingest_worker/config.py",
+          "language": "python",
+          "sizeLines": 463,
+          "fileCategory": "code"
+        },
+        {
+          "path": "zotero_ingest_worker/full_run.py",
+          "language": "python",
+          "sizeLines": 425,
+          "fileCategory": "code"
+        },
+        {
+          "path": "zotero_ingest_worker/full_run_options.py",
+          "language": "python",
+          "sizeLines": 88,
+          "fileCategory": "code"
+        },
+        {
+          "path": "zotero_ingest_worker/full_run_plan.py",
+          "language": "python",
+          "sizeLines": 39,
+          "fileCategory": "code"
+        },
+        {
+          "path": "zotero_ingest_worker/full_run_results.py",
+          "language": "python",
+          "sizeLines": 33,
+          "fileCategory": "code"
+        },
+        {
+          "path": "zotero_ingest_worker/fulltext_main.py",
+          "language": "python",
+          "sizeLines": 12,
+          "fileCategory": "code"
+        },
+        {
+          "path": "zotero_ingest_worker/metadata_backlog_scanner.py",
+          "language": "python",
+          "sizeLines": 209,
+          "fileCategory": "code"
+        },
+        {
+          "path": "zotero_ingest_worker/metadata_jobs.py",
+          "language": "python",
+          "sizeLines": 78,
+          "fileCategory": "code"
+        },
+        {
+          "path": "zotero_ingest_worker/metadata_processor.py",
+          "language": "python",
+          "sizeLines": 1884,
+          "fileCategory": "code"
+        },
+        {
+          "path": "zotero_ingest_worker/provider_scripts.py",
+          "language": "python",
+          "sizeLines": 42,
+          "fileCategory": "code"
+        },
+        {
+          "path": "zotero_ingest_worker/researchgate_pdf.py",
+          "language": "python",
+          "sizeLines": 108,
+          "fileCategory": "code"
+        },
+        {
+          "path": "zotero_ingest_worker/scihub_pdf.py",
+          "language": "python",
+          "sizeLines": 445,
+          "fileCategory": "code"
+        },
+        {
+          "path": "zotero_ingest_worker/service.py",
+          "language": "python",
+          "sizeLines": 161,
+          "fileCategory": "code"
+        },
+        {
+          "path": "zotero_ingest_worker/service_actions.py",
+          "language": "python",
+          "sizeLines": 193,
+          "fileCategory": "code"
+        },
+        {
+          "path": "zotero_ingest_worker/worker_roles.py",
+          "language": "python",
+          "sizeLines": 140,
+          "fileCategory": "code"
+        }
+      ],
+      "batchImportData": {
+        "scripts/drains/full_text_compact.py": [
+          "zotero_ingest_worker/config.py",
+          "zotero_ingest_worker/full_text_discovery.py",
+          "zotero_ingest_worker/metadata_jobs.py",
+          "zotero_ingest_worker/metadata_processor.py"
+        ],
+        "tests/test_config.py": [
+          "zotero_ingest_worker/config.py"
+        ],
+        "tests/test_drain_full_text_compact.py": [
+          "scripts/drains/full_text_compact.py"
+        ],
+        "tests/test_full_text_discovery.py": [
+          "zotero_ingest_worker/__init__.py",
+          "zotero_ingest_worker/metadata_processor.py"
+        ],
+        "tests/test_ingest_refactor_boundaries.py": [
+          "zotero_ingest_worker/__init__.py",
+          "zotero_ingest_worker/full_run_options.py",
+          "zotero_ingest_worker/full_run_plan.py",
+          "zotero_ingest_worker/full_run_results.py",
+          "zotero_ingest_worker/full_run.py",
+          "zotero_ingest_worker/metadata_processor_helpers.py",
+          "zotero_ingest_worker/metadata_processor.py"
+        ],
+        "tests/test_metadata_jobs.py": [
+          "zotero_ingest_worker/config.py",
+          "zotero_ingest_worker/metadata_jobs.py"
+        ],
+        "tests/test_provider_scripts.py": [
+          "zotero_ingest_worker/provider_scripts.py"
+        ],
+        "tests/test_researchgate_pdf_job.py": [
+          "zotero_ingest_worker/metadata_processor.py",
+          "zotero_ingest_worker/researchgate_pdf.py"
+        ],
+        "tests/test_service_actions.py": [
+          "zotero_ingest_worker/config.py",
+          "zotero_ingest_worker/service_actions.py"
+        ],
+        "tests/test_worker_roles.py": [
+          "zotero_ingest_worker/worker_roles.py"
+        ],
+        "zotero_ingest_worker/__init__.py": [],
+        "zotero_ingest_worker/__main__.py": [
+          "zotero_ingest_worker/config.py",
+          "zotero_ingest_worker/full_run.py",
+          "zotero_ingest_worker/metadata_processor.py",
+          "zotero_ingest_worker/service_actions.py",
+          "zotero_ingest_worker/service.py",
+          "zotero_ingest_worker/worker_roles.py"
+        ],
+        "zotero_ingest_worker/config.py": [
+          "zotero_ingest_worker/worker_roles.py"
+        ],
+        "zotero_ingest_worker/full_run.py": [
+          "zotero_ingest_worker/config.py",
+          "zotero_ingest_worker/full_run_options.py",
+          "zotero_ingest_worker/full_run_plan.py",
+          "zotero_ingest_worker/full_run_results.py",
+          "zotero_ingest_worker/metadata_jobs.py",
+          "zotero_ingest_worker/metadata_processor.py",
+          "zotero_ingest_worker/state.py"
+        ],
+        "zotero_ingest_worker/full_run_options.py": [],
+        "zotero_ingest_worker/full_run_plan.py": [
+          "zotero_ingest_worker/full_run_options.py"
+        ],
+        "zotero_ingest_worker/full_run_results.py": [],
+        "zotero_ingest_worker/fulltext_main.py": [
+          "zotero_ingest_worker/__main__.py",
+          "zotero_ingest_worker/worker_roles.py"
+        ],
+        "zotero_ingest_worker/metadata_backlog_scanner.py": [
+          "zotero_ingest_worker/full_text_inventory.py",
+          "zotero_ingest_worker/local_zotero.py",
+          "zotero_ingest_worker/metadata_jobs.py",
+          "zotero_ingest_worker/metadata_processor_helpers.py"
+        ],
+        "zotero_ingest_worker/metadata_jobs.py": [],
+        "zotero_ingest_worker/metadata_processor.py": [
+          "zotero_ingest_worker/arxiv_html.py",
+          "zotero_ingest_worker/config.py",
+          "zotero_ingest_worker/full_text_attachment.py",
+          "zotero_ingest_worker/full_text_discovery.py",
+          "zotero_ingest_worker/full_text_inventory.py",
+          "zotero_ingest_worker/local_attachment_sync.py",
+          "zotero_ingest_worker/local_zotero.py",
+          "zotero_ingest_worker/metadata_backlog_scanner.py",
+          "zotero_ingest_worker/metadata_jobs.py",
+          "zotero_ingest_worker/metadata_processor_helpers.py",
+          "zotero_ingest_worker/package_paths.py",
+          "zotero_ingest_worker/relay_client.py",
+          "zotero_ingest_worker/researchgate_pdf.py",
+          "zotero_ingest_worker/scihub_pdf.py",
+          "zotero_ingest_worker/source_html_maintenance.py",
+          "zotero_ingest_worker/state.py"
+        ],
+        "zotero_ingest_worker/provider_scripts.py": [],
+        "zotero_ingest_worker/researchgate_pdf.py": [
+          "zotero_ingest_worker/config.py",
+          "zotero_ingest_worker/provider_scripts.py"
+        ],
+        "zotero_ingest_worker/scihub_pdf.py": [
+          "zotero_ingest_worker/config.py",
+          "zotero_ingest_worker/package_paths.py",
+          "zotero_ingest_worker/provider_scripts.py"
+        ],
+        "zotero_ingest_worker/service.py": [
+          "zotero_ingest_worker/config.py",
+          "zotero_ingest_worker/full_run.py",
+          "zotero_ingest_worker/metadata_jobs.py",
+          "zotero_ingest_worker/metadata_processor.py",
+          "zotero_ingest_worker/service_actions.py",
+          "zotero_ingest_worker/worker_roles.py"
+        ],
+        "zotero_ingest_worker/service_actions.py": [
+          "zotero_ingest_worker/config.py",
+          "zotero_ingest_worker/full_run.py",
+          "zotero_ingest_worker/metadata_processor.py",
+          "zotero_ingest_worker/worker_roles.py"
+        ],
+        "zotero_ingest_worker/worker_roles.py": [
+          "zotero_ingest_worker/metadata_jobs.py"
+        ]
+      },
+      "neighborMap": {
+        "scripts/drains/full_text_compact.py": [
+          {
+            "path": "zotero_ingest_worker/full_text_discovery.py",
+            "batchIndex": 4,
+            "symbols": [
+              "FullTextPayloadSummary",
+              "FullTextDiscoveryOrchestrator",
+              "summarize_full_text_payload",
+              "standardize_accepted_html_downloads",
+              "full_text_ocr_candidates",
+              "full_text_worker_status",
+              "first_full_text_output_path",
+              "researchgate_browser_fallbacks",
+              "_first_full_text_output_path_from_summary",
+              "_full_text_worker_status_from_summary",
+              "_existing_pdf_enqueue_status",
+              "_accepted_html_downloads",
+              "_rejected_html_downloads",
+              "_successful_pdf_downloads",
+              "_ocr_candidates_from_pdf_downloads",
+              "_browser_fallback_entries",
+              "_is_researchgate_url",
+              "_pdf_download_needs_ocr",
+              "_safe_status_suffix",
+              "_safe_filename",
+              "_arxiv_rescue_html_path"
+            ]
+          }
+        ],
+        "tests/test_ingest_refactor_boundaries.py": [
+          {
+            "path": "zotero_ingest_worker/metadata_processor_helpers.py",
+            "batchIndex": 4,
+            "symbols": [
+              "metadata_job_owner",
+              "build_metadata_patch",
+              "build_metadata_diff",
+              "filter_metadata_diff_for_item_type",
+              "extract_doi_from_text",
+              "normalize_doi",
+              "extract_arxiv_id_from_text",
+              "normalize_arxiv_id",
+              "crossref_work_to_candidate",
+              "zotero_translator_item_to_candidate",
+              "title_match_score",
+              "_metadata_haystack",
+              "_is_nonretryable_worker_error",
+              "_title_for_lookup",
+              "_first_researchgate_browser_fallback",
+              "_is_researchgate_url",
+              "_researchgate_url_from_job",
+              "_researchgate_result_retryable",
+              "_first_successful_pdf_download",
+              "_doi_for_scihub",
+              "_scihub_query_candidates",
+              "_encode_scihub_query_candidates",
+              "_scihub_queries_from_job",
+              "_scihub_doi_from_job",
+              "_scihub_query_from_job",
+              "_scihub_query_type_from_job",
+              "_normalize_identifier",
+              "_scihub_result_retryable",
+              "_enqueue_result",
+              "_enqueue_item_result",
+              "_full_text_ocr_candidates",
+              "_normalize_space",
+              "_merge_extra",
+              "_safe_filename",
+              "_patch_digest",
+              "full_text_worker_status",
+              "first_full_text_output_path",
+              "_http_error_body"
+            ]
+          }
+        ],
+        "zotero_ingest_worker/config.py": [
+          {
+            "path": "scripts/providers/researchgate_pdf_browser_download.py",
+            "batchIndex": 4,
+            "symbols": [
+              "main",
+              "run",
+              "preflight_pdf_attach",
+              "download_researchgate_pdf",
+              "visible_download_candidates",
+              "click_download_candidate",
+              "save_download",
+              "attach_pdf_to_zotero_parent",
+              "create_parent_pdf_attachment",
+              "find_item",
+              "synthetic_attachment_for_item",
+              "inventory_probe_attachment_key",
+              "shared_relay_path",
+              "safe_title",
+              "safe_filename_part"
+            ]
+          },
+          {
+            "path": "zotero_ingest_worker/local_zotero.py",
+            "batchIndex": 4,
+            "symbols": [
+              "LocalAttachment",
+              "LocalItemMetadata",
+              "LocalZoteroStore",
+              "_optional_int",
+              "_item_fields",
+              "_item_creators",
+              "_item_tags",
+              "_item_collections",
+              "_item_relations"
+            ]
+          },
+          {
+            "path": "zotero_ingest_worker/source_html_quality_audit.py",
+            "batchIndex": 2,
+            "symbols": [
+              "HtmlAttachmentRow",
+              "SourceHtmlJobIndex",
+              "HtmlMetrics",
+              "ArticleHtmlAuditParser",
+              "run_audit",
+              "load_source_html_job_index",
+              "main",
+              "_audit_html_file",
+              "_audit_missing_html_attachment",
+              "_load_html_attachment_index",
+              "_iter_storage_html_files",
+              "_resolve_zotero_html_path",
+              "_resolve_zotero_data_dirs",
+              "_duplicate_source_parents",
+              "_mark_stale_arxiv_html_records",
+              "_source_html_job_label",
+              "_looks_like_source_html",
+              "_looks_like_arxiv_html",
+              "_looks_like_generated_html",
+              "_is_frontiers_figure_js_control",
+              "_is_pmc_dead_ui_control",
+              "_style_rule_presence",
+              "_html_without_ignored_blocks",
+              "_is_data_url",
+              "_resolve_relative_asset",
+              "_figure_tag_has_intrinsic_content",
+              "_looks_like_supplementary_resource_href",
+              "_safe_resolve_key",
+              "_write_json",
+              "_first_existing_path"
+            ]
+          }
+        ],
+        "zotero_ingest_worker/full_run.py": [
+          {
+            "path": "zotero_ingest_worker/state.py",
+            "batchIndex": 4,
+            "symbols": [
+              "FileSignature",
+              "PipelineStateStore",
+              "_utc_now",
+              "_row_dict",
+              "_json_or_none",
+              "_html_relay_status",
+              "_metadata_relay_status",
+              "_job_dedupe_key",
+              "_html_job_dedupe_key",
+              "_metadata_job_dedupe_key",
+              "_safe_job_type"
+            ]
+          },
+          {
+            "path": "tests/test_full_run.py",
+            "batchIndex": 4,
+            "symbols": [
+              "test_ingest_run_options_default_to_metadata_and_files",
+              "test_ingest_run_options_enable_researchgate_pdf_with_full_text_drain",
+              "test_ingest_run_options_do_not_enqueue_scihub_backlog_when_scihub_drain_is_disabled",
+              "test_ingest_run_next_action_prioritizes_metadata_then_file_discovery",
+              "test_ingest_run_next_action_covers_file_fallbacks",
+              "test_ingest_run_counts_batch_failures_for_completion_status",
+              "test_ingest_run_state_records_status_and_events"
+            ]
+          }
+        ],
+        "zotero_ingest_worker/metadata_backlog_scanner.py": [
+          {
+            "path": "zotero_ingest_worker/full_text_inventory.py",
+            "batchIndex": 4,
+            "symbols": [
+              "FullTextAttachmentRecord",
+              "FullTextInventory",
+              "inventory_has_pdf",
+              "inventory_has_source_html",
+              "should_skip_full_text_scan",
+              "pdf_download_limit",
+              "inventory_fingerprint",
+              "resolved_attachment_path"
+            ]
+          },
+          {
+            "path": "zotero_ingest_worker/local_zotero.py",
+            "batchIndex": 4,
+            "symbols": [
+              "LocalAttachment",
+              "LocalItemMetadata",
+              "LocalZoteroStore",
+              "_optional_int",
+              "_item_fields",
+              "_item_creators",
+              "_item_tags",
+              "_item_collections",
+              "_item_relations"
+            ]
+          },
+          {
+            "path": "zotero_ingest_worker/metadata_processor_helpers.py",
+            "batchIndex": 4,
+            "symbols": [
+              "metadata_job_owner",
+              "build_metadata_patch",
+              "build_metadata_diff",
+              "filter_metadata_diff_for_item_type",
+              "extract_doi_from_text",
+              "normalize_doi",
+              "extract_arxiv_id_from_text",
+              "normalize_arxiv_id",
+              "crossref_work_to_candidate",
+              "zotero_translator_item_to_candidate",
+              "title_match_score",
+              "_metadata_haystack",
+              "_is_nonretryable_worker_error",
+              "_title_for_lookup",
+              "_first_researchgate_browser_fallback",
+              "_is_researchgate_url",
+              "_researchgate_url_from_job",
+              "_researchgate_result_retryable",
+              "_first_successful_pdf_download",
+              "_doi_for_scihub",
+              "_scihub_query_candidates",
+              "_encode_scihub_query_candidates",
+              "_scihub_queries_from_job",
+              "_scihub_doi_from_job",
+              "_scihub_query_from_job",
+              "_scihub_query_type_from_job",
+              "_normalize_identifier",
+              "_scihub_result_retryable",
+              "_enqueue_result",
+              "_enqueue_item_result",
+              "_full_text_ocr_candidates",
+              "_normalize_space",
+              "_merge_extra",
+              "_safe_filename",
+              "_patch_digest",
+              "full_text_worker_status",
+              "first_full_text_output_path",
+              "_http_error_body"
+            ]
+          }
+        ],
+        "zotero_ingest_worker/metadata_jobs.py": [
+          {
+            "path": "tests/test_metadata_processor.py",
+            "batchIndex": 4,
+            "symbols": [
+              "_valid_full_article_assessment",
+              "test_extract_identifiers_from_extended_metadata_text",
+              "test_parse_arxiv_atom_maps_zotero_like_fields",
+              "test_metadata_patch_respects_policy_and_allowed_fields",
+              "test_metadata_diff_explains_patch_and_skips",
+              "test_metadata_diff_filters_fields_not_valid_for_preprints",
+              "test_metadata_diff_filters_runtime_invalid_fields_for_other_item_types",
+              "test_zotero_translator_item_maps_translation_server_payload",
+              "test_title_match_score_combines_ratio_and_tokens",
+              "test_metadata_lookup_uses_shared_enricher",
+              "test_metadata_enricher_config_maps_worker_settings",
+              "test_metadata_drain_queue_uses_bounded_parallel_workers",
+              "test_relay_url_candidates_add_localhost_for_compose_service_name",
+              "test_web_api_config_errors_are_not_retryable",
+              "test_metadata_patch_relay_payload_includes_library_id",
+              "test_metadata_drain_ensures_parent_for_standalone_pdf",
+              "test_parent_preflight_syncs_standalone_pdf_to_local_sqlite",
+              "test_local_zotero_get_attachment_uses_keyed_sqlite_lookup",
+              "test_parent_preflight_syncs_storage_only_pdf_to_local_sqlite",
+              "test_arxiv_html_filename_uses_distinct_suffix",
+              "test_validate_arxiv_html_rejects_non_html_and_short_pages",
+              "test_local_zotero_reads_extended_parent_metadata",
+              "test_local_zotero_treats_deleted_parent_metadata_as_missing",
+              "test_metadata_state_queue_lifecycle",
+              "test_metadata_state_parent_scope_dedupes_changed_container_signature",
+              "test_metadata_backlog_scan_dedupes_multiple_pdfs_for_same_parent",
+              "test_local_zotero_iter_regular_items_and_inventory",
+              "test_full_text_backlog_scan_queues_parent_items_without_html",
+              "test_full_text_backlog_scan_queues_parent_items_with_html_but_without_pdf",
+              "test_full_text_backlog_scan_queues_parent_items_with_pdf_but_without_source_html",
+              "test_full_text_backlog_scan_skips_parent_items_with_html_and_pdf",
+              "test_scihub_backlog_scan_skips_parent_items_with_pdf",
+              "test_scihub_backlog_scan_queues_identifier_queries_when_html_exists_but_pdf_missing",
+              "test_scihub_drain_grouped_job_tries_next_identifier",
+              "test_full_text_backlog_scan_dedupes_parent_when_sqlite_mtime_changes",
+              "test_full_text_drain_parent_job_uses_inventory_to_avoid_pdf_duplicate",
+              "test_rejected_full_text_html_does_not_enqueue_existing_pdf_conversion",
+              "test_existing_pdf_worker_status_reports_html_precheck_without_job",
+              "test_full_text_worker_status_reports_html_and_pdf_together",
+              "test_parent_attachment_relay_payload_includes_parent_item_key",
+              "test_html_attachment_source_embeds_local_assets",
+              "test_html_attachment_source_inlines_style_import_assets",
+              "test_full_text_attach_html_uses_embedded_asset_file",
+              "test_html_attachment_source_without_assets_uses_original_file",
+              "test_html_attachment_source_with_empty_assets_uses_original_file",
+              "test_html_attachment_source_reports_missing_css_asset_and_keeps_external_url",
+              "test_full_text_attach_returns_none_without_relay",
+              "test_full_text_attach_reports_missing_html_source",
+              "test_full_text_attach_html_without_assets_sends_original_file",
+              "test_full_text_attach_attaches_pdf_alongside_html",
+              "test_full_text_attach_returns_none_when_no_download_succeeded",
+              "test_full_text_attach_pdf_needing_ocr_returns_downstream_reference",
+              "test_full_text_attach_pdf_with_text_returns_downstream_html_reference",
+              "test_full_text_html_selection_prefers_full_arxiv_article",
+              "test_full_text_html_selection_rejects_arxiv_abs_landing",
+              "_write_full_text_fixture",
+              "_add_full_text_html_attachment",
+              "_metadata_processor_test_config"
+            ]
+          },
+          {
+            "path": "zotero_ingest_worker/arxiv_html.py",
+            "batchIndex": 4,
+            "symbols": [
+              "ArxivHtmlJobService",
+              "parse_arxiv_atom",
+              "arxiv_html_filename",
+              "validate_arxiv_html",
+              "metadata_haystack",
+              "title_for_lookup",
+              "safe_filename"
+            ]
+          }
+        ],
+        "zotero_ingest_worker/metadata_processor.py": [
+          {
+            "path": "zotero_ingest_worker/arxiv_html.py",
+            "batchIndex": 4,
+            "symbols": [
+              "ArxivHtmlJobService",
+              "parse_arxiv_atom",
+              "arxiv_html_filename",
+              "validate_arxiv_html",
+              "metadata_haystack",
+              "title_for_lookup",
+              "safe_filename"
+            ]
+          },
+          {
+            "path": "zotero_ingest_worker/full_text_attachment.py",
+            "batchIndex": 4,
+            "symbols": [
+              "FullTextAttachmentService",
+              "_local_failure",
+              "_skipped_existing_pdf_result",
+              "_skipped_existing_html_result",
+              "_with_pdf_attachment_result",
+              "write_parent_attachment_local_copy",
+              "local_attachment_from_relay",
+              "_first_successful_download",
+              "_html_attachment_preferred_source_path",
+              "_best_successful_html_download",
+              "_html_download_score",
+              "_html_attachment_source_with_embedded_assets",
+              "_replace_stylesheet_links_with_style_tags",
+              "_replace_style_imports_with_embedded_css",
+              "_css_with_embedded_local_assets",
+              "_css_import_pattern",
+              "_css_import_replacement",
+              "_css_text_for_style_tag",
+              "_css_text_for_reference",
+              "_local_asset_target",
+              "_asset_html_relpath",
+              "_asset_reference_variants",
+              "_data_uri_for_file",
+              "_data_uri",
+              "_is_css_asset",
+              "_is_external_or_data_url",
+              "_download_needs_ocr",
+              "_inventory_probe_attachment_key",
+              "_full_text_attachment_filename",
+              "_relay_attachment_key",
+              "_safe_filename"
+            ]
+          },
+          {
+            "path": "zotero_ingest_worker/full_text_discovery.py",
+            "batchIndex": 4,
+            "symbols": [
+              "FullTextPayloadSummary",
+              "FullTextDiscoveryOrchestrator",
+              "summarize_full_text_payload",
+              "standardize_accepted_html_downloads",
+              "full_text_ocr_candidates",
+              "full_text_worker_status",
+              "first_full_text_output_path",
+              "researchgate_browser_fallbacks",
+              "_first_full_text_output_path_from_summary",
+              "_full_text_worker_status_from_summary",
+              "_existing_pdf_enqueue_status",
+              "_accepted_html_downloads",
+              "_rejected_html_downloads",
+              "_successful_pdf_downloads",
+              "_ocr_candidates_from_pdf_downloads",
+              "_browser_fallback_entries",
+              "_is_researchgate_url",
+              "_pdf_download_needs_ocr",
+              "_safe_status_suffix",
+              "_safe_filename",
+              "_arxiv_rescue_html_path"
+            ]
+          },
+          {
+            "path": "zotero_ingest_worker/full_text_inventory.py",
+            "batchIndex": 4,
+            "symbols": [
+              "FullTextAttachmentRecord",
+              "FullTextInventory",
+              "inventory_has_pdf",
+              "inventory_has_source_html",
+              "should_skip_full_text_scan",
+              "pdf_download_limit",
+              "inventory_fingerprint",
+              "resolved_attachment_path"
+            ]
+          },
+          {
+            "path": "zotero_ingest_worker/local_attachment_sync.py",
+            "batchIndex": 4,
+            "symbols": [
+              "replace_original_file",
+              "write_new_attachment_local_copy",
+              "sync_local_zotero_storage_metadata",
+              "sync_parent_attachment_local",
+              "sync_ensured_parent_local",
+              "sync_parent_metadata_local",
+              "patched_sync_cache_json",
+              "_field_id",
+              "_item_data_value_id",
+              "_upsert_item_data",
+              "_insert_parent_item",
+              "_insert_attachment_item",
+              "_sync_parent_collections",
+              "_read_item_field_values",
+              "_patch_parent_sync_cache",
+              "_table_exists",
+              "_table_columns",
+              "_optional_int"
+            ]
+          },
+          {
+            "path": "zotero_ingest_worker/local_zotero.py",
+            "batchIndex": 4,
+            "symbols": [
+              "LocalAttachment",
+              "LocalItemMetadata",
+              "LocalZoteroStore",
+              "_optional_int",
+              "_item_fields",
+              "_item_creators",
+              "_item_tags",
+              "_item_collections",
+              "_item_relations"
+            ]
+          },
+          {
+            "path": "zotero_ingest_worker/metadata_processor_helpers.py",
+            "batchIndex": 4,
+            "symbols": [
+              "metadata_job_owner",
+              "build_metadata_patch",
+              "build_metadata_diff",
+              "filter_metadata_diff_for_item_type",
+              "extract_doi_from_text",
+              "normalize_doi",
+              "extract_arxiv_id_from_text",
+              "normalize_arxiv_id",
+              "crossref_work_to_candidate",
+              "zotero_translator_item_to_candidate",
+              "title_match_score",
+              "_metadata_haystack",
+              "_is_nonretryable_worker_error",
+              "_title_for_lookup",
+              "_first_researchgate_browser_fallback",
+              "_is_researchgate_url",
+              "_researchgate_url_from_job",
+              "_researchgate_result_retryable",
+              "_first_successful_pdf_download",
+              "_doi_for_scihub",
+              "_scihub_query_candidates",
+              "_encode_scihub_query_candidates",
+              "_scihub_queries_from_job",
+              "_scihub_doi_from_job",
+              "_scihub_query_from_job",
+              "_scihub_query_type_from_job",
+              "_normalize_identifier",
+              "_scihub_result_retryable",
+              "_enqueue_result",
+              "_enqueue_item_result",
+              "_full_text_ocr_candidates",
+              "_normalize_space",
+              "_merge_extra",
+              "_safe_filename",
+              "_patch_digest",
+              "full_text_worker_status",
+              "first_full_text_output_path",
+              "_http_error_body"
+            ]
+          },
+          {
+            "path": "zotero_ingest_worker/package_paths.py",
+            "batchIndex": 4,
+            "symbols": [
+              "ensure_local_package_paths"
+            ]
+          },
+          {
+            "path": "zotero_ingest_worker/relay_client.py",
+            "batchIndex": 4,
+            "symbols": [
+              "ZoteroRelayClient",
+              "relay_url_candidates",
+              "_is_retryable_relay_result",
+              "_sleep_before_retry"
+            ]
+          },
+          {
+            "path": "zotero_ingest_worker/source_html_maintenance.py",
+            "batchIndex": 4,
+            "symbols": [
+              "cleanup_source_html_inventory",
+              "cleanup_source_html_records",
+              "cleanup_source_html_library",
+              "_source_html_records_from_inventory",
+              "_source_html_keep_key",
+              "_source_html_rank",
+              "_should_trash_source_html",
+              "_cleanup_candidate",
+              "_record_attachment",
+              "_cleanup_result",
+              "_optional_bool"
+            ]
+          },
+          {
+            "path": "zotero_ingest_worker/state.py",
+            "batchIndex": 4,
+            "symbols": [
+              "FileSignature",
+              "PipelineStateStore",
+              "_utc_now",
+              "_row_dict",
+              "_json_or_none",
+              "_html_relay_status",
+              "_metadata_relay_status",
+              "_job_dedupe_key",
+              "_html_job_dedupe_key",
+              "_metadata_job_dedupe_key",
+              "_safe_job_type"
+            ]
+          },
+          {
+            "path": "tests/test_metadata_processor.py",
+            "batchIndex": 4,
+            "symbols": [
+              "_valid_full_article_assessment",
+              "test_extract_identifiers_from_extended_metadata_text",
+              "test_parse_arxiv_atom_maps_zotero_like_fields",
+              "test_metadata_patch_respects_policy_and_allowed_fields",
+              "test_metadata_diff_explains_patch_and_skips",
+              "test_metadata_diff_filters_fields_not_valid_for_preprints",
+              "test_metadata_diff_filters_runtime_invalid_fields_for_other_item_types",
+              "test_zotero_translator_item_maps_translation_server_payload",
+              "test_title_match_score_combines_ratio_and_tokens",
+              "test_metadata_lookup_uses_shared_enricher",
+              "test_metadata_enricher_config_maps_worker_settings",
+              "test_metadata_drain_queue_uses_bounded_parallel_workers",
+              "test_relay_url_candidates_add_localhost_for_compose_service_name",
+              "test_web_api_config_errors_are_not_retryable",
+              "test_metadata_patch_relay_payload_includes_library_id",
+              "test_metadata_drain_ensures_parent_for_standalone_pdf",
+              "test_parent_preflight_syncs_standalone_pdf_to_local_sqlite",
+              "test_local_zotero_get_attachment_uses_keyed_sqlite_lookup",
+              "test_parent_preflight_syncs_storage_only_pdf_to_local_sqlite",
+              "test_arxiv_html_filename_uses_distinct_suffix",
+              "test_validate_arxiv_html_rejects_non_html_and_short_pages",
+              "test_local_zotero_reads_extended_parent_metadata",
+              "test_local_zotero_treats_deleted_parent_metadata_as_missing",
+              "test_metadata_state_queue_lifecycle",
+              "test_metadata_state_parent_scope_dedupes_changed_container_signature",
+              "test_metadata_backlog_scan_dedupes_multiple_pdfs_for_same_parent",
+              "test_local_zotero_iter_regular_items_and_inventory",
+              "test_full_text_backlog_scan_queues_parent_items_without_html",
+              "test_full_text_backlog_scan_queues_parent_items_with_html_but_without_pdf",
+              "test_full_text_backlog_scan_queues_parent_items_with_pdf_but_without_source_html",
+              "test_full_text_backlog_scan_skips_parent_items_with_html_and_pdf",
+              "test_scihub_backlog_scan_skips_parent_items_with_pdf",
+              "test_scihub_backlog_scan_queues_identifier_queries_when_html_exists_but_pdf_missing",
+              "test_scihub_drain_grouped_job_tries_next_identifier",
+              "test_full_text_backlog_scan_dedupes_parent_when_sqlite_mtime_changes",
+              "test_full_text_drain_parent_job_uses_inventory_to_avoid_pdf_duplicate",
+              "test_rejected_full_text_html_does_not_enqueue_existing_pdf_conversion",
+              "test_existing_pdf_worker_status_reports_html_precheck_without_job",
+              "test_full_text_worker_status_reports_html_and_pdf_together",
+              "test_parent_attachment_relay_payload_includes_parent_item_key",
+              "test_html_attachment_source_embeds_local_assets",
+              "test_html_attachment_source_inlines_style_import_assets",
+              "test_full_text_attach_html_uses_embedded_asset_file",
+              "test_html_attachment_source_without_assets_uses_original_file",
+              "test_html_attachment_source_with_empty_assets_uses_original_file",
+              "test_html_attachment_source_reports_missing_css_asset_and_keeps_external_url",
+              "test_full_text_attach_returns_none_without_relay",
+              "test_full_text_attach_reports_missing_html_source",
+              "test_full_text_attach_html_without_assets_sends_original_file",
+              "test_full_text_attach_attaches_pdf_alongside_html",
+              "test_full_text_attach_returns_none_when_no_download_succeeded",
+              "test_full_text_attach_pdf_needing_ocr_returns_downstream_reference",
+              "test_full_text_attach_pdf_with_text_returns_downstream_html_reference",
+              "test_full_text_html_selection_prefers_full_arxiv_article",
+              "test_full_text_html_selection_rejects_arxiv_abs_landing",
+              "_write_full_text_fixture",
+              "_add_full_text_html_attachment",
+              "_metadata_processor_test_config"
+            ]
+          }
+        ],
+        "zotero_ingest_worker/scihub_pdf.py": [
+          {
+            "path": "zotero_ingest_worker/package_paths.py",
+            "batchIndex": 4,
+            "symbols": [
+              "ensure_local_package_paths"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "batchIndex": 4,
+      "files": [
+        {
+          "path": "scripts/providers/researchgate_pdf_browser_download.py",
+          "language": "python",
+          "sizeLines": 465,
+          "fileCategory": "code"
+        },
+        {
+          "path": "tests/test_article_standard.py",
+          "language": "python",
+          "sizeLines": 76,
+          "fileCategory": "code"
+        },
+        {
+          "path": "tests/test_arxiv_html_service.py",
+          "language": "python",
+          "sizeLines": 90,
+          "fileCategory": "code"
+        },
+        {
+          "path": "tests/test_full_run.py",
+          "language": "python",
+          "sizeLines": 125,
+          "fileCategory": "code"
+        },
+        {
+          "path": "tests/test_full_text_attachment.py",
+          "language": "python",
+          "sizeLines": 551,
+          "fileCategory": "code"
+        },
+        {
+          "path": "tests/test_full_text_inventory.py",
+          "language": "python",
+          "sizeLines": 121,
+          "fileCategory": "code"
+        },
+        {
+          "path": "tests/test_local_attachment_sync.py",
+          "language": "python",
+          "sizeLines": 46,
+          "fileCategory": "code"
+        },
+        {
+          "path": "tests/test_metadata_processor.py",
+          "language": "python",
+          "sizeLines": 1921,
+          "fileCategory": "code"
+        },
+        {
+          "path": "tests/test_relay_client.py",
+          "language": "python",
+          "sizeLines": 166,
+          "fileCategory": "code"
+        },
+        {
+          "path": "tests/test_source_html_maintenance.py",
+          "language": "python",
+          "sizeLines": 142,
+          "fileCategory": "code"
+        },
+        {
+          "path": "tests/test_state_store.py",
+          "language": "python",
+          "sizeLines": 112,
+          "fileCategory": "code"
+        },
+        {
+          "path": "zotero_ingest_worker/article_standard.py",
+          "language": "python",
+          "sizeLines": 370,
+          "fileCategory": "code"
+        },
+        {
+          "path": "zotero_ingest_worker/arxiv_html.py",
+          "language": "python",
+          "sizeLines": 258,
+          "fileCategory": "code"
+        },
+        {
+          "path": "zotero_ingest_worker/full_text_article.py",
+          "language": "python",
+          "sizeLines": 210,
+          "fileCategory": "code"
+        },
+        {
+          "path": "zotero_ingest_worker/full_text_attachment.py",
+          "language": "python",
+          "sizeLines": 755,
+          "fileCategory": "code"
+        },
+        {
+          "path": "zotero_ingest_worker/full_text_discovery.py",
+          "language": "python",
+          "sizeLines": 537,
+          "fileCategory": "code"
+        },
+        {
+          "path": "zotero_ingest_worker/full_text_inventory.py",
+          "language": "python",
+          "sizeLines": 173,
+          "fileCategory": "code"
+        },
+        {
+          "path": "zotero_ingest_worker/local_attachment_sync.py",
+          "language": "python",
+          "sizeLines": 929,
+          "fileCategory": "code"
+        },
+        {
+          "path": "zotero_ingest_worker/local_zotero.py",
+          "language": "python",
+          "sizeLines": 1034,
+          "fileCategory": "code"
+        },
+        {
+          "path": "zotero_ingest_worker/local_zotero_sqlite.py",
+          "language": "python",
+          "sizeLines": 11,
+          "fileCategory": "code"
+        },
+        {
+          "path": "zotero_ingest_worker/metadata_processor_helpers.py",
+          "language": "python",
+          "sizeLines": 569,
+          "fileCategory": "code"
+        },
+        {
+          "path": "zotero_ingest_worker/package_paths.py",
+          "language": "python",
+          "sizeLines": 19,
+          "fileCategory": "code"
+        },
+        {
+          "path": "zotero_ingest_worker/relay_client.py",
+          "language": "python",
+          "sizeLines": 278,
+          "fileCategory": "code"
+        },
+        {
+          "path": "zotero_ingest_worker/source_html_maintenance.py",
+          "language": "python",
+          "sizeLines": 248,
+          "fileCategory": "code"
+        },
+        {
+          "path": "zotero_ingest_worker/state.py",
+          "language": "python",
+          "sizeLines": 1971,
+          "fileCategory": "code"
+        },
+        {
+          "path": "zotero_ingest_worker/state_schema.py",
+          "language": "python",
+          "sizeLines": 272,
+          "fileCategory": "code"
+        }
+      ],
+      "batchImportData": {
+        "scripts/providers/researchgate_pdf_browser_download.py": [
+          "zotero_ingest_worker/config.py",
+          "zotero_ingest_worker/full_text_attachment.py",
+          "zotero_ingest_worker/local_zotero.py",
+          "zotero_ingest_worker/relay_client.py"
+        ],
+        "tests/test_article_standard.py": [
+          "zotero_ingest_worker/article_standard.py",
+          "zotero_ingest_worker/full_text_attachment.py"
+        ],
+        "tests/test_arxiv_html_service.py": [
+          "zotero_ingest_worker/arxiv_html.py",
+          "zotero_ingest_worker/local_zotero.py"
+        ],
+        "tests/test_full_run.py": [
+          "zotero_ingest_worker/full_run.py",
+          "zotero_ingest_worker/state.py"
+        ],
+        "tests/test_full_text_attachment.py": [
+          "zotero_ingest_worker/full_text_article.py",
+          "zotero_ingest_worker/full_text_attachment.py"
+        ],
+        "tests/test_full_text_inventory.py": [
+          "zotero_ingest_worker/full_text_inventory.py"
+        ],
+        "tests/test_local_attachment_sync.py": [
+          "zotero_ingest_worker/local_attachment_sync.py"
+        ],
+        "tests/test_metadata_processor.py": [
+          "zotero_ingest_worker/local_zotero.py",
+          "zotero_ingest_worker/metadata_jobs.py",
+          "zotero_ingest_worker/metadata_processor.py",
+          "zotero_ingest_worker/relay_client.py",
+          "zotero_ingest_worker/state.py"
+        ],
+        "tests/test_relay_client.py": [
+          "zotero_ingest_worker/relay_client.py"
+        ],
+        "tests/test_source_html_maintenance.py": [
+          "zotero_ingest_worker/full_text_inventory.py",
+          "zotero_ingest_worker/source_html_maintenance.py"
+        ],
+        "tests/test_state_store.py": [
+          "zotero_ingest_worker/state.py"
+        ],
+        "zotero_ingest_worker/article_standard.py": [],
+        "zotero_ingest_worker/arxiv_html.py": [
+          "zotero_ingest_worker/local_zotero.py",
+          "zotero_ingest_worker/metadata_jobs.py",
+          "zotero_ingest_worker/package_paths.py",
+          "zotero_ingest_worker/state.py"
+        ],
+        "zotero_ingest_worker/full_text_article.py": [],
+        "zotero_ingest_worker/full_text_attachment.py": [
+          "zotero_ingest_worker/full_text_article.py",
+          "zotero_ingest_worker/local_attachment_sync.py",
+          "zotero_ingest_worker/local_zotero.py",
+          "zotero_ingest_worker/source_html_maintenance.py"
+        ],
+        "zotero_ingest_worker/full_text_discovery.py": [
+          "zotero_ingest_worker/article_standard.py",
+          "zotero_ingest_worker/full_text_article.py",
+          "zotero_ingest_worker/full_text_attachment.py",
+          "zotero_ingest_worker/full_text_inventory.py",
+          "zotero_ingest_worker/local_zotero.py",
+          "zotero_ingest_worker/package_paths.py"
+        ],
+        "zotero_ingest_worker/full_text_inventory.py": [
+          "zotero_ingest_worker/package_paths.py"
+        ],
+        "zotero_ingest_worker/local_attachment_sync.py": [
+          "zotero_ingest_worker/local_zotero.py"
+        ],
+        "zotero_ingest_worker/local_zotero.py": [
+          "zotero_ingest_worker/config.py",
+          "zotero_ingest_worker/full_text_inventory.py",
+          "zotero_ingest_worker/local_zotero_paths.py",
+          "zotero_ingest_worker/local_zotero_sqlite.py"
+        ],
+        "zotero_ingest_worker/local_zotero_sqlite.py": [],
+        "zotero_ingest_worker/metadata_processor_helpers.py": [
+          "zotero_ingest_worker/full_text_discovery.py",
+          "zotero_ingest_worker/local_zotero.py",
+          "zotero_ingest_worker/package_paths.py"
+        ],
+        "zotero_ingest_worker/package_paths.py": [],
+        "zotero_ingest_worker/relay_client.py": [
+          "zotero_ingest_worker/local_zotero.py"
+        ],
+        "zotero_ingest_worker/source_html_maintenance.py": [
+          "zotero_ingest_worker/full_text_inventory.py",
+          "zotero_ingest_worker/local_zotero.py"
+        ],
+        "zotero_ingest_worker/state.py": [
+          "zotero_ingest_worker/state_schema.py"
+        ],
+        "zotero_ingest_worker/state_schema.py": []
+      },
+      "neighborMap": {
+        "scripts/providers/researchgate_pdf_browser_download.py": [
+          {
+            "path": "zotero_ingest_worker/config.py",
+            "batchIndex": 3,
+            "symbols": [
+              "load_dotenv",
+              "env_bool",
+              "env_int",
+              "env_float",
+              "env_path",
+              "env_first_path",
+              "env_path_list",
+              "env_zfr_library_data_dirs",
+              "env_string_prefix_map",
+              "unique_paths",
+              "default_discovery_roots",
+              "is_zotero_data_dir",
+              "discover_zotero_data_dirs",
+              "WorkerConfig",
+              "parse_scihub_mirrors",
+              "from_env",
+              "apply_request_overrides",
+              "_normalize_prefix_path",
+              "_translate_prefix_path"
+            ]
+          }
+        ],
+        "tests/test_full_run.py": [
+          {
+            "path": "zotero_ingest_worker/full_run.py",
+            "batchIndex": 3,
+            "symbols": [
+              "FullRunManager"
+            ]
+          }
+        ],
+        "tests/test_metadata_processor.py": [
+          {
+            "path": "zotero_ingest_worker/metadata_jobs.py",
+            "batchIndex": 3,
+            "symbols": [
+              "metadata_enricher_config_kwargs",
+              "metadata_queue_key"
+            ]
+          },
+          {
+            "path": "zotero_ingest_worker/metadata_processor.py",
+            "batchIndex": 3,
+            "symbols": [
+              "ZoteroMetadataProcessor",
+              "_relay_result_with_attachment_key",
+              "_optional_int",
+              "_safe_path_exists"
+            ]
+          }
+        ],
+        "zotero_ingest_worker/arxiv_html.py": [
+          {
+            "path": "zotero_ingest_worker/metadata_jobs.py",
+            "batchIndex": 3,
+            "symbols": [
+              "metadata_enricher_config_kwargs",
+              "metadata_queue_key"
+            ]
+          },
+          {
+            "path": "zotero_ingest_worker/metadata_processor.py",
+            "batchIndex": 3,
+            "symbols": [
+              "ZoteroMetadataProcessor",
+              "_relay_result_with_attachment_key",
+              "_optional_int",
+              "_safe_path_exists"
+            ]
+          }
+        ],
+        "zotero_ingest_worker/full_text_attachment.py": [
+          {
+            "path": "zotero_ingest_worker/metadata_processor.py",
+            "batchIndex": 3,
+            "symbols": [
+              "ZoteroMetadataProcessor",
+              "_relay_result_with_attachment_key",
+              "_optional_int",
+              "_safe_path_exists"
+            ]
+          }
+        ],
+        "zotero_ingest_worker/full_text_discovery.py": [
+          {
+            "path": "scripts/drains/full_text_compact.py",
+            "batchIndex": 3,
+            "symbols": [
+              "_load_payload",
+              "summarize_job",
+              "summarize_scihub_pdf_job",
+              "summarize_researchgate_pdf_job",
+              "compact_batch",
+              "ParallelDrainCoordinator",
+              "_job_label",
+              "_job_exit_code",
+              "_drain_metadata_batch",
+              "_drain_parallel_worker",
+              "_run_parallel",
+              "_metadata_queue_summary",
+              "_full_text_queue_summary",
+              "_drain_dynamic_batch",
+              "_run_dynamic_parallel",
+              "_run_single_job_type",
+              "_run_full_text_pdf_cycle",
+              "run",
+              "parse_args"
+            ]
+          },
+          {
+            "path": "zotero_ingest_worker/metadata_processor.py",
+            "batchIndex": 3,
+            "symbols": [
+              "ZoteroMetadataProcessor",
+              "_relay_result_with_attachment_key",
+              "_optional_int",
+              "_safe_path_exists"
+            ]
+          }
+        ],
+        "zotero_ingest_worker/full_text_inventory.py": [
+          {
+            "path": "zotero_ingest_worker/metadata_backlog_scanner.py",
+            "batchIndex": 3,
+            "symbols": [
+              "attachment_backlog_scan",
+              "full_text_backlog_scan",
+              "scihub_pdf_backlog_scan",
+              "_effective_limit",
+              "_limit_reached"
+            ]
+          },
+          {
+            "path": "zotero_ingest_worker/metadata_processor.py",
+            "batchIndex": 3,
+            "symbols": [
+              "ZoteroMetadataProcessor",
+              "_relay_result_with_attachment_key",
+              "_optional_int",
+              "_safe_path_exists"
+            ]
+          }
+        ],
+        "zotero_ingest_worker/local_attachment_sync.py": [
+          {
+            "path": "zotero_ingest_worker/metadata_processor.py",
+            "batchIndex": 3,
+            "symbols": [
+              "ZoteroMetadataProcessor",
+              "_relay_result_with_attachment_key",
+              "_optional_int",
+              "_safe_path_exists"
+            ]
+          }
+        ],
+        "zotero_ingest_worker/local_zotero.py": [
+          {
+            "path": "zotero_ingest_worker/config.py",
+            "batchIndex": 3,
+            "symbols": [
+              "load_dotenv",
+              "env_bool",
+              "env_int",
+              "env_float",
+              "env_path",
+              "env_first_path",
+              "env_path_list",
+              "env_zfr_library_data_dirs",
+              "env_string_prefix_map",
+              "unique_paths",
+              "default_discovery_roots",
+              "is_zotero_data_dir",
+              "discover_zotero_data_dirs",
+              "WorkerConfig",
+              "parse_scihub_mirrors",
+              "from_env",
+              "apply_request_overrides",
+              "_normalize_prefix_path",
+              "_translate_prefix_path"
+            ]
+          },
+          {
+            "path": "zotero_ingest_worker/local_zotero_paths.py",
+            "batchIndex": 2,
+            "symbols": [
+              "library_id_for_data_dir",
+              "safe_mtime",
+              "safe_exists",
+              "looks_like_generated_html",
+              "resolve_attachment_path_for_suffixes"
+            ]
+          },
+          {
+            "path": "zotero_ingest_worker/metadata_backlog_scanner.py",
+            "batchIndex": 3,
+            "symbols": [
+              "attachment_backlog_scan",
+              "full_text_backlog_scan",
+              "scihub_pdf_backlog_scan",
+              "_effective_limit",
+              "_limit_reached"
+            ]
+          },
+          {
+            "path": "zotero_ingest_worker/metadata_processor.py",
+            "batchIndex": 3,
+            "symbols": [
+              "ZoteroMetadataProcessor",
+              "_relay_result_with_attachment_key",
+              "_optional_int",
+              "_safe_path_exists"
+            ]
+          }
+        ],
+        "zotero_ingest_worker/metadata_processor_helpers.py": [
+          {
+            "path": "tests/test_ingest_refactor_boundaries.py",
+            "batchIndex": 3,
+            "symbols": [
+              "test_metadata_processor_reexports_helper_functions_for_legacy_imports",
+              "test_full_run_manager_uses_extracted_action_policy",
+              "test_result_summary_keeps_only_controller_event_fields",
+              "test_full_text_backlog_scan_delegates_to_scanner"
+            ]
+          },
+          {
+            "path": "zotero_ingest_worker/metadata_backlog_scanner.py",
+            "batchIndex": 3,
+            "symbols": [
+              "attachment_backlog_scan",
+              "full_text_backlog_scan",
+              "scihub_pdf_backlog_scan",
+              "_effective_limit",
+              "_limit_reached"
+            ]
+          },
+          {
+            "path": "zotero_ingest_worker/metadata_processor.py",
+            "batchIndex": 3,
+            "symbols": [
+              "ZoteroMetadataProcessor",
+              "_relay_result_with_attachment_key",
+              "_optional_int",
+              "_safe_path_exists"
+            ]
+          }
+        ],
+        "zotero_ingest_worker/package_paths.py": [
+          {
+            "path": "zotero_ingest_worker/metadata_processor.py",
+            "batchIndex": 3,
+            "symbols": [
+              "ZoteroMetadataProcessor",
+              "_relay_result_with_attachment_key",
+              "_optional_int",
+              "_safe_path_exists"
+            ]
+          },
+          {
+            "path": "zotero_ingest_worker/scihub_pdf.py",
+            "batchIndex": 3,
+            "symbols": [
+              "SciHubError",
+              "SciHubResolveResult",
+              "SciHubPdfOptions",
+              "normalize_base_url",
+              "normalize_doi_value",
+              "url_to_https",
+              "extract_raw_pdf_url_from_html",
+              "to_absolute_pdf_url",
+              "is_pdf_not_available_markup",
+              "resolve_pdf_url",
+              "_resolve_on_mirror",
+              "download_scihub_pdf",
+              "download_and_attach_scihub_pdf",
+              "doi_from_metadata",
+              "_safe_doi",
+              "_script_module"
+            ]
+          }
+        ],
+        "zotero_ingest_worker/relay_client.py": [
+          {
+            "path": "zotero_ingest_worker/metadata_processor.py",
+            "batchIndex": 3,
+            "symbols": [
+              "ZoteroMetadataProcessor",
+              "_relay_result_with_attachment_key",
+              "_optional_int",
+              "_safe_path_exists"
+            ]
+          }
+        ],
+        "zotero_ingest_worker/source_html_maintenance.py": [
+          {
+            "path": "zotero_ingest_worker/metadata_processor.py",
+            "batchIndex": 3,
+            "symbols": [
+              "ZoteroMetadataProcessor",
+              "_relay_result_with_attachment_key",
+              "_optional_int",
+              "_safe_path_exists"
+            ]
+          }
+        ],
+        "zotero_ingest_worker/state.py": [
+          {
+            "path": "zotero_ingest_worker/full_run.py",
+            "batchIndex": 3,
+            "symbols": [
+              "FullRunManager"
+            ]
+          },
+          {
+            "path": "zotero_ingest_worker/metadata_processor.py",
+            "batchIndex": 3,
+            "symbols": [
+              "ZoteroMetadataProcessor",
+              "_relay_result_with_attachment_key",
+              "_optional_int",
+              "_safe_path_exists"
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "batchIndex": 5,
+      "files": [
+        {
+          "path": "repositories/zotero-arxiv-html-ingest/src/zotero_arxiv_html_ingest/__init__.py",
+          "language": "python",
+          "sizeLines": 20,
+          "fileCategory": "code"
+        },
+        {
+          "path": "repositories/zotero-arxiv-html-ingest/src/zotero_arxiv_html_ingest/cli.py",
+          "language": "python",
+          "sizeLines": 91,
+          "fileCategory": "code"
+        },
+        {
+          "path": "repositories/zotero-arxiv-html-ingest/src/zotero_arxiv_html_ingest/html_fetch.py",
+          "language": "python",
+          "sizeLines": 57,
+          "fileCategory": "code"
+        },
+        {
+          "path": "repositories/zotero-arxiv-html-ingest/src/zotero_arxiv_html_ingest/identifiers.py",
+          "language": "python",
+          "sizeLines": 28,
+          "fileCategory": "code"
+        },
+        {
+          "path": "repositories/zotero-arxiv-html-ingest/src/zotero_arxiv_html_ingest/ingest.py",
+          "language": "python",
+          "sizeLines": 114,
+          "fileCategory": "code"
+        },
+        {
+          "path": "repositories/zotero-arxiv-html-ingest/src/zotero_arxiv_html_ingest/lookup.py",
+          "language": "python",
+          "sizeLines": 126,
+          "fileCategory": "code"
+        },
+        {
+          "path": "repositories/zotero-arxiv-html-ingest/src/zotero_arxiv_html_ingest/models.py",
+          "language": "python",
+          "sizeLines": 67,
+          "fileCategory": "code"
+        },
+        {
+          "path": "repositories/zotero-arxiv-html-ingest/src/zotero_arxiv_html_ingest/relay.py",
+          "language": "python",
+          "sizeLines": 69,
+          "fileCategory": "code"
+        },
+        {
+          "path": "repositories/zotero-arxiv-html-ingest/src/zotero_arxiv_html_ingest/storage.py",
+          "language": "python",
+          "sizeLines": 87,
+          "fileCategory": "code"
+        },
+        {
+          "path": "repositories/zotero-arxiv-html-ingest/src/zotero_arxiv_html_ingest/text.py",
+          "language": "python",
+          "sizeLines": 32,
+          "fileCategory": "code"
+        }
+      ],
+      "batchImportData": {
+        "repositories/zotero-arxiv-html-ingest/src/zotero_arxiv_html_ingest/__init__.py": [
+          "repositories/zotero-arxiv-html-ingest/src/zotero_arxiv_html_ingest/html_fetch.py",
+          "repositories/zotero-arxiv-html-ingest/src/zotero_arxiv_html_ingest/identifiers.py",
+          "repositories/zotero-arxiv-html-ingest/src/zotero_arxiv_html_ingest/lookup.py",
+          "repositories/zotero-arxiv-html-ingest/src/zotero_arxiv_html_ingest/models.py",
+          "repositories/zotero-arxiv-html-ingest/src/zotero_arxiv_html_ingest/storage.py"
+        ],
+        "repositories/zotero-arxiv-html-ingest/src/zotero_arxiv_html_ingest/cli.py": [
+          "repositories/zotero-arxiv-html-ingest/src/zotero_arxiv_html_ingest/html_fetch.py",
+          "repositories/zotero-arxiv-html-ingest/src/zotero_arxiv_html_ingest/lookup.py",
+          "repositories/zotero-arxiv-html-ingest/src/zotero_arxiv_html_ingest/models.py",
+          "repositories/zotero-arxiv-html-ingest/src/zotero_arxiv_html_ingest/storage.py"
+        ],
+        "repositories/zotero-arxiv-html-ingest/src/zotero_arxiv_html_ingest/html_fetch.py": [
+          "repositories/zotero-arxiv-html-ingest/src/zotero_arxiv_html_ingest/identifiers.py",
+          "repositories/zotero-arxiv-html-ingest/src/zotero_arxiv_html_ingest/text.py"
+        ],
+        "repositories/zotero-arxiv-html-ingest/src/zotero_arxiv_html_ingest/identifiers.py": [],
+        "repositories/zotero-arxiv-html-ingest/src/zotero_arxiv_html_ingest/ingest.py": [
+          "repositories/zotero-arxiv-html-ingest/src/zotero_arxiv_html_ingest/html_fetch.py",
+          "repositories/zotero-arxiv-html-ingest/src/zotero_arxiv_html_ingest/identifiers.py",
+          "repositories/zotero-arxiv-html-ingest/src/zotero_arxiv_html_ingest/lookup.py",
+          "repositories/zotero-arxiv-html-ingest/src/zotero_arxiv_html_ingest/models.py",
+          "repositories/zotero-arxiv-html-ingest/src/zotero_arxiv_html_ingest/relay.py",
+          "repositories/zotero-arxiv-html-ingest/src/zotero_arxiv_html_ingest/storage.py"
+        ],
+        "repositories/zotero-arxiv-html-ingest/src/zotero_arxiv_html_ingest/lookup.py": [
+          "repositories/zotero-arxiv-html-ingest/src/zotero_arxiv_html_ingest/identifiers.py",
+          "repositories/zotero-arxiv-html-ingest/src/zotero_arxiv_html_ingest/models.py",
+          "repositories/zotero-arxiv-html-ingest/src/zotero_arxiv_html_ingest/text.py"
+        ],
+        "repositories/zotero-arxiv-html-ingest/src/zotero_arxiv_html_ingest/models.py": [],
+        "repositories/zotero-arxiv-html-ingest/src/zotero_arxiv_html_ingest/relay.py": [
+          "repositories/zotero-arxiv-html-ingest/src/zotero_arxiv_html_ingest/models.py",
+          "repositories/zotero-arxiv-html-ingest/src/zotero_arxiv_html_ingest/storage.py"
+        ],
+        "repositories/zotero-arxiv-html-ingest/src/zotero_arxiv_html_ingest/storage.py": [
+          "repositories/zotero-arxiv-html-ingest/src/zotero_arxiv_html_ingest/models.py"
+        ],
+        "repositories/zotero-arxiv-html-ingest/src/zotero_arxiv_html_ingest/text.py": []
+      },
+      "neighborMap": {}
+    },
+    {
+      "batchIndex": 6,
+      "files": [
+        {
+          "path": "docker-compose.yml",
+          "language": "yaml",
+          "sizeLines": 160,
+          "fileCategory": "infra"
+        },
+        {
+          "path": "Dockerfile",
+          "language": "dockerfile",
+          "sizeLines": 54,
+          "fileCategory": "infra"
+        }
+      ],
+      "batchImportData": {
+        "docker-compose.yml": [],
+        "Dockerfile": []
+      },
+      "neighborMap": {}
+    },
+    {
+      "batchIndex": 7,
+      "files": [
+        {
+          "path": "repositories/zotero-arxiv-html-ingest/docs/ARCHITECTURE.md",
+          "language": "markdown",
+          "sizeLines": 129,
+          "fileCategory": "docs"
+        },
+        {
+          "path": "repositories/zotero-arxiv-html-ingest/docs/DEVELOPMENT_PLAN.md",
+          "language": "markdown",
+          "sizeLines": 98,
+          "fileCategory": "docs"
+        },
+        {
+          "path": "repositories/zotero-arxiv-html-ingest/docs/OPERATIONS.md",
+          "language": "markdown",
+          "sizeLines": 80,
+          "fileCategory": "docs"
+        }
+      ],
+      "batchImportData": {
+        "repositories/zotero-arxiv-html-ingest/docs/ARCHITECTURE.md": [],
+        "repositories/zotero-arxiv-html-ingest/docs/DEVELOPMENT_PLAN.md": [],
+        "repositories/zotero-arxiv-html-ingest/docs/OPERATIONS.md": []
+      },
+      "neighborMap": {}
+    },
+    {
+      "batchIndex": 8,
+      "files": [
+        {
+          "path": "repositories/zotero-metadata-enrichment/docs/ARCHITECTURE.md",
+          "language": "markdown",
+          "sizeLines": 122,
+          "fileCategory": "docs"
+        },
+        {
+          "path": "repositories/zotero-metadata-enrichment/docs/DEVELOPMENT_PLAN.md",
+          "language": "markdown",
+          "sizeLines": 135,
+          "fileCategory": "docs"
+        },
+        {
+          "path": "repositories/zotero-metadata-enrichment/docs/OPERATIONS.md",
+          "language": "markdown",
+          "sizeLines": 76,
+          "fileCategory": "docs"
+        }
+      ],
+      "batchImportData": {
+        "repositories/zotero-metadata-enrichment/docs/ARCHITECTURE.md": [],
+        "repositories/zotero-metadata-enrichment/docs/DEVELOPMENT_PLAN.md": [],
+        "repositories/zotero-metadata-enrichment/docs/OPERATIONS.md": []
+      },
+      "neighborMap": {}
+    },
+    {
+      "batchIndex": 9,
+      "files": [
+        {
+          "path": "pyproject.toml",
+          "language": "toml",
+          "sizeLines": 37,
+          "fileCategory": "config"
+        },
+        {
+          "path": "README.md",
+          "language": "markdown",
+          "sizeLines": 164,
+          "fileCategory": "docs"
+        },
+        {
+          "path": "repositories/README.md",
+          "language": "markdown",
+          "sizeLines": 18,
+          "fileCategory": "docs"
+        },
+        {
+          "path": "repositories/zotero-arxiv-html-ingest/pyproject.toml",
+          "language": "toml",
+          "sizeLines": 14,
+          "fileCategory": "config"
+        },
+        {
+          "path": "repositories/zotero-arxiv-html-ingest/README.md",
+          "language": "markdown",
+          "sizeLines": 116,
+          "fileCategory": "docs"
+        },
+        {
+          "path": "repositories/zotero-arxiv-html-ingest/tests/test_html_storage.py",
+          "language": "python",
+          "sizeLines": 56,
+          "fileCategory": "code"
+        },
+        {
+          "path": "repositories/zotero-arxiv-html-ingest/tests/test_identifiers_lookup.py",
+          "language": "python",
+          "sizeLines": 40,
+          "fileCategory": "code"
+        },
+        {
+          "path": "repositories/zotero-arxiv-html-ingest/tests/test_ingest.py",
+          "language": "python",
+          "sizeLines": 65,
+          "fileCategory": "code"
+        },
+        {
+          "path": "repositories/zotero-metadata-enrichment/pyproject.toml",
+          "language": "toml",
+          "sizeLines": 14,
+          "fileCategory": "config"
+        },
+        {
+          "path": "repositories/zotero-metadata-enrichment/README.md",
+          "language": "markdown",
+          "sizeLines": 64,
+          "fileCategory": "docs"
+        },
+        {
+          "path": "repositories/zotero-metadata-enrichment/tests/test_attachment_types.py",
+          "language": "python",
+          "sizeLines": 14,
+          "fileCategory": "code"
+        },
+        {
+          "path": "repositories/zotero-metadata-enrichment/tests/test_discovery.py",
+          "language": "python",
+          "sizeLines": 310,
+          "fileCategory": "code"
+        },
+        {
+          "path": "repositories/zotero-metadata-enrichment/tests/test_enrichment.py",
+          "language": "python",
+          "sizeLines": 188,
+          "fileCategory": "code"
+        },
+        {
+          "path": "repositories/zotero-metadata-enrichment/tests/test_fulltext.py",
+          "language": "python",
+          "sizeLines": 168,
+          "fileCategory": "code"
+        },
+        {
+          "path": "repositories/zotero-metadata-enrichment/tests/test_html_sources.py",
+          "language": "python",
+          "sizeLines": 692,
+          "fileCategory": "code"
+        },
+        {
+          "path": "repositories/zotero-metadata-enrichment/tests/test_identifiers_diff.py",
+          "language": "python",
+          "sizeLines": 75,
+          "fileCategory": "code"
+        },
+        {
+          "path": "repositories/zotero-metadata-enrichment/tests/test_local_zotero.py",
+          "language": "python",
+          "sizeLines": 112,
+          "fileCategory": "code"
+        },
+        {
+          "path": "repositories/zotero-metadata-enrichment/tests/test_pdf_sources.py",
+          "language": "python",
+          "sizeLines": 96,
+          "fileCategory": "code"
+        },
+        {
+          "path": "repositories/zotero-metadata-enrichment/tests/test_providers.py",
+          "language": "python",
+          "sizeLines": 361,
+          "fileCategory": "code"
+        },
+        {
+          "path": "scripts/__init__.py",
+          "language": "python",
+          "sizeLines": 0,
+          "fileCategory": "code"
+        },
+        {
+          "path": "scripts/drains/__init__.py",
+          "language": "python",
+          "sizeLines": 0,
+          "fileCategory": "code"
+        },
+        {
+          "path": "scripts/providers/__init__.py",
+          "language": "python",
+          "sizeLines": 0,
+          "fileCategory": "code"
+        },
+        {
+          "path": "tests/test_researchgate_pdf_browser_download.py",
+          "language": "python",
+          "sizeLines": 90,
+          "fileCategory": "code"
+        },
+        {
+          "path": "zotero_ingest_worker/state_repositories.py",
+          "language": "python",
+          "sizeLines": 187,
+          "fileCategory": "code"
+        },
+        {
+          "path": "zoteropdf2md/__init__.py",
+          "language": "python",
+          "sizeLines": 1,
+          "fileCategory": "code"
+        }
+      ],
+      "batchImportData": {
+        "pyproject.toml": [],
+        "README.md": [],
+        "repositories/README.md": [],
+        "repositories/zotero-arxiv-html-ingest/pyproject.toml": [],
+        "repositories/zotero-arxiv-html-ingest/README.md": [],
+        "repositories/zotero-arxiv-html-ingest/tests/test_html_storage.py": [],
+        "repositories/zotero-arxiv-html-ingest/tests/test_identifiers_lookup.py": [],
+        "repositories/zotero-arxiv-html-ingest/tests/test_ingest.py": [],
+        "repositories/zotero-metadata-enrichment/pyproject.toml": [],
+        "repositories/zotero-metadata-enrichment/README.md": [],
+        "repositories/zotero-metadata-enrichment/tests/test_attachment_types.py": [],
+        "repositories/zotero-metadata-enrichment/tests/test_discovery.py": [],
+        "repositories/zotero-metadata-enrichment/tests/test_enrichment.py": [],
+        "repositories/zotero-metadata-enrichment/tests/test_fulltext.py": [],
+        "repositories/zotero-metadata-enrichment/tests/test_html_sources.py": [],
+        "repositories/zotero-metadata-enrichment/tests/test_identifiers_diff.py": [],
+        "repositories/zotero-metadata-enrichment/tests/test_local_zotero.py": [],
+        "repositories/zotero-metadata-enrichment/tests/test_pdf_sources.py": [],
+        "repositories/zotero-metadata-enrichment/tests/test_providers.py": [],
+        "scripts/__init__.py": [],
+        "scripts/drains/__init__.py": [],
+        "scripts/providers/__init__.py": [],
+        "tests/test_researchgate_pdf_browser_download.py": [],
+        "zotero_ingest_worker/state_repositories.py": [],
+        "zoteropdf2md/__init__.py": []
+      },
+      "neighborMap": {}
+    },
+    {
+      "batchIndex": 10,
+      "files": [
+        {
+          "path": "zoteropdf2md/assets/katex/katex.inlined.css",
+          "language": "css",
+          "sizeLines": 1,
+          "fileCategory": "markup"
+        },
+        {
+          "path": "zoteropdf2md/assets/katex/REGENERATE.md",
+          "language": "markdown",
+          "sizeLines": 33,
+          "fileCategory": "docs"
+        },
+        {
+          "path": "zoteropdf2md/raw_html_polish/__init__.py",
+          "language": "python",
+          "sizeLines": 1,
+          "fileCategory": "code"
+        }
+      ],
+      "batchImportData": {
+        "zoteropdf2md/assets/katex/katex.inlined.css": [],
+        "zoteropdf2md/assets/katex/REGENERATE.md": [],
+        "zoteropdf2md/raw_html_polish/__init__.py": []
+      },
+      "neighborMap": {}
+    }
+  ]
+}

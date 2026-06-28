@@ -1,0 +1,560 @@
+{
+  "scriptCompleted": true,
+  "stats": {
+    "filesScanned": 158,
+    "filesWithImports": 97,
+    "totalEdges": 295
+  },
+  "importMap": {
+    "docker-compose.yml": [],
+    "Dockerfile": [],
+    "pyproject.toml": [],
+    "README.md": [],
+    "repositories/README.md": [],
+    "repositories/zotero-arxiv-html-ingest/docs/ARCHITECTURE.md": [],
+    "repositories/zotero-arxiv-html-ingest/docs/DEVELOPMENT_PLAN.md": [],
+    "repositories/zotero-arxiv-html-ingest/docs/OPERATIONS.md": [],
+    "repositories/zotero-arxiv-html-ingest/pyproject.toml": [],
+    "repositories/zotero-arxiv-html-ingest/README.md": [],
+    "repositories/zotero-arxiv-html-ingest/src/zotero_arxiv_html_ingest/__init__.py": [
+      "repositories/zotero-arxiv-html-ingest/src/zotero_arxiv_html_ingest/html_fetch.py",
+      "repositories/zotero-arxiv-html-ingest/src/zotero_arxiv_html_ingest/identifiers.py",
+      "repositories/zotero-arxiv-html-ingest/src/zotero_arxiv_html_ingest/lookup.py",
+      "repositories/zotero-arxiv-html-ingest/src/zotero_arxiv_html_ingest/models.py",
+      "repositories/zotero-arxiv-html-ingest/src/zotero_arxiv_html_ingest/storage.py"
+    ],
+    "repositories/zotero-arxiv-html-ingest/src/zotero_arxiv_html_ingest/cli.py": [
+      "repositories/zotero-arxiv-html-ingest/src/zotero_arxiv_html_ingest/html_fetch.py",
+      "repositories/zotero-arxiv-html-ingest/src/zotero_arxiv_html_ingest/lookup.py",
+      "repositories/zotero-arxiv-html-ingest/src/zotero_arxiv_html_ingest/models.py",
+      "repositories/zotero-arxiv-html-ingest/src/zotero_arxiv_html_ingest/storage.py"
+    ],
+    "repositories/zotero-arxiv-html-ingest/src/zotero_arxiv_html_ingest/html_fetch.py": [
+      "repositories/zotero-arxiv-html-ingest/src/zotero_arxiv_html_ingest/identifiers.py",
+      "repositories/zotero-arxiv-html-ingest/src/zotero_arxiv_html_ingest/text.py"
+    ],
+    "repositories/zotero-arxiv-html-ingest/src/zotero_arxiv_html_ingest/identifiers.py": [],
+    "repositories/zotero-arxiv-html-ingest/src/zotero_arxiv_html_ingest/ingest.py": [
+      "repositories/zotero-arxiv-html-ingest/src/zotero_arxiv_html_ingest/html_fetch.py",
+      "repositories/zotero-arxiv-html-ingest/src/zotero_arxiv_html_ingest/identifiers.py",
+      "repositories/zotero-arxiv-html-ingest/src/zotero_arxiv_html_ingest/lookup.py",
+      "repositories/zotero-arxiv-html-ingest/src/zotero_arxiv_html_ingest/models.py",
+      "repositories/zotero-arxiv-html-ingest/src/zotero_arxiv_html_ingest/relay.py",
+      "repositories/zotero-arxiv-html-ingest/src/zotero_arxiv_html_ingest/storage.py"
+    ],
+    "repositories/zotero-arxiv-html-ingest/src/zotero_arxiv_html_ingest/lookup.py": [
+      "repositories/zotero-arxiv-html-ingest/src/zotero_arxiv_html_ingest/identifiers.py",
+      "repositories/zotero-arxiv-html-ingest/src/zotero_arxiv_html_ingest/models.py",
+      "repositories/zotero-arxiv-html-ingest/src/zotero_arxiv_html_ingest/text.py"
+    ],
+    "repositories/zotero-arxiv-html-ingest/src/zotero_arxiv_html_ingest/models.py": [],
+    "repositories/zotero-arxiv-html-ingest/src/zotero_arxiv_html_ingest/relay.py": [
+      "repositories/zotero-arxiv-html-ingest/src/zotero_arxiv_html_ingest/models.py",
+      "repositories/zotero-arxiv-html-ingest/src/zotero_arxiv_html_ingest/storage.py"
+    ],
+    "repositories/zotero-arxiv-html-ingest/src/zotero_arxiv_html_ingest/storage.py": [
+      "repositories/zotero-arxiv-html-ingest/src/zotero_arxiv_html_ingest/models.py"
+    ],
+    "repositories/zotero-arxiv-html-ingest/src/zotero_arxiv_html_ingest/text.py": [],
+    "repositories/zotero-arxiv-html-ingest/tests/test_html_storage.py": [],
+    "repositories/zotero-arxiv-html-ingest/tests/test_identifiers_lookup.py": [],
+    "repositories/zotero-arxiv-html-ingest/tests/test_ingest.py": [],
+    "repositories/zotero-metadata-enrichment/docs/ARCHITECTURE.md": [],
+    "repositories/zotero-metadata-enrichment/docs/DEVELOPMENT_PLAN.md": [],
+    "repositories/zotero-metadata-enrichment/docs/OPERATIONS.md": [],
+    "repositories/zotero-metadata-enrichment/pyproject.toml": [],
+    "repositories/zotero-metadata-enrichment/README.md": [],
+    "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/__init__.py": [
+      "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/diff.py",
+      "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/discovery.py",
+      "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/enrichment.py",
+      "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/fulltext.py",
+      "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/identifiers.py",
+      "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/models.py"
+    ],
+    "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/attachment_types.py": [],
+    "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/cli.py": [
+      "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/diff.py",
+      "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/discovery.py",
+      "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/enrichment.py",
+      "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/fulltext.py",
+      "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/html_sources.py",
+      "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/local_zotero.py",
+      "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/models.py",
+      "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/pdf_sources.py"
+    ],
+    "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/diff.py": [
+      "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/models.py",
+      "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/text.py"
+    ],
+    "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/discovery.py": [
+      "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/enrichment.py",
+      "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/identifiers.py",
+      "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/models.py",
+      "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/providers/__init__.py"
+    ],
+    "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/enrichment.py": [
+      "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/diff.py",
+      "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/identifiers.py",
+      "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/models.py",
+      "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/providers/__init__.py",
+      "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/text.py"
+    ],
+    "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/fulltext.py": [
+      "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/discovery.py",
+      "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/enrichment.py",
+      "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/html_sources.py",
+      "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/models.py",
+      "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/pdf_sources.py"
+    ],
+    "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/html_sources.py": [
+      "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/models.py",
+      "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/text.py",
+      "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/url_safety.py"
+    ],
+    "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/identifiers.py": [],
+    "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/local_zotero.py": [
+      "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/attachment_types.py",
+      "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/models.py"
+    ],
+    "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/models.py": [],
+    "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/pdf_sources.py": [
+      "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/html_sources.py",
+      "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/models.py",
+      "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/text.py",
+      "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/url_safety.py"
+    ],
+    "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/providers/__init__.py": [
+      "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/providers/arxiv.py",
+      "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/providers/biorxiv.py",
+      "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/providers/core.py",
+      "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/providers/crossref.py",
+      "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/providers/datacite.py",
+      "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/providers/doaj.py",
+      "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/providers/europe_pmc.py",
+      "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/providers/openaire.py",
+      "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/providers/openalex.py",
+      "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/providers/opencitations.py",
+      "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/providers/pubmed.py",
+      "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/providers/semantic_scholar.py",
+      "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/providers/unpaywall.py",
+      "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/providers/zotero_translation_server.py"
+    ],
+    "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/providers/arxiv.py": [
+      "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/identifiers.py",
+      "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/models.py",
+      "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/providers/common.py",
+      "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/text.py"
+    ],
+    "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/providers/biorxiv.py": [
+      "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/identifiers.py",
+      "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/models.py",
+      "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/providers/common.py"
+    ],
+    "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/providers/common.py": [
+      "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/models.py",
+      "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/text.py"
+    ],
+    "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/providers/core.py": [
+      "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/identifiers.py",
+      "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/models.py",
+      "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/providers/common.py",
+      "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/text.py"
+    ],
+    "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/providers/crossref.py": [
+      "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/identifiers.py",
+      "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/models.py",
+      "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/providers/common.py",
+      "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/text.py"
+    ],
+    "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/providers/datacite.py": [
+      "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/identifiers.py",
+      "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/models.py",
+      "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/providers/common.py"
+    ],
+    "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/providers/doaj.py": [
+      "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/identifiers.py",
+      "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/models.py",
+      "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/providers/common.py",
+      "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/text.py"
+    ],
+    "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/providers/europe_pmc.py": [
+      "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/identifiers.py",
+      "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/models.py",
+      "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/providers/common.py"
+    ],
+    "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/providers/openaire.py": [
+      "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/identifiers.py",
+      "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/models.py",
+      "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/providers/common.py"
+    ],
+    "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/providers/openalex.py": [
+      "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/identifiers.py",
+      "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/models.py",
+      "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/providers/common.py",
+      "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/text.py"
+    ],
+    "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/providers/opencitations.py": [
+      "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/identifiers.py"
+    ],
+    "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/providers/pubmed.py": [
+      "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/identifiers.py",
+      "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/models.py",
+      "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/text.py"
+    ],
+    "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/providers/semantic_scholar.py": [
+      "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/identifiers.py",
+      "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/models.py",
+      "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/providers/common.py",
+      "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/text.py"
+    ],
+    "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/providers/unpaywall.py": [
+      "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/identifiers.py",
+      "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/models.py",
+      "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/providers/common.py"
+    ],
+    "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/providers/zotero_translation_server.py": [
+      "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/diff.py",
+      "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/identifiers.py",
+      "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/models.py",
+      "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/text.py"
+    ],
+    "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/text.py": [],
+    "repositories/zotero-metadata-enrichment/src/zotero_metadata_enrichment/url_safety.py": [],
+    "repositories/zotero-metadata-enrichment/tests/test_attachment_types.py": [],
+    "repositories/zotero-metadata-enrichment/tests/test_discovery.py": [],
+    "repositories/zotero-metadata-enrichment/tests/test_enrichment.py": [],
+    "repositories/zotero-metadata-enrichment/tests/test_fulltext.py": [],
+    "repositories/zotero-metadata-enrichment/tests/test_html_sources.py": [],
+    "repositories/zotero-metadata-enrichment/tests/test_identifiers_diff.py": [],
+    "repositories/zotero-metadata-enrichment/tests/test_local_zotero.py": [],
+    "repositories/zotero-metadata-enrichment/tests/test_pdf_sources.py": [],
+    "repositories/zotero-metadata-enrichment/tests/test_providers.py": [],
+    "scripts/__init__.py": [],
+    "scripts/bulk_repolish_source_html.py": [
+      "zoteropdf2md/web_html_polish.py"
+    ],
+    "scripts/drains/__init__.py": [],
+    "scripts/drains/full_text_compact.py": [
+      "zotero_ingest_worker/config.py",
+      "zotero_ingest_worker/full_text_discovery.py",
+      "zotero_ingest_worker/metadata_jobs.py",
+      "zotero_ingest_worker/metadata_processor.py"
+    ],
+    "scripts/providers/__init__.py": [],
+    "scripts/providers/researchgate_pdf_browser_download.py": [
+      "zotero_ingest_worker/config.py",
+      "zotero_ingest_worker/full_text_attachment.py",
+      "zotero_ingest_worker/local_zotero.py",
+      "zotero_ingest_worker/relay_client.py"
+    ],
+    "scripts/source_html_audit_cleanup.py": [
+      "zotero_ingest_worker/source_html_quality_audit.py"
+    ],
+    "tests/test_article_standard.py": [
+      "zotero_ingest_worker/article_standard.py",
+      "zotero_ingest_worker/full_text_attachment.py"
+    ],
+    "tests/test_arxiv_html_service.py": [
+      "zotero_ingest_worker/arxiv_html.py",
+      "zotero_ingest_worker/local_zotero.py"
+    ],
+    "tests/test_arxiv_source_recovery.py": [
+      "zoteropdf2md/arxiv_source_recovery.py"
+    ],
+    "tests/test_config.py": [
+      "zotero_ingest_worker/config.py"
+    ],
+    "tests/test_drain_full_text_compact.py": [
+      "scripts/drains/full_text_compact.py"
+    ],
+    "tests/test_full_run.py": [
+      "zotero_ingest_worker/full_run.py",
+      "zotero_ingest_worker/state.py"
+    ],
+    "tests/test_full_text_attachment.py": [
+      "zotero_ingest_worker/full_text_article.py",
+      "zotero_ingest_worker/full_text_attachment.py"
+    ],
+    "tests/test_full_text_discovery.py": [
+      "zotero_ingest_worker/__init__.py",
+      "zotero_ingest_worker/metadata_processor.py"
+    ],
+    "tests/test_full_text_inventory.py": [
+      "zotero_ingest_worker/full_text_inventory.py"
+    ],
+    "tests/test_ingest_refactor_boundaries.py": [
+      "zotero_ingest_worker/__init__.py",
+      "zotero_ingest_worker/full_run_options.py",
+      "zotero_ingest_worker/full_run_plan.py",
+      "zotero_ingest_worker/full_run_results.py",
+      "zotero_ingest_worker/full_run.py",
+      "zotero_ingest_worker/metadata_processor_helpers.py",
+      "zotero_ingest_worker/metadata_processor.py"
+    ],
+    "tests/test_local_attachment_sync.py": [
+      "zotero_ingest_worker/local_attachment_sync.py"
+    ],
+    "tests/test_local_zotero_paths.py": [
+      "zotero_ingest_worker/local_zotero_paths.py"
+    ],
+    "tests/test_metadata_jobs.py": [
+      "zotero_ingest_worker/config.py",
+      "zotero_ingest_worker/metadata_jobs.py"
+    ],
+    "tests/test_metadata_processor.py": [
+      "zotero_ingest_worker/local_zotero.py",
+      "zotero_ingest_worker/metadata_jobs.py",
+      "zotero_ingest_worker/metadata_processor.py",
+      "zotero_ingest_worker/relay_client.py",
+      "zotero_ingest_worker/state.py"
+    ],
+    "tests/test_provider_scripts.py": [
+      "zotero_ingest_worker/provider_scripts.py"
+    ],
+    "tests/test_relay_client.py": [
+      "zotero_ingest_worker/relay_client.py"
+    ],
+    "tests/test_researchgate_pdf_browser_download.py": [],
+    "tests/test_researchgate_pdf_job.py": [
+      "zotero_ingest_worker/metadata_processor.py",
+      "zotero_ingest_worker/researchgate_pdf.py"
+    ],
+    "tests/test_service_actions.py": [
+      "zotero_ingest_worker/config.py",
+      "zotero_ingest_worker/service_actions.py"
+    ],
+    "tests/test_source_html_audit_cleanup.py": [
+      "scripts/bulk_repolish_source_html.py",
+      "scripts/source_html_audit_cleanup.py"
+    ],
+    "tests/test_source_html_maintenance.py": [
+      "zotero_ingest_worker/full_text_inventory.py",
+      "zotero_ingest_worker/source_html_maintenance.py"
+    ],
+    "tests/test_source_html_quality_audit.py": [
+      "zotero_ingest_worker/local_zotero_paths.py",
+      "zotero_ingest_worker/source_html_quality_audit.py",
+      "zoteropdf2md/html_theme.py"
+    ],
+    "tests/test_state_store.py": [
+      "zotero_ingest_worker/state.py"
+    ],
+    "tests/test_web_html_polish.py": [
+      "zoteropdf2md/html_links.py",
+      "zoteropdf2md/html_theme.py",
+      "zoteropdf2md/web_html_polish.py",
+      "zoteropdf2md/web_polish/core.py",
+      "zoteropdf2md/web_polish/registry.py"
+    ],
+    "tests/test_worker_roles.py": [
+      "zotero_ingest_worker/worker_roles.py"
+    ],
+    "zotero_ingest_worker/__init__.py": [],
+    "zotero_ingest_worker/__main__.py": [
+      "zotero_ingest_worker/config.py",
+      "zotero_ingest_worker/full_run.py",
+      "zotero_ingest_worker/metadata_processor.py",
+      "zotero_ingest_worker/service_actions.py",
+      "zotero_ingest_worker/service.py",
+      "zotero_ingest_worker/worker_roles.py"
+    ],
+    "zotero_ingest_worker/article_standard.py": [],
+    "zotero_ingest_worker/arxiv_html.py": [
+      "zotero_ingest_worker/local_zotero.py",
+      "zotero_ingest_worker/metadata_jobs.py",
+      "zotero_ingest_worker/package_paths.py",
+      "zotero_ingest_worker/state.py"
+    ],
+    "zotero_ingest_worker/config.py": [
+      "zotero_ingest_worker/worker_roles.py"
+    ],
+    "zotero_ingest_worker/full_run_options.py": [],
+    "zotero_ingest_worker/full_run_plan.py": [
+      "zotero_ingest_worker/full_run_options.py"
+    ],
+    "zotero_ingest_worker/full_run_results.py": [],
+    "zotero_ingest_worker/full_run.py": [
+      "zotero_ingest_worker/config.py",
+      "zotero_ingest_worker/full_run_options.py",
+      "zotero_ingest_worker/full_run_plan.py",
+      "zotero_ingest_worker/full_run_results.py",
+      "zotero_ingest_worker/metadata_jobs.py",
+      "zotero_ingest_worker/metadata_processor.py",
+      "zotero_ingest_worker/state.py"
+    ],
+    "zotero_ingest_worker/full_text_article.py": [],
+    "zotero_ingest_worker/full_text_attachment.py": [
+      "zotero_ingest_worker/full_text_article.py",
+      "zotero_ingest_worker/local_attachment_sync.py",
+      "zotero_ingest_worker/local_zotero.py",
+      "zotero_ingest_worker/source_html_maintenance.py"
+    ],
+    "zotero_ingest_worker/full_text_discovery.py": [
+      "zotero_ingest_worker/article_standard.py",
+      "zotero_ingest_worker/full_text_article.py",
+      "zotero_ingest_worker/full_text_attachment.py",
+      "zotero_ingest_worker/full_text_inventory.py",
+      "zotero_ingest_worker/local_zotero.py",
+      "zotero_ingest_worker/package_paths.py"
+    ],
+    "zotero_ingest_worker/full_text_inventory.py": [
+      "zotero_ingest_worker/package_paths.py"
+    ],
+    "zotero_ingest_worker/fulltext_main.py": [
+      "zotero_ingest_worker/__main__.py",
+      "zotero_ingest_worker/worker_roles.py"
+    ],
+    "zotero_ingest_worker/local_attachment_sync.py": [
+      "zotero_ingest_worker/local_zotero.py"
+    ],
+    "zotero_ingest_worker/local_zotero_paths.py": [],
+    "zotero_ingest_worker/local_zotero_sqlite.py": [],
+    "zotero_ingest_worker/local_zotero.py": [
+      "zotero_ingest_worker/config.py",
+      "zotero_ingest_worker/full_text_inventory.py",
+      "zotero_ingest_worker/local_zotero_paths.py",
+      "zotero_ingest_worker/local_zotero_sqlite.py"
+    ],
+    "zotero_ingest_worker/metadata_backlog_scanner.py": [
+      "zotero_ingest_worker/full_text_inventory.py",
+      "zotero_ingest_worker/local_zotero.py",
+      "zotero_ingest_worker/metadata_jobs.py",
+      "zotero_ingest_worker/metadata_processor_helpers.py"
+    ],
+    "zotero_ingest_worker/metadata_jobs.py": [],
+    "zotero_ingest_worker/metadata_processor_helpers.py": [
+      "zotero_ingest_worker/full_text_discovery.py",
+      "zotero_ingest_worker/local_zotero.py",
+      "zotero_ingest_worker/package_paths.py"
+    ],
+    "zotero_ingest_worker/metadata_processor.py": [
+      "zotero_ingest_worker/arxiv_html.py",
+      "zotero_ingest_worker/config.py",
+      "zotero_ingest_worker/full_text_attachment.py",
+      "zotero_ingest_worker/full_text_discovery.py",
+      "zotero_ingest_worker/full_text_inventory.py",
+      "zotero_ingest_worker/local_attachment_sync.py",
+      "zotero_ingest_worker/local_zotero.py",
+      "zotero_ingest_worker/metadata_backlog_scanner.py",
+      "zotero_ingest_worker/metadata_jobs.py",
+      "zotero_ingest_worker/metadata_processor_helpers.py",
+      "zotero_ingest_worker/package_paths.py",
+      "zotero_ingest_worker/relay_client.py",
+      "zotero_ingest_worker/researchgate_pdf.py",
+      "zotero_ingest_worker/scihub_pdf.py",
+      "zotero_ingest_worker/source_html_maintenance.py",
+      "zotero_ingest_worker/state.py"
+    ],
+    "zotero_ingest_worker/package_paths.py": [],
+    "zotero_ingest_worker/pdf.py": [],
+    "zotero_ingest_worker/provider_scripts.py": [],
+    "zotero_ingest_worker/relay_client.py": [
+      "zotero_ingest_worker/local_zotero.py"
+    ],
+    "zotero_ingest_worker/researchgate_pdf.py": [
+      "zotero_ingest_worker/config.py",
+      "zotero_ingest_worker/provider_scripts.py"
+    ],
+    "zotero_ingest_worker/scihub_pdf.py": [
+      "zotero_ingest_worker/config.py",
+      "zotero_ingest_worker/package_paths.py",
+      "zotero_ingest_worker/provider_scripts.py"
+    ],
+    "zotero_ingest_worker/service_actions.py": [
+      "zotero_ingest_worker/config.py",
+      "zotero_ingest_worker/full_run.py",
+      "zotero_ingest_worker/metadata_processor.py",
+      "zotero_ingest_worker/worker_roles.py"
+    ],
+    "zotero_ingest_worker/service.py": [
+      "zotero_ingest_worker/config.py",
+      "zotero_ingest_worker/full_run.py",
+      "zotero_ingest_worker/metadata_jobs.py",
+      "zotero_ingest_worker/metadata_processor.py",
+      "zotero_ingest_worker/service_actions.py",
+      "zotero_ingest_worker/worker_roles.py"
+    ],
+    "zotero_ingest_worker/source_html_maintenance.py": [
+      "zotero_ingest_worker/full_text_inventory.py",
+      "zotero_ingest_worker/local_zotero.py"
+    ],
+    "zotero_ingest_worker/source_html_quality_audit.py": [
+      "zotero_ingest_worker/config.py",
+      "zotero_ingest_worker/local_zotero_paths.py",
+      "zoteropdf2md/html_links.py"
+    ],
+    "zotero_ingest_worker/state_repositories.py": [],
+    "zotero_ingest_worker/state_schema.py": [],
+    "zotero_ingest_worker/state.py": [
+      "zotero_ingest_worker/state_schema.py"
+    ],
+    "zotero_ingest_worker/worker_roles.py": [
+      "zotero_ingest_worker/metadata_jobs.py"
+    ],
+    "zoteropdf2md/__init__.py": [],
+    "zoteropdf2md/arxiv_source_recovery.py": [
+      "zoteropdf2md/html_links.py",
+      "zoteropdf2md/web_polish/core.py"
+    ],
+    "zoteropdf2md/assets/katex/katex.inlined.css": [],
+    "zoteropdf2md/assets/katex/REGENERATE.md": [],
+    "zoteropdf2md/html_images.py": [],
+    "zoteropdf2md/html_links.py": [],
+    "zoteropdf2md/html_theme.py": [],
+    "zoteropdf2md/raw_html_polish/__init__.py": [],
+    "zoteropdf2md/raw_html_polish/html_fragments.py": [],
+    "zoteropdf2md/raw_html_polish/katex.py": [
+      "zoteropdf2md/html_links.py",
+      "zoteropdf2md/raw_html_polish/html_fragments.py"
+    ],
+    "zoteropdf2md/web_html_polish.py": [
+      "zoteropdf2md/arxiv_source_recovery.py",
+      "zoteropdf2md/html_images.py",
+      "zoteropdf2md/html_links.py",
+      "zoteropdf2md/html_theme.py",
+      "zoteropdf2md/raw_html_polish/katex.py",
+      "zoteropdf2md/web_polish/core.py",
+      "zoteropdf2md/web_polish/registry.py"
+    ],
+    "zoteropdf2md/web_polish/__init__.py": [
+      "zoteropdf2md/web_polish/core.py",
+      "zoteropdf2md/web_polish/registry.py"
+    ],
+    "zoteropdf2md/web_polish/arxiv.py": [
+      "zoteropdf2md/web_polish/core.py"
+    ],
+    "zoteropdf2md/web_polish/cli.py": [
+      "zoteropdf2md/web_html_polish.py",
+      "zoteropdf2md/web_polish/core.py"
+    ],
+    "zoteropdf2md/web_polish/core.py": [],
+    "zoteropdf2md/web_polish/iop.py": [
+      "zoteropdf2md/web_polish/core.py"
+    ],
+    "zoteropdf2md/web_polish/ojs.py": [
+      "zoteropdf2md/web_polish/core.py"
+    ],
+    "zoteropdf2md/web_polish/pmc.py": [
+      "zoteropdf2md/html_links.py",
+      "zoteropdf2md/web_polish/core.py"
+    ],
+    "zoteropdf2md/web_polish/registry.py": [
+      "zoteropdf2md/web_polish/core.py"
+    ],
+    "zoteropdf2md/web_polish/researchgate.py": [
+      "zoteropdf2md/web_polish/core.py"
+    ],
+    "zoteropdf2md/web_polish/sciendo.py": [
+      "zoteropdf2md/web_polish/core.py"
+    ],
+    "zoteropdf2md/web_polish/springer_nature.py": [
+      "zoteropdf2md/html_links.py",
+      "zoteropdf2md/web_polish/core.py"
+    ],
+    "zoteropdf2md/web_polish/taylor_francis.py": [
+      "zoteropdf2md/html_links.py",
+      "zoteropdf2md/web_polish/core.py"
+    ]
+  }
+}
