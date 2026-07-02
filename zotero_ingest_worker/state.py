@@ -7,7 +7,7 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, Callable
 
 from .state_schema import PIPELINE_STATE_SCHEMA_VERSION, initialize_pipeline_state_schema
 
@@ -1197,6 +1197,57 @@ class PipelineStateStore:
                     job_id=job_id,
                     event="recovered",
                     message="Expired running metadata job lease was returned to queued.",
+                )
+        return len(job_ids)
+
+    def recover_orphaned_metadata_jobs(
+        self,
+        *,
+        job_type: str | None = None,
+        owner_alive: Callable[[str], bool] | None = None,
+    ) -> int:
+        now = _utc_now().isoformat()
+        params: list[Any] = []
+        type_clause = ""
+        if job_type:
+            type_clause = "and job_type = ?"
+            params.append(job_type)
+        with self._connect() as connection:
+            rows = connection.execute(
+                f"""
+                select job_id, lease_owner
+                from metadata_jobs
+                where status = 'running'
+                  and lease_owner is not null
+                  {type_clause}
+                """,
+                params,
+            ).fetchall()
+            job_ids = [
+                str(row["job_id"])
+                for row in rows
+                if owner_alive is None or not owner_alive(str(row["lease_owner"] or ""))
+            ]
+            for job_id in job_ids:
+                connection.execute(
+                    """
+                    update metadata_jobs
+                    set status = 'queued',
+                        phase = 'recovered',
+                        lease_owner = null,
+                        leased_until = null,
+                        last_error = 'Recovered orphaned metadata job lease.',
+                        updated_at = ?
+                    where job_id = ?
+                      and status = 'running'
+                    """,
+                    (now, job_id),
+                )
+                self._add_metadata_job_event(
+                    connection,
+                    job_id=job_id,
+                    event="recovered",
+                    message="Orphaned running metadata job lease was returned to queued.",
                 )
         return len(job_ids)
 
