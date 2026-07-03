@@ -103,6 +103,8 @@ _PICTURE_RE = re.compile(
 )
 _SOURCE_OPEN_RE = re.compile(r"<source\b[^>]*>", re.IGNORECASE | re.DOTALL)
 _IMG_OPEN_RE = re.compile(r"<img\b(?P<attrs>[^>]*)>", re.IGNORECASE | re.DOTALL)
+_INLINE_MEDIA_RE = re.compile(r"<(?:img|picture|svg|math|video|canvas|iframe|object|embed)\b", re.IGNORECASE)
+_PARAGRAPH_BLOCK_TAGS = frozenset({"ul", "ol", "table", "figure"})
 _EMPTY_TABLE_RE = re.compile(r"<table\b[^>]*>\s*</table>", re.IGNORECASE)
 _EMPTY_FIGURE_SHELL_RE = re.compile(
     r"<figure\b[^>]*>\s*(?:<div\b[^>]*>\s*<a\b[^>]*>\s*Open\s+in\s+a\s+new\s+tab\s*</a>\s*</div>\s*)?</figure>",
@@ -276,6 +278,7 @@ def polish_web_html_document(
         article_html = remove_latexml_description_error_panels(article_html)
         article_html = remove_latexml_inline_black_text_color(article_html)
     article_html = repair_empty_image_sources(article_html)
+    article_html = repair_web_article_block_flow(article_html)
     article_html = remove_empty_tables(article_html)
     article_html = remove_empty_figure_shells(article_html)
     article_html = remove_unresolved_local_fragment_hrefs(article_html)
@@ -1057,6 +1060,111 @@ def repair_empty_image_sources(html: str) -> str:
         return ""
 
     return _IMG_OPEN_RE.sub(replace, html)
+
+
+def repair_web_article_block_flow(html: str) -> str:
+    """Repair common PDF-like block nesting that makes browser text flow unstable."""
+
+    html = lift_block_children_from_paragraphs(html)
+    return wrap_standalone_image_paragraphs(html)
+
+
+def lift_block_children_from_paragraphs(html: str) -> str:
+    """Move lists, tables, and figures out of paragraph wrappers."""
+
+    cleaned = html
+    while True:
+        for match in _HTML_TAG_RE.finditer(cleaned):
+            if match.group(0).startswith("</") or match.group("tag").lower() != "p":
+                continue
+            fragment = _balanced_element_from_match(cleaned, match)
+            if fragment is None:
+                continue
+            attrs = match.group("attrs") or ""
+            inner = fragment[len(match.group(0)) : -len("</p>")]
+            repaired = _lift_paragraph_block_children(attrs, inner)
+            if repaired == fragment:
+                continue
+            cleaned = cleaned[: match.start()] + repaired + cleaned[match.start() + len(fragment) :]
+            break
+        else:
+            return cleaned
+
+
+def wrap_standalone_image_paragraphs(html: str) -> str:
+    """Convert image-only paragraphs into figures so they do not split text inline."""
+
+    cleaned = html
+    while True:
+        for match in _HTML_TAG_RE.finditer(cleaned):
+            if match.group(0).startswith("</") or match.group("tag").lower() != "p":
+                continue
+            fragment = _balanced_element_from_match(cleaned, match)
+            if fragment is None:
+                continue
+            inner = fragment[len(match.group(0)) : -len("</p>")].strip()
+            if not _is_standalone_image_fragment(inner):
+                continue
+            attrs = _figure_attrs_from_paragraph_attrs(match.group("attrs") or "")
+            replacement = f"<figure{attrs}>{inner}</figure>"
+            cleaned = cleaned[: match.start()] + replacement + cleaned[match.start() + len(fragment) :]
+            break
+        else:
+            return cleaned
+
+
+def _lift_paragraph_block_children(attrs: str, inner: str) -> str:
+    pieces: list[str] = []
+    cursor = 0
+    changed = False
+    for match in _HTML_TAG_RE.finditer(inner):
+        if match.start() < cursor or match.group(0).startswith("</"):
+            continue
+        tag = match.group("tag").lower()
+        if tag not in _PARAGRAPH_BLOCK_TAGS:
+            continue
+        fragment = _balanced_element_from_match(inner, match)
+        if fragment is None:
+            continue
+        before = inner[cursor : match.start()]
+        if _has_paragraph_flow_content(before):
+            pieces.append(f"<p{attrs}>{before.strip()}</p>")
+        pieces.append(fragment.strip())
+        cursor = match.start() + len(fragment)
+        changed = True
+    if not changed:
+        return f"<p{attrs}>{inner}</p>"
+    tail = inner[cursor:]
+    if _has_paragraph_flow_content(tail):
+        pieces.append(f"<p{attrs}>{tail.strip()}</p>")
+    return "\n".join(pieces)
+
+
+def _has_paragraph_flow_content(fragment: str) -> bool:
+    if not fragment.strip():
+        return False
+    return bool(_visible_text(fragment).strip() or _INLINE_MEDIA_RE.search(fragment))
+
+
+def _is_standalone_image_fragment(fragment: str) -> bool:
+    if _IMG_OPEN_RE.search(fragment) is None:
+        return False
+    without_images = _IMG_OPEN_RE.sub("", fragment)
+    without_breaks = re.sub(r"<br\b[^>]*>", "", without_images, flags=re.IGNORECASE)
+    return not _has_paragraph_flow_content(without_breaks)
+
+
+def _figure_attrs_from_paragraph_attrs(attrs: str) -> str:
+    attr_values: list[str] = []
+    id_value = (_attr_value(attrs, "id") or "").strip()
+    if id_value:
+        attr_values.append(f'id="{html_escape(id_value, quote=True)}"')
+    class_value = (_attr_value(attrs, "class") or "").strip()
+    classes = "z2m-standalone-media"
+    if class_value:
+        classes = f"{classes} {class_value}"
+    attr_values.append(f'class="{html_escape(classes, quote=True)}"')
+    return " " + " ".join(attr_values)
 
 
 def remove_empty_tables(html: str) -> str:

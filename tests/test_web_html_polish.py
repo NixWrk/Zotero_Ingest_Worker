@@ -1407,6 +1407,39 @@ def test_polish_web_html_document_accepts_researchgate_article_like_html() -> No
     assert "<table" in result.html
 
 
+def test_polish_web_html_document_repairs_pdf_like_block_flow() -> None:
+    html = f"""
+    <html><head><title>ResearchGate PDF-like Article Copy</title></head><body>
+      <div class="research-detail-header-section">Publication metadata</div>
+      <article>
+        <h1>ResearchGate PDF-like Article Copy</h1>
+        <p>{" ".join([LONG_PARAGRAPH] * 12)}</p>
+        <p>Before table.
+          <table id="table-1"><tr><th>Group</th><th>Value</th></tr><tr><td>A</td><td>42</td></tr></table>
+          After table.
+        </p>
+        <p class="source-media"><img src="figure1.png" alt="Signal trace"></p>
+        <p><ul id="refs"><li>Reference one.</li><li>Reference two.</li></ul></p>
+        <p>{" ".join([LONG_PARAGRAPH] * 12)}</p>
+      </article>
+    </body></html>
+    """
+
+    result = polish_web_html_document(
+        html,
+        source_url="https://www.researchgate.net/publication/example",
+    )
+
+    assert "<table" in result.html
+    assert "Before table." in result.html
+    assert "After table." in result.html
+    assert '<figure class="z2m-standalone-media source-media"><img src="figure1.png"' in result.html
+    assert '<ul id="refs">' in result.html
+    assert "<p><table" not in result.html
+    assert '<p><ul id="refs">' not in result.html
+    assert '<p class="source-media"><img' not in result.html
+
+
 def test_sciendo_abstract_page_wins_over_article_body_css_noise() -> None:
     html = """
     <html><head><style>.article-body { display: block; }</style></head>
