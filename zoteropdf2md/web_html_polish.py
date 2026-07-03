@@ -229,6 +229,10 @@ def polish_web_html_document(
         canonical_url = canonical_url or full_text_url
         kind = require_web_article_html(html, source_url=source_url)
     else:
+        if kind == WebHtmlKind.RESEARCHGATE_PAGE and _looks_like_researchgate_pdf_shell(html):
+            raise WebHtmlPolishError(
+                "ResearchGate page does not expose article-like HTML; use the PDF attachment when available."
+            )
         rejection_message = rejection_message_for_kind(kind)
         if rejection_message is not None:
             raise WebHtmlPolishError(rejection_message)
@@ -1328,6 +1332,20 @@ def _looks_like_researchgate_page(sample: str, parsed_source: urllib.parse.Split
         or "lite.publicationdetails" in sample
         or "research-detail-header-section" in sample
         or ("download full-text pdf" in sample and "researchgate" in sample)
+    )
+
+
+def _looks_like_researchgate_pdf_shell(html: str) -> bool:
+    sample = html[:500_000].lower()
+    if "<article" in sample or "article-content" in sample or "article__content" in sample:
+        return False
+    if _visible_text_length(html) >= 3_000:
+        return False
+    return (
+        "download full-text pdf" in sample
+        or "request full-text" in sample
+        or "research-detail-header-section" in sample
+        or "lite.publicationdetails" in sample
     )
 
 

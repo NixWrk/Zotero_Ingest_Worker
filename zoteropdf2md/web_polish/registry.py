@@ -85,7 +85,7 @@ _HANDLERS: dict[WebHtmlKind, WebPolishHandler] = {
     ),
     WebHtmlKind.RESEARCHGATE_PAGE: WebPolishHandler(
         WebHtmlKind.RESEARCHGATE_PAGE,
-        rejection_message="ResearchGate pages are landing/PDF pages, not stable article HTML; use the PDF attachment when available.",
+        default_origin="https://www.researchgate.net/",
     ),
     WebHtmlKind.SCIENDO_ABSTRACT_PAGE: WebPolishHandler(
         WebHtmlKind.SCIENDO_ABSTRACT_PAGE,

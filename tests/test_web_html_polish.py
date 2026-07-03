@@ -1375,6 +1375,38 @@ def test_polish_web_html_document_rejects_known_non_full_text_web_pages() -> Non
         polish_web_html_document(ojs_html, source_url="https://www.almclinmed.ru/jour/article/view/335")
 
 
+def test_polish_web_html_document_accepts_researchgate_article_like_html() -> None:
+    html = f"""
+    <html><head><title>ResearchGate Article Copy</title></head><body>
+      <div class="research-detail-header-section">Publication metadata</div>
+      <article>
+        <h1>ResearchGate Article Copy</h1>
+        <section>
+          <h2>Abstract</h2>
+          <p>{" ".join([LONG_PARAGRAPH] * 8)}</p>
+          <h2>Introduction</h2>
+          <p>{" ".join([LONG_PARAGRAPH] * 16)}</p>
+          <figure><img src="figure1.png"><figcaption>Figure 1. Signal trace.</figcaption></figure>
+          <h2>Results</h2>
+          <table><tr><th>Group</th><th>Value</th></tr><tr><td>A</td><td>42</td></tr></table>
+          <p>{" ".join([LONG_PARAGRAPH] * 12)}</p>
+        </section>
+      </article>
+    </body></html>
+    """
+
+    result = polish_web_html_document(
+        html,
+        source_url="https://www.researchgate.net/publication/example",
+    )
+
+    assert result.kind == WebHtmlKind.RESEARCHGATE_PAGE
+    assert result.article_extracted is True
+    assert "ResearchGate Article Copy" in result.html
+    assert "Figure 1. Signal trace." in result.html
+    assert "<table" in result.html
+
+
 def test_sciendo_abstract_page_wins_over_article_body_css_noise() -> None:
     html = """
     <html><head><style>.article-body { display: block; }</style></head>
