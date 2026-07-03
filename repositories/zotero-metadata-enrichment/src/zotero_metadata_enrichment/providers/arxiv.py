@@ -6,6 +6,7 @@ import xml.etree.ElementTree as ET
 
 from ..identifiers import extract_arxiv_id_from_text, normalize_arxiv_id
 from ..models import FullTextLocation, MetadataCandidate
+from ..provider_http import read_text
 from ..text import normalize_space, title_match_score
 from .common import candidate_with_locations
 
@@ -70,9 +71,7 @@ class ArxivClient:
             },
             method="GET",
         )
-        with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
-            charset = response.headers.get_content_charset() or "utf-8"
-            return response.read().decode(charset, errors="replace")
+        return read_text(request, timeout=self.timeout_seconds)
 
 
 def parse_arxiv_atom(xml_text: str) -> list[MetadataCandidate]:

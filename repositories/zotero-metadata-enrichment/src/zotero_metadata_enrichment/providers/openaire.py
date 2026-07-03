@@ -1,12 +1,12 @@
 from __future__ import annotations
 
-import json
 import urllib.parse
 import urllib.request
 from typing import Any
 
 from ..identifiers import normalize_doi
 from ..models import FullTextLocation, MetadataCandidate
+from ..provider_http import read_json_object
 from .common import candidate_with_locations, first_text
 
 
@@ -33,11 +33,7 @@ class OpenAireClient:
             headers={"Accept": "application/json", "User-Agent": self.user_agent},
             method="GET",
         )
-        with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
-            payload = json.loads(response.read().decode("utf-8"))
-        if not isinstance(payload, dict):
-            raise RuntimeError(f"Expected JSON object from {url}")
-        return payload
+        return read_json_object(request, timeout=self.timeout_seconds, error_label=url)
 
 
 def openaire_payload_to_candidate(payload: dict[str, Any], *, identifier: str) -> MetadataCandidate | None:

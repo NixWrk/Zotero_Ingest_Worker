@@ -21,6 +21,7 @@ from .identifiers import (
     normalize_pmid,
 )
 from .models import FullTextLocation, LocalAttachment, LocalItemMetadata, MetadataCandidate
+from .provider_http import register_retry_after_from_http_error
 from .providers import (
     ArxivClient,
     BioRxivClient,
@@ -404,6 +405,7 @@ def expand_identifiers_from_candidates(
 
 
 def provider_http_event(*, provider: str, identifier: str, exc: urllib.error.HTTPError) -> dict[str, Any]:
+    retry_after = register_retry_after_from_http_error(exc)
     if exc.code == 429:
         status = "rate_limited"
         retryable = True
@@ -416,10 +418,13 @@ def provider_http_event(*, provider: str, identifier: str, exc: urllib.error.HTT
     else:
         status = "http_error"
         retryable = False
-    return {
+    event = {
         "provider": provider,
         "identifier": identifier,
         "status": status,
         "http_status": exc.code,
         "retryable": retryable,
     }
+    if retry_after is not None:
+        event["retry_after_seconds"] = retry_after
+    return event

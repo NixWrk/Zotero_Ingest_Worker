@@ -1,11 +1,11 @@
 from __future__ import annotations
 
-import json
 import urllib.parse
 import urllib.request
 from typing import Any
 
 from ..identifiers import normalize_doi
+from ..provider_http import read_json_list
 
 
 class OpenCitationsClient:
@@ -46,8 +46,5 @@ class OpenCitationsClient:
             headers={"Accept": "application/json", "User-Agent": self.user_agent},
             method="GET",
         )
-        with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
-            payload = json.loads(response.read().decode("utf-8"))
-        if not isinstance(payload, list):
-            raise RuntimeError(f"Expected JSON list from {url}")
+        payload = read_json_list(request, timeout=self.timeout_seconds, error_label=url)
         return [row for row in payload if isinstance(row, dict)]

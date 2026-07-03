@@ -129,6 +129,25 @@ def test_enricher_falls_back_to_arxiv_when_crossref_doi_404(tmp_path: Path) -> N
     assert result.provider_events[1]["http_status"] == 404
 
 
+def test_safe_lookup_records_retry_after_on_rate_limit() -> None:
+    enricher = MetadataEnricher(EnricherConfig(translation_server_url="", extended_providers_enabled=False))
+
+    def lookup() -> None:
+        raise urllib.error.HTTPError(
+            url="https://ratelimit.example/works",
+            code=429,
+            msg="Too Many Requests",
+            hdrs={"Retry-After": "11"},
+            fp=None,
+        )
+
+    assert enricher.safe_lookup(provider="crossref", identifier="10.1000/example", lookup=lookup) is None
+
+    assert enricher.provider_events[0]["status"] == "rate_limited"
+    assert enricher.provider_events[0]["retryable"] is True
+    assert enricher.provider_events[0]["retry_after_seconds"] == 11.0
+
+
 def test_merge_candidate_combines_metadata_and_arxiv_fields(tmp_path: Path) -> None:
     class CrossrefMatch:
         def by_doi(self, doi: str) -> MetadataCandidate:

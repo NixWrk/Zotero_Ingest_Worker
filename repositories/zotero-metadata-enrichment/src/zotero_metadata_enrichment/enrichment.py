@@ -17,6 +17,7 @@ from .identifiers import (
     normalize_pmid,
 )
 from .models import EnrichmentResult, LocalAttachment, LocalItemMetadata, MetadataCandidate
+from .provider_http import register_retry_after_from_http_error
 from .providers import (
     ArxivClient,
     BioRxivClient,
@@ -308,11 +309,18 @@ class MetadataEnricher:
             self.record_provider_event(provider=provider, status="disabled", identifier=identifier, error=str(exc))
             return None
         except urllib.error.HTTPError as exc:
+            retry_after = register_retry_after_from_http_error(exc)
             if exc.code == 429:
-                self.record_provider_event(provider=provider, status="rate_limited", identifier=identifier, http_status=exc.code, retryable=True)
+                event = {"provider": provider, "status": "rate_limited", "identifier": identifier, "http_status": exc.code, "retryable": True}
+                if retry_after is not None:
+                    event["retry_after_seconds"] = retry_after
+                self.record_provider_event(**event)
                 return None
             if exc.code in {408, 425, 500, 502, 503, 504}:
-                self.record_provider_event(provider=provider, status="provider_unavailable", identifier=identifier, http_status=exc.code, retryable=True)
+                event = {"provider": provider, "status": "provider_unavailable", "identifier": identifier, "http_status": exc.code, "retryable": True}
+                if retry_after is not None:
+                    event["retry_after_seconds"] = retry_after
+                self.record_provider_event(**event)
                 return None
             if exc.code not in {400, 404, 410, 501}:
                 raise
