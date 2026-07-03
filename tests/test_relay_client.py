@@ -142,6 +142,42 @@ def test_request_json_retries_transient_relay_network_result(monkeypatch: Any) -
     assert calls["count"] == 2
 
 
+def test_request_json_retries_relay_partial_failure_207(monkeypatch: Any) -> None:
+    calls = {"count": 0}
+
+    def fake_urlopen(_request: object, *, timeout: int) -> _FakeResponse:
+        del timeout
+        calls["count"] += 1
+        if calls["count"] == 1:
+            return _FakeResponse(
+                {
+                    "ok": False,
+                    "error": {
+                        "code": "PARTIAL_FAILURE",
+                        "message": "Local write succeeded but WebDAV upload failed.",
+                        "details": {"status": 207},
+                    },
+                }
+            )
+        return _FakeResponse({"ok": True, "retried": True})
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("zotero_ingest_worker.relay_client.time.sleep", lambda _seconds: None)
+    client = ZoteroRelayClient(
+        SimpleNamespace(
+            zotero_relay_url="http://relay",
+            request_timeout_seconds=10,
+            zotero_relay_request_attempts=2,
+            zotero_relay_retry_delay_seconds=0,
+        )
+    )
+
+    result = client.request_json(method="POST", path="/items", payload={}, error_label="relay")
+
+    assert result == {"ok": True, "retried": True}
+    assert calls["count"] == 2
+
+
 def test_request_json_does_not_retry_non_transient_relay_result(monkeypatch: Any) -> None:
     calls = {"count": 0}
 

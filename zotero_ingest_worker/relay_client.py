@@ -11,7 +11,7 @@ from typing import Any
 from .local_zotero import LocalAttachment, LocalItemMetadata
 
 
-_TRANSIENT_HTTP_STATUSES = {408, 429, 500, 502, 503, 504}
+_TRANSIENT_HTTP_STATUSES = {207, 408, 429, 500, 502, 503, 504}
 _TRANSIENT_RELAY_CODES = {
     "WEB_API_REQUEST_FAILED",
     "WEBDAV_REQUEST_FAILED",
