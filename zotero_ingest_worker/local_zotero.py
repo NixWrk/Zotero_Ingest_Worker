@@ -434,18 +434,20 @@ class LocalZoteroStore:
         *,
         max_items: int | None,
         collection: str | None = None,
+        only_keys: set[str] | None = None,
     ) -> Iterable[LocalItemMetadata]:
+        if only_keys is not None and not only_keys:
+            return
         connection = connect_readonly_sqlite(self.config.zotero_sqlite_path)
         connection.row_factory = sqlite3.Row
         try:
             limit_clause = "" if max_items is None else "limit ?"
+            key_clause, key_params = _item_key_filter_clause(only_keys)
             if collection:
                 collection = collection.strip()
-                params: tuple[object, ...] = (
-                    (collection, collection)
-                    if max_items is None
-                    else (collection, collection, max_items)
-                )
+                params_list: list[object] = [collection, collection, *key_params]
+                if max_items is not None:
+                    params_list.append(max_items)
                 rows = connection.execute(
                     f"""
                     select distinct
@@ -462,13 +464,16 @@ class LocalZoteroStore:
                     where (c.collectionName = ? or c.key = ?)
                       and di.itemID is null
                       and coalesce(it.typeName, '') not in ('attachment', 'note', 'annotation')
+                      {key_clause}
                     order by i.dateModified desc
                     {limit_clause}
                     """,
-                    params,
+                    tuple(params_list),
                 ).fetchall()
             else:
-                params = () if max_items is None else (max_items,)
+                params_list = [*key_params]
+                if max_items is not None:
+                    params_list.append(max_items)
                 rows = connection.execute(
                     f"""
                     select
@@ -482,10 +487,11 @@ class LocalZoteroStore:
                     left join deletedItems di on di.itemID = i.itemID
                     where di.itemID is null
                       and coalesce(it.typeName, '') not in ('attachment', 'note', 'annotation')
+                      {key_clause}
                     order by i.dateModified desc
                     {limit_clause}
                     """,
-                    params,
+                    tuple(params_list),
                 ).fetchall()
             for row in rows:
                 item_id = int(row["itemID"])
@@ -931,6 +937,16 @@ def _optional_int(value: object) -> int | None:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+def _item_key_filter_clause(keys: set[str] | None) -> tuple[str, tuple[str, ...]]:
+    if keys is None:
+        return "", ()
+    normalized = tuple(sorted({str(key).strip() for key in keys if str(key).strip()}))
+    if not normalized:
+        return "and 1 = 0", ()
+    placeholders = ", ".join("?" for _ in normalized)
+    return f"and i.key in ({placeholders})", normalized
 
 
 _looks_like_generated_html = looks_like_generated_html

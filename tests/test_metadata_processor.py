@@ -1161,6 +1161,53 @@ def test_full_text_backlog_scan_skips_parent_items_with_html_and_pdf(tmp_path: P
     assert result["results"][0]["inventory"]["has_source_html"] is True
 
 
+def test_full_text_backlog_scan_respects_remote_parent_filter_alias(
+    monkeypatch: Any,
+    tmp_path: Path,
+) -> None:
+    data_dir = _write_full_text_fixture(tmp_path, with_pdf=False)
+    _add_second_parent(data_dir, key="PARENT2", title="Filtered Parent", doi="10.2000/filtered")
+    monkeypatch.setenv(
+        "ZFR_LIBRARY_BINDINGS",
+        json.dumps([{"libraryId": "REMOTE_LIB", "dataDir": str(data_dir)}]),
+    )
+    config = _metadata_processor_test_config(tmp_path, data_dir)
+    processor = ZoteroMetadataProcessor(config)
+    processor._library_configs = lambda **_kwargs: [config]  # type: ignore[method-assign]
+
+    result = processor.full_text_backlog_scan(
+        limit=10,
+        only_parent_keys_by_library={"REMOTE_LIB": ["PARENT2"]},
+    )
+
+    assert result["scanned"] == 1
+    assert result["queued"] == 1
+    assert result["results"][0]["parent_item_key"] == "PARENT2"
+
+
+def test_full_text_backlog_scan_skips_library_when_remote_filter_has_no_alias(
+    monkeypatch: Any,
+    tmp_path: Path,
+) -> None:
+    data_dir = _write_full_text_fixture(tmp_path, with_pdf=False)
+    monkeypatch.setenv(
+        "ZFR_LIBRARY_BINDINGS",
+        json.dumps([{"libraryId": "REMOTE_LIB", "dataDir": str(data_dir)}]),
+    )
+    config = _metadata_processor_test_config(tmp_path, data_dir)
+    processor = ZoteroMetadataProcessor(config)
+    processor._library_configs = lambda **_kwargs: [config]  # type: ignore[method-assign]
+
+    result = processor.full_text_backlog_scan(
+        limit=10,
+        only_parent_keys_by_library={"OTHER_REMOTE_LIB": ["PARENT1"]},
+    )
+
+    assert result["scanned"] == 0
+    assert result["queued"] == 0
+    assert result["results"] == []
+
+
 def test_scihub_backlog_scan_skips_parent_items_with_pdf(tmp_path: Path) -> None:
     data_dir = _write_full_text_fixture(tmp_path, with_pdf=True)
     config = _metadata_processor_test_config(tmp_path, data_dir)
@@ -1171,6 +1218,33 @@ def test_scihub_backlog_scan_skips_parent_items_with_pdf(tmp_path: Path) -> None
 
     assert result["queued"] == 0
     assert result["results"][0]["classification"] == "pdf_exists"
+
+
+def test_scihub_backlog_scan_respects_remote_parent_filter_alias(
+    monkeypatch: Any,
+    tmp_path: Path,
+) -> None:
+    data_dir = _write_full_text_fixture(tmp_path, with_pdf=False)
+    _add_second_parent(data_dir, key="PARENT2", title="Filtered Parent", doi="10.2000/filtered")
+    monkeypatch.setenv(
+        "ZFR_LIBRARY_BINDINGS",
+        json.dumps([{"libraryId": "REMOTE_LIB", "dataDir": str(data_dir)}]),
+    )
+    config = _metadata_processor_test_config(tmp_path, data_dir)
+    processor = ZoteroMetadataProcessor(config)
+    processor._library_configs = lambda **_kwargs: [config]  # type: ignore[method-assign]
+
+    result = processor.scihub_pdf_backlog_scan(
+        limit=10,
+        only_parent_keys_by_library={"REMOTE_LIB": ["PARENT2"]},
+    )
+    queued_jobs = processor.state.list_metadata_jobs(job_type="scihub_pdf", limit=20)
+
+    assert result["scanned"] == 1
+    assert result["queued"] == 1
+    assert result["results"][0]["parent_item_key"] == "PARENT2"
+    assert len(queued_jobs) == 1
+    assert queued_jobs[0]["parent_item_key"] == "PARENT2"
 
 
 def test_scihub_backlog_scan_queues_identifier_queries_when_html_exists_but_pdf_missing(
@@ -1948,6 +2022,32 @@ def _add_full_text_html_attachment(
         connection.close()
     (data_dir / "storage" / key).mkdir(parents=True)
     (data_dir / "storage" / key / filename).write_text("<html><body>Article</body></html>", encoding="utf-8")
+
+
+def _add_second_parent(
+    data_dir: Path,
+    *,
+    key: str,
+    title: str,
+    doi: str,
+) -> None:
+    connection = sqlite3.connect(data_dir / "zotero.sqlite")
+    try:
+        connection.execute(
+            "insert into items values (30, 1, '2026-01-04', ?, 6)",
+            (key,),
+        )
+        connection.executemany(
+            "insert into itemDataValues values (?, ?)",
+            [(30, title), (31, doi)],
+        )
+        connection.executemany(
+            "insert into itemData values (30, ?, ?)",
+            [(1, 30), (2, 31)],
+        )
+        connection.commit()
+    finally:
+        connection.close()
 
 
 def _metadata_processor_test_config(tmp_path: Path, data_dir: Path) -> SimpleNamespace:

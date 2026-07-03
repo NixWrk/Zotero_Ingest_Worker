@@ -84,6 +84,10 @@ def test_run_post_action_routes_full_text_backlog_with_auto_drain(monkeypatch: A
             "library_id": "LIB1",
             "data_dir": "/tmp/zotero",
             "collection": "C1",
+            "only_parent_keys_by_library": {
+                "LIB1": ["PARENT2", "PARENT1", ""],
+                "LIB2": "not-a-list",
+            },
             "auto_drain": True,
             "drain_limit": "7",
             "dry_run": True,
@@ -102,6 +106,10 @@ def test_run_post_action_routes_full_text_backlog_with_auto_drain(monkeypatch: A
                 "library_id": "LIB1",
                 "data_dir": "/tmp/zotero",
                 "collection": "C1",
+                "only_parent_keys_by_library": {
+                    "LIB1": ["PARENT1", "PARENT2"],
+                    "LIB2": [],
+                },
             },
         ),
         ("drain_full_text_queue", {"limit": 7, "dry_run": True}),
@@ -151,6 +159,46 @@ def test_run_post_action_routes_source_html_cleanup(monkeypatch: Any) -> None:
             "library_id": "LIB1",
             "data_dir": "/tmp/zotero",
             "collection": "C1",
+        }
+    ]
+
+
+def test_run_post_action_routes_scihub_backlog_with_parent_filter(monkeypatch: Any) -> None:
+    calls: list[dict[str, Any]] = []
+
+    class FakeMetadataProcessor:
+        def __init__(self, _config: Any) -> None:
+            pass
+
+        def scihub_pdf_backlog_scan(self, **kwargs: Any) -> dict[str, Any]:
+            calls.append(kwargs)
+            return {"route": "scihub_pdf_backlog_scan"}
+
+    monkeypatch.setattr(
+        "zotero_ingest_worker.service_actions.ZoteroMetadataProcessor",
+        FakeMetadataProcessor,
+    )
+
+    result = run_post_action(
+        "/api/zotero/scihub-pdf/backlog-scan",
+        from_env(load_file=False),
+        {
+            "limit": "9",
+            "only_parent_keys_by_library": {"LIB1": ["PARENT2", "PARENT1"]},
+        },
+        _FakeFullRunManager(),
+    )
+
+    assert result == {"route": "scihub_pdf_backlog_scan"}
+    assert calls == [
+        {
+            "max_items": None,
+            "limit": 9,
+            "force": False,
+            "library_id": None,
+            "data_dir": None,
+            "collection": None,
+            "only_parent_keys_by_library": {"LIB1": ["PARENT1", "PARENT2"]},
         }
     ]
 

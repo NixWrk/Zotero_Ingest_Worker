@@ -49,6 +49,9 @@ def run_post_action(
             library_id=_optional_str(payload.get("library_id")),
             data_dir=_optional_str(payload.get("data_dir")),
             collection=_optional_str(payload.get("collection")),
+            only_parent_keys_by_library=_parent_keys_by_library(
+                payload.get("only_parent_keys_by_library")
+            ),
         )
         if bool(payload.get("auto_drain", False)):
             result["drain"] = metadata_processor.drain_metadata_queue(
@@ -73,6 +76,9 @@ def run_post_action(
             library_id=_optional_str(payload.get("library_id")),
             data_dir=_optional_str(payload.get("data_dir")),
             collection=_optional_str(payload.get("collection")),
+            only_parent_keys_by_library=_parent_keys_by_library(
+                payload.get("only_parent_keys_by_library")
+            ),
         )
         if bool(payload.get("auto_drain", False)):
             result["drain"] = metadata_processor.drain_arxiv_html_queue(
@@ -95,6 +101,9 @@ def run_post_action(
             library_id=_optional_str(payload.get("library_id")),
             data_dir=_optional_str(payload.get("data_dir")),
             collection=_optional_str(payload.get("collection")),
+            only_parent_keys_by_library=_parent_keys_by_library(
+                payload.get("only_parent_keys_by_library")
+            ),
         )
         if bool(payload.get("auto_drain", False)):
             result["drain"] = metadata_processor.drain_full_text_queue(
@@ -126,6 +135,9 @@ def run_post_action(
             library_id=_optional_str(payload.get("library_id")),
             data_dir=_optional_str(payload.get("data_dir")),
             collection=_optional_str(payload.get("collection")),
+            only_parent_keys_by_library=_parent_keys_by_library(
+                payload.get("only_parent_keys_by_library")
+            ),
         )
         if bool(payload.get("auto_drain", False)):
             result["drain"] = metadata_processor.drain_scihub_pdf_queue(
@@ -191,3 +203,22 @@ def _status_filter(payload: dict[str, Any]) -> set[str] | None:
         values = [str(raw).strip()]
     result = {value for value in values if value}
     return result or None
+
+
+def _parent_keys_by_library(value: Any) -> dict[str, list[str]] | None:
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        return {}
+    result: dict[str, list[str]] = {}
+    for raw_library_id, raw_keys in value.items():
+        library_id = str(raw_library_id).strip()
+        if not library_id:
+            continue
+        if not isinstance(raw_keys, list):
+            result[library_id] = []
+            continue
+        result[library_id] = sorted(
+            {str(key).strip() for key in raw_keys if str(key).strip()}
+        )
+    return result

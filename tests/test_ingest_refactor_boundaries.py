@@ -81,5 +81,6 @@ def test_full_text_backlog_scan_delegates_to_scanner(monkeypatch: Any) -> None:
             "library_id": None,
             "data_dir": None,
             "collection": "To ingest",
+            "only_parent_keys_by_library": None,
         }
     ]

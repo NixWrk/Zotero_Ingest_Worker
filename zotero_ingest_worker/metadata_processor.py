@@ -138,6 +138,7 @@ class ZoteroMetadataProcessor:
         library_id: str | None = None,
         data_dir: str | None = None,
         collection: str | None = None,
+        only_parent_keys_by_library: dict[str, list[str]] | None = None,
     ) -> dict[str, Any]:
         return scan_attachment_backlog(
             self,
@@ -148,6 +149,7 @@ class ZoteroMetadataProcessor:
             library_id=library_id,
             data_dir=data_dir,
             collection=collection,
+            only_parent_keys_by_library=only_parent_keys_by_library,
         )
 
     def arxiv_html_backlog_scan(
@@ -159,6 +161,7 @@ class ZoteroMetadataProcessor:
         library_id: str | None = None,
         data_dir: str | None = None,
         collection: str | None = None,
+        only_parent_keys_by_library: dict[str, list[str]] | None = None,
     ) -> dict[str, Any]:
         return scan_attachment_backlog(
             self,
@@ -169,6 +172,7 @@ class ZoteroMetadataProcessor:
             library_id=library_id,
             data_dir=data_dir,
             collection=collection,
+            only_parent_keys_by_library=only_parent_keys_by_library,
         )
 
     def full_text_backlog_scan(
@@ -180,6 +184,7 @@ class ZoteroMetadataProcessor:
         library_id: str | None = None,
         data_dir: str | None = None,
         collection: str | None = None,
+        only_parent_keys_by_library: dict[str, list[str]] | None = None,
     ) -> dict[str, Any]:
         return scan_full_text_backlog(
             self,
@@ -189,6 +194,7 @@ class ZoteroMetadataProcessor:
             library_id=library_id,
             data_dir=data_dir,
             collection=collection,
+            only_parent_keys_by_library=only_parent_keys_by_library,
         )
 
     def scihub_pdf_backlog_scan(
@@ -200,6 +206,7 @@ class ZoteroMetadataProcessor:
         library_id: str | None = None,
         data_dir: str | None = None,
         collection: str | None = None,
+        only_parent_keys_by_library: dict[str, list[str]] | None = None,
     ) -> dict[str, Any]:
         return scan_scihub_pdf_backlog(
             self,
@@ -209,6 +216,7 @@ class ZoteroMetadataProcessor:
             library_id=library_id,
             data_dir=data_dir,
             collection=collection,
+            only_parent_keys_by_library=only_parent_keys_by_library,
         )
 
     def source_html_cleanup(
