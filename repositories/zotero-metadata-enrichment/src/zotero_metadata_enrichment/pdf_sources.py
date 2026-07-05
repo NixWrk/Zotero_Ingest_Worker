@@ -10,6 +10,7 @@ from typing import Any
 
 from .html_sources import is_probable_pdf_url
 from .models import FullTextLocation
+from .provider_http import throttled_urlopen
 from .text import title_match_score
 from .url_safety import validate_fetch_url
 
@@ -105,7 +106,7 @@ def fetch_pdf_source(
         method="GET",
     )
     try:
-        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
+        with throttled_urlopen(request, timeout=timeout_seconds) as response:
             final_url = getattr(response, "url", location.url)
             content_type = str(response.headers.get("Content-Type") or "")
             body = response.read(max_bytes + 1)

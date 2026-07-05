@@ -4,6 +4,7 @@ import urllib.error
 from pathlib import Path
 from typing import Any
 
+from zotero_metadata_enrichment import provider_http
 from zotero_metadata_enrichment.html_sources import (
     ResourceReferenceParser,
     assess_article_html,
@@ -12,6 +13,7 @@ from zotero_metadata_enrichment.html_sources import (
     parse_srcset,
 )
 from zotero_metadata_enrichment.models import FullTextLocation
+from zotero_metadata_enrichment.provider_http import HostThrottle
 
 
 class FakeResponse:
@@ -69,6 +71,42 @@ def test_fetch_html_source_saves_html(monkeypatch: Any, tmp_path: Path) -> None:
     assert result.article["reason"] == "article_html"
     assert result.assets["saved"] == 1
     assert "_assets/" in saved
+
+
+def test_fetch_html_source_rate_limit_sets_host_cooldown(monkeypatch: Any, tmp_path: Path) -> None:
+    now = 0.0
+    sleeps: list[float] = []
+
+    def clock() -> float:
+        return now
+
+    def sleeper(seconds: float) -> None:
+        nonlocal now
+        sleeps.append(seconds)
+        now += seconds
+
+    monkeypatch.setattr(provider_http, "_GLOBAL_HOST_THROTTLE", HostThrottle(clock=clock, sleeper=sleeper))
+
+    def fake_urlopen(request: Any, timeout: int) -> FakeResponse:
+        raise urllib.error.HTTPError(
+            request.full_url,
+            429,
+            "Too Many Requests",
+            {"Retry-After": "5"},
+            None,
+        )
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    result = fetch_html_source(
+        FullTextLocation(source="crossref", url="https://journal.example/article", kind="html"),
+        output_dir=tmp_path,
+    )
+
+    assert not result.ok
+    assert result.status == "http_error"
+    provider_http._GLOBAL_HOST_THROTTLE.wait("journal.example", min_interval_seconds=0.0)
+    assert sleeps == [5.0]
 
 
 def test_fetch_html_source_uses_base_href_for_relative_assets(monkeypatch: Any, tmp_path: Path) -> None:

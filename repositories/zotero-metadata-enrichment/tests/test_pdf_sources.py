@@ -1,10 +1,13 @@
 from __future__ import annotations
 
+import urllib.error
 from pathlib import Path
 from typing import Any
 
+from zotero_metadata_enrichment import provider_http
 from zotero_metadata_enrichment.models import FullTextLocation
 from zotero_metadata_enrichment.pdf_sources import download_pdf_sources, fetch_pdf_source
+from zotero_metadata_enrichment.provider_http import HostThrottle
 
 
 class FakeResponse:
@@ -44,6 +47,42 @@ def test_fetch_pdf_source_saves_confirmed_pdf(monkeypatch: Any, tmp_path: Path) 
     assert result.ok
     assert result.status == "downloaded"
     assert Path(result.output_path).read_bytes().startswith(b"%PDF")
+
+
+def test_fetch_pdf_source_rate_limit_sets_host_cooldown(monkeypatch: Any, tmp_path: Path) -> None:
+    now = 0.0
+    sleeps: list[float] = []
+
+    def clock() -> float:
+        return now
+
+    def sleeper(seconds: float) -> None:
+        nonlocal now
+        sleeps.append(seconds)
+        now += seconds
+
+    monkeypatch.setattr(provider_http, "_GLOBAL_HOST_THROTTLE", HostThrottle(clock=clock, sleeper=sleeper))
+
+    def fake_urlopen(request: Any, timeout: int) -> FakeResponse:
+        raise urllib.error.HTTPError(
+            request.full_url,
+            429,
+            "Too Many Requests",
+            {"Retry-After": "6"},
+            None,
+        )
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+
+    result = fetch_pdf_source(
+        FullTextLocation(source="unpaywall", url="https://repo.example/paper.pdf", kind="pdf"),
+        output_dir=tmp_path,
+    )
+
+    assert not result.ok
+    assert result.status == "http_error"
+    provider_http._GLOBAL_HOST_THROTTLE.wait("repo.example", min_interval_seconds=0.0)
+    assert sleeps == [6.0]
 
 
 def test_download_pdf_sources_zero_limit_skips_all(monkeypatch: Any, tmp_path: Path) -> None:

@@ -8,6 +8,7 @@ from typing import Any
 from ..diff import merge_extra
 from ..identifiers import extract_arxiv_id_from_text, extract_pmcid_from_text, extract_pmid_from_text, normalize_doi
 from ..models import FullTextLocation, MetadataCandidate
+from ..provider_http import throttled_urlopen
 from ..text import join_values, normalize_space, strip_html, title_match_score
 
 
@@ -76,7 +77,7 @@ class TranslationServerClient:
             method="POST",
         )
         try:
-            with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
+            with throttled_urlopen(request, timeout=self.timeout_seconds) as response:
                 return json.loads(response.read().decode("utf-8"))
         except urllib.error.HTTPError as exc:
             if exc.code == 300:

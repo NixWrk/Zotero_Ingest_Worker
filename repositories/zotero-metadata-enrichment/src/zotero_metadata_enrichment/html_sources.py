@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import Any
 
 from .models import FullTextLocation
+from .provider_http import throttled_urlopen
 from .text import normalize_space, strip_html, title_match_score
 from .url_safety import validate_fetch_url
 
@@ -253,7 +254,7 @@ def fetch_html_source(
         method="GET",
     )
     try:
-        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
+        with throttled_urlopen(request, timeout=timeout_seconds) as response:
             final_url = getattr(response, "url", location.url)
             content_type = str(response.headers.get("Content-Type") or "")
             mime = content_type.split(";", 1)[0].strip().casefold()
@@ -1103,7 +1104,7 @@ class SnapshotAssetDownloader:
         )
         try:
             self._in_progress.add(absolute_url)
-            with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
+            with throttled_urlopen(request, timeout=self.timeout_seconds) as response:
                 final_url = getattr(response, "url", absolute_url)
                 content_type = str(response.headers.get("Content-Type") or "")
                 payload = response.read(DEFAULT_MAX_ASSET_BYTES + 1)
