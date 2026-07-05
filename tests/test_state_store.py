@@ -201,3 +201,83 @@ def test_recover_orphaned_metadata_jobs_recovers_dead_pid_by_default(tmp_path):
     assert recovered == 1
     assert job["status"] == "queued"
     assert job["last_error"] == "Recovered orphaned metadata job lease."
+
+
+def test_metadata_queue_summary_counts_transient_failed_final(tmp_path):
+    source = tmp_path / "zotero.sqlite"
+    source.write_bytes(b"state")
+    signature = FileSignature.from_path(source)
+    store = PipelineStateStore(tmp_path / "state.sqlite")
+
+    transient = store.enqueue_metadata_job(
+        job_type="full_text",
+        library_id="LIB1",
+        attachment_key="PARENT1",
+        data_dir=tmp_path,
+        source_path=source,
+        signature=signature,
+        status="queued",
+        reason="test",
+        parent_item_key="PARENT1",
+        parent_version=1,
+        queue_key="full-text-v1",
+        max_attempts=1,
+    )
+    permanent = store.enqueue_metadata_job(
+        job_type="full_text",
+        library_id="LIB1",
+        attachment_key="PARENT2",
+        data_dir=tmp_path,
+        source_path=source,
+        signature=signature,
+        status="queued",
+        reason="test",
+        parent_item_key="PARENT2",
+        parent_version=1,
+        queue_key="full-text-v1",
+        max_attempts=1,
+    )
+    other_type = store.enqueue_metadata_job(
+        job_type="enrich",
+        library_id="LIB1",
+        attachment_key="PARENT3",
+        data_dir=tmp_path,
+        source_path=source,
+        signature=signature,
+        status="queued",
+        reason="test",
+        parent_item_key="PARENT3",
+        parent_version=1,
+        queue_key="enrich-v1",
+        max_attempts=1,
+    )
+
+    for job_type, job, message, retryable in (
+        ("full_text", transient, "HTTP 429: too many requests", True),
+        ("full_text", permanent, "No matching full text candidate found", False),
+        ("enrich", other_type, "HTTP 503: temporarily unavailable", True),
+    ):
+        leased = store.lease_next_metadata_job(
+            job_type=job_type,
+            owner="worker-a",
+            lease_seconds=60,
+        )
+        assert leased is not None
+        assert leased["job_id"] == job["job_id"]
+        failed = store.mark_metadata_job_failed(
+            job_id=str(job["job_id"]),
+            message=message,
+            retryable=retryable,
+        )
+        assert failed["status"] == "failed_final"
+
+    full_text = store.metadata_queue_summary(job_type="full_text")
+    enrich = store.metadata_queue_summary(job_type="enrich")
+    total = store.metadata_queue_summary()
+
+    assert full_text["failed_final"] == 2
+    assert full_text["failed_transient"] == 1
+    assert enrich["failed_final"] == 1
+    assert enrich["failed_transient"] == 1
+    assert total["failed_final"] == 3
+    assert total["failed_transient"] == 2

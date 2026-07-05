@@ -1146,7 +1146,21 @@ class PipelineStateStore:
                 """,
                 params,
             ).fetchall()
+            transient_rows = connection.execute(
+                f"""
+                select last_error
+                from metadata_jobs
+                where status = 'failed_final'
+                  {"and job_type = ?" if job_type else ""}
+                """,
+                [job_type] if job_type else [],
+            ).fetchall()
         counts = {str(row["status"]): int(row["count"]) for row in rows}
+        failed_transient = sum(
+            1
+            for row in transient_rows
+            if _metadata_failure_is_transient(str(row["last_error"] or ""))
+        )
         return {
             "job_type": job_type,
             "queued": counts.get("queued", 0),
@@ -1155,6 +1169,7 @@ class PipelineStateStore:
             "skipped": counts.get("skipped", 0),
             "failed_retryable": counts.get("failed_retryable", 0),
             "failed_final": counts.get("failed_final", 0),
+            "failed_transient": failed_transient,
             "cancelled": counts.get("cancelled", 0),
             "counts": counts,
         }
@@ -2020,6 +2035,31 @@ def _metadata_relay_status(value: Any) -> str | None:
         if value.get("skipped") is True:
             return "skipped"
     return "succeeded"
+
+
+def _metadata_failure_is_transient(last_error: str) -> bool:
+    message = str(last_error or "").casefold()
+    if not message:
+        return False
+    transient_markers = (
+        "http 408",
+        "http 409",
+        "http 425",
+        "http 429",
+        "http 500",
+        "http 502",
+        "http 503",
+        "http 504",
+        "timed out",
+        "timeout",
+        "getaddrinfo failed",
+        "connection refused",
+        "connection reset",
+        "temporary failure",
+        "temporarily unavailable",
+        "too many requests",
+    )
+    return any(marker in message for marker in transient_markers)
 
 
 def _job_dedupe_key(
