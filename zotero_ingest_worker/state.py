@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import os
 import sqlite3
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -1206,6 +1207,7 @@ class PipelineStateStore:
         job_type: str | None = None,
         owner_alive: Callable[[str], bool] | None = None,
     ) -> int:
+        owner_alive = owner_alive or _lease_owner_process_alive
         now = _utc_now().isoformat()
         params: list[Any] = []
         type_clause = ""
@@ -1226,7 +1228,7 @@ class PipelineStateStore:
             job_ids = [
                 str(row["job_id"])
                 for row in rows
-                if owner_alive is None or not owner_alive(str(row["lease_owner"] or ""))
+                if not owner_alive(str(row["lease_owner"] or ""))
             ]
             for job_id in job_ids:
                 connection.execute(
@@ -1933,6 +1935,48 @@ def _utc_now() -> datetime:
 
 def _row_dict(row: sqlite3.Row | None) -> dict[str, Any] | None:
     return dict(row) if row is not None else None
+
+
+def _lease_owner_process_alive(owner: str) -> bool:
+    pid = _lease_owner_pid(owner)
+    if pid is None:
+        return True
+    if os.name == "nt":
+        return _windows_pid_alive(pid)
+    try:
+        os.kill(pid, 0)
+    except ProcessLookupError:
+        return False
+    except PermissionError:
+        return True
+    return True
+
+
+def _lease_owner_pid(owner: str) -> int | None:
+    tail = str(owner or "").rsplit(":", 1)[-1].strip()
+    if not tail.isdigit():
+        return None
+    pid = int(tail)
+    return pid if pid > 0 else None
+
+
+def _windows_pid_alive(pid: int) -> bool:
+    import ctypes
+
+    kernel32 = ctypes.WinDLL("kernel32", use_last_error=True)
+    process_query_limited_information = 0x1000
+    error_access_denied = 5
+    still_active = 259
+    handle = kernel32.OpenProcess(process_query_limited_information, False, pid)
+    if not handle:
+        return ctypes.get_last_error() == error_access_denied
+    try:
+        exit_code = ctypes.c_ulong()
+        if not kernel32.GetExitCodeProcess(handle, ctypes.byref(exit_code)):
+            return True
+        return int(exit_code.value) == still_active
+    finally:
+        kernel32.CloseHandle(handle)
 
 
 def _json_or_none(value: Any) -> str | None:

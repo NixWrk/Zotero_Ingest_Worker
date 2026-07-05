@@ -1,3 +1,4 @@
+import os
 from concurrent.futures import ThreadPoolExecutor
 
 from zotero_ingest_worker.state import (
@@ -140,6 +141,58 @@ def test_recover_orphaned_metadata_jobs_returns_running_jobs_to_queue(tmp_path):
         job_type="full_text",
         owner_alive=lambda owner: owner == "worker-a",
     )
+    kept_by_default = store.recover_orphaned_metadata_jobs(job_type="full_text")
+    recovered = store.recover_orphaned_metadata_jobs(
+        job_type="full_text",
+        owner_alive=lambda _owner: False,
+    )
+    job = store.get_metadata_job(str(created["job_id"]))
+
+    assert leased is not None
+    assert kept == 0
+    assert kept_by_default == 0
+    assert recovered == 1
+    assert job["status"] == "queued"
+    assert job["phase"] == "recovered"
+    assert job["lease_owner"] is None
+    assert job["leased_until"] is None
+    assert job["last_error"] == "Recovered orphaned metadata job lease."
+
+
+def test_recover_orphaned_metadata_jobs_recovers_dead_pid_by_default(tmp_path):
+    source = tmp_path / "zotero.sqlite"
+    source.write_bytes(b"state")
+    signature = FileSignature.from_path(source)
+    store = PipelineStateStore(tmp_path / "state.sqlite")
+    created = store.enqueue_metadata_job(
+        job_type="full_text",
+        library_id="LIB1",
+        attachment_key="PARENT1",
+        data_dir=tmp_path,
+        source_path=source,
+        signature=signature,
+        status="queued",
+        reason="test",
+        parent_item_key="PARENT1",
+        parent_version=1,
+        queue_key="full-text-v1",
+    )
+    leased = store.lease_next_metadata_job(
+        job_type="full_text",
+        owner=f"zotero-worker-metadata:test:{os.getpid()}",
+        lease_seconds=3600,
+    )
+
+    kept = store.recover_orphaned_metadata_jobs(job_type="full_text")
+    with store._connect() as connection:
+        connection.execute(
+            """
+            update metadata_jobs
+            set lease_owner = ?
+            where job_id = ?
+            """,
+            ("zotero-worker-metadata:test:99999999", created["job_id"]),
+        )
     recovered = store.recover_orphaned_metadata_jobs(job_type="full_text")
     job = store.get_metadata_job(str(created["job_id"]))
 
@@ -147,7 +200,4 @@ def test_recover_orphaned_metadata_jobs_returns_running_jobs_to_queue(tmp_path):
     assert kept == 0
     assert recovered == 1
     assert job["status"] == "queued"
-    assert job["phase"] == "recovered"
-    assert job["lease_owner"] is None
-    assert job["leased_until"] is None
     assert job["last_error"] == "Recovered orphaned metadata job lease."
