@@ -1581,6 +1581,9 @@ class ZoteroMetadataProcessor:
             enqueue_pdf_for_html=self._enqueue_attached_pdf_for_html,
             enqueue_html_for_translation=self._enqueue_attached_html_for_translation,
             trash_source_html_attachment=self._trash_attachment_via_relay,
+            allow_raw_html_fallback=bool(
+                getattr(self.config, "full_text_attach_raw_html_fallback", False)
+            ),
         ).attach(
             attachment=attachment,
             metadata=metadata,

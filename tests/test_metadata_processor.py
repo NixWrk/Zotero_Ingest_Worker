@@ -1614,7 +1614,9 @@ def test_full_text_attach_html_uses_embedded_asset_file(
     assert result is not None
     assert result["kind"] == "html"
     relay_source = Path(captured["source_path"])  # type: ignore[arg-type]
-    assert relay_source.name == "01.source.z2m_embedded.html"
+    assert relay_source.name == "article.z2m_embedded.html"
+    assert result["raw_source_path"] == str(source)
+    assert result["article_standard"]["ok"] is True
     assert captured["content_type"] == "text/html"
     assert result["embedded_assets"]["enabled"] is True
     local_copy = Path(result["local_copy"]["path"])
@@ -1734,7 +1736,10 @@ def test_full_text_attach_html_without_assets_sends_original_file(
 
     assert result is not None
     assert result["kind"] == "html"
-    assert captured["source_path"] == source
+    relay_source = Path(captured["source_path"])  # type: ignore[arg-type]
+    assert relay_source.name == "article.html"
+    assert "article_packages" in relay_source.parts
+    assert result["raw_source_path"] == str(source)
     assert captured["content_type"] == "text/html"
     assert result["embedded_assets"] == {"enabled": False, "reason": "assets_dir_missing"}
     assert Path(result["local_copy"]["path"]).read_text(encoding="utf-8") == "<html><body>Article</body></html>"
@@ -1783,7 +1788,10 @@ def test_full_text_attach_attaches_pdf_alongside_html(
     assert result["attached_kinds"] == ["html", "pdf"]
     assert result["pdf_attachment"]["kind"] == "pdf"
     assert [call["content_type"] for call in calls] == ["text/html", "application/pdf"]
-    assert calls[0]["source_path"] == html
+    relay_html = Path(calls[0]["source_path"])  # type: ignore[arg-type]
+    assert relay_html.name == "article.html"
+    assert "article_packages" in relay_html.parts
+    assert result["raw_source_path"] == str(html)
     assert calls[1]["source_path"] == pdf
 
 

@@ -193,6 +193,7 @@ class WorkerConfig:
     ingest_data_root: Path
     html_data_root: Path
     zotero_parent_preflight_enabled: bool
+    full_text_attach_raw_html_fallback: bool
 
     metadata_crossref_email: str
     metadata_unpaywall_email: str
@@ -359,6 +360,7 @@ def from_env(*, load_file: bool = True) -> WorkerConfig:
             PROJECT_ROOT / "data" / "html",
         ),
         zotero_parent_preflight_enabled=env_bool("ZOTERO_PARENT_PREFLIGHT_ENABLED", True),
+        full_text_attach_raw_html_fallback=env_bool("FULL_TEXT_ATTACH_RAW_HTML_FALLBACK", False),
         metadata_crossref_email=os.environ.get("METADATA_CROSSREF_EMAIL", "").strip(),
         metadata_unpaywall_email=os.environ.get("METADATA_UNPAYWALL_EMAIL", "").strip(),
         metadata_openalex_api_key=os.environ.get("METADATA_OPENALEX_API_KEY", "").strip(),

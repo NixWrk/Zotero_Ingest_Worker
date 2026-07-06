@@ -14,6 +14,7 @@ from .full_text_article import (
     html_download_article_verdict,
     is_arxiv_abs_landing_download,
 )
+from .article_standard import standardize_native_html_download
 from .local_attachment_sync import sync_parent_attachment_local
 from .local_zotero import LocalAttachment, LocalItemMetadata
 from .source_html_maintenance import TrashAttachment, cleanup_source_html_inventory
@@ -34,6 +35,7 @@ class FullTextAttachmentService:
         enqueue_pdf_for_html: EnqueueAttachedPdf,
         enqueue_html_for_translation: EnqueueAttachedHtml | None = None,
         trash_source_html_attachment: TrashAttachment | None = None,
+        allow_raw_html_fallback: bool = False,
     ) -> None:
         self.relay_enabled = relay_enabled
         self.create_parent_attachment = create_parent_attachment
@@ -41,6 +43,7 @@ class FullTextAttachmentService:
         self.enqueue_pdf_for_html = enqueue_pdf_for_html
         self.enqueue_html_for_translation = enqueue_html_for_translation
         self.trash_source_html_attachment = trash_source_html_attachment
+        self.allow_raw_html_fallback = allow_raw_html_fallback
 
     def attach(
         self,
@@ -104,9 +107,13 @@ class FullTextAttachmentService:
         metadata: LocalItemMetadata,
         inventory: dict[str, object],
     ) -> dict[str, Any]:
-        source_path = _html_attachment_preferred_source_path(html)
-        if not source_path.exists():
-            return {"ok": False, "status": "local_source_missing", "sourcePath": str(source_path)}
+        source_path = _html_attachment_first_existing_source_path(html)
+        if source_path is None:
+            return {
+                "ok": False,
+                "status": "local_source_missing",
+                "sourcePath": str(_html_attachment_preferred_source_path(html)),
+            }
         cleanup = cleanup_source_html_inventory(
             metadata=metadata,
             inventory=inventory,
@@ -147,9 +154,10 @@ class FullTextAttachmentService:
         metadata: LocalItemMetadata,
         inventory: dict[str, object],
     ) -> dict[str, Any]:
-        source_path = _html_attachment_preferred_source_path(html)
-        if not source_path.exists():
-            return {"ok": False, "status": "local_source_missing", "sourcePath": str(source_path)}
+        prepared = self._prepare_html_attachment_source(html=html, metadata=metadata)
+        if not prepared.get("ok"):
+            return prepared
+        source_path = Path(str(prepared["source_path"]))
         attachment_source_path, embedded_assets = _html_attachment_source_with_embedded_assets(source_path)
         filename = _full_text_attachment_filename(
             source_path=source_path,
@@ -194,6 +202,9 @@ class FullTextAttachmentService:
             "ok": True,
             "kind": "html",
             "source": html,
+            "raw_source_path": prepared.get("raw_source_path"),
+            "article_standard": prepared.get("article_standard"),
+            "raw_html_fallback": bool(prepared.get("raw_html_fallback")),
             "attachment_source_path": str(attachment_source_path),
             "embedded_assets": embedded_assets,
             "relay": relay_result,
@@ -211,6 +222,71 @@ class FullTextAttachmentService:
             except Exception as exc:
                 result["translation_enqueue"] = _local_failure("translation_enqueue_failed", exc)
         return result
+
+    def _prepare_html_attachment_source(
+        self,
+        *,
+        html: dict[str, Any],
+        metadata: LocalItemMetadata,
+    ) -> dict[str, Any]:
+        standard_path = _html_attachment_existing_standard_path(html)
+        raw_source_path = _html_attachment_raw_source_path(html)
+        if standard_path is not None:
+            return {
+                "ok": True,
+                "source_path": standard_path,
+                "raw_source_path": str(raw_source_path),
+                "article_standard": _html_attachment_standard_package(html),
+                "raw_html_fallback": False,
+            }
+        if not raw_source_path.exists():
+            return {
+                "ok": False,
+                "kind": "html",
+                "status": "local_source_missing",
+                "sourcePath": str(raw_source_path),
+                "source": html,
+            }
+
+        download = dict(html)
+        verdict = download.get("article_verdict")
+        if not isinstance(verdict, dict):
+            verdict = html_download_article_verdict(download)
+            download["article_verdict"] = verdict
+            html["article_verdict"] = verdict
+        package = standardize_native_html_download(
+            download,
+            metadata=metadata,
+            package_root=raw_source_path.parent / "article_packages",
+            source_context="full_text_attachment",
+        )
+        html["standard_package"] = package
+        article_html_path = Path(str(package.get("article_html_path") or ""))
+        if package.get("ok") and article_html_path.exists():
+            html["standard_article_html_path"] = str(article_html_path)
+            return {
+                "ok": True,
+                "source_path": article_html_path,
+                "raw_source_path": str(raw_source_path),
+                "article_standard": package,
+                "raw_html_fallback": False,
+            }
+        if self.allow_raw_html_fallback:
+            return {
+                "ok": True,
+                "source_path": raw_source_path,
+                "raw_source_path": str(raw_source_path),
+                "article_standard": package,
+                "raw_html_fallback": True,
+            }
+        return {
+            "ok": False,
+            "kind": "html",
+            "status": "source_html_polish_failed",
+            "sourcePath": str(raw_source_path),
+            "source": html,
+            "article_standard": package,
+        }
 
     def _attach_pdf(
         self,
@@ -423,6 +499,38 @@ def _html_attachment_preferred_source_path(item: dict[str, Any]) -> Path:
         if package_path:
             return Path(package_path)
     return Path(str(item.get("output_path") or ""))
+
+
+def _html_attachment_raw_source_path(item: dict[str, Any]) -> Path:
+    return Path(str(item.get("output_path") or ""))
+
+
+def _html_attachment_standard_package(item: dict[str, Any]) -> dict[str, Any] | None:
+    package = item.get("standard_package")
+    return package if isinstance(package, dict) else None
+
+
+def _html_attachment_existing_standard_path(item: dict[str, Any]) -> Path | None:
+    for candidate in (
+        str(item.get("standard_article_html_path") or "").strip(),
+        str((_html_attachment_standard_package(item) or {}).get("article_html_path") or "").strip(),
+    ):
+        if not candidate:
+            continue
+        path = Path(candidate)
+        if path.exists():
+            return path
+    return None
+
+
+def _html_attachment_first_existing_source_path(item: dict[str, Any]) -> Path | None:
+    standard_path = _html_attachment_existing_standard_path(item)
+    if standard_path is not None:
+        return standard_path
+    raw_source_path = _html_attachment_raw_source_path(item)
+    if raw_source_path.exists():
+        return raw_source_path
+    return None
 
 
 def _best_successful_html_download(value: object) -> dict[str, Any] | None:

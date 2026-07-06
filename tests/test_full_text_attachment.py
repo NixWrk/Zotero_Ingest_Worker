@@ -110,6 +110,104 @@ def test_full_text_attachment_service_attaches_html_without_processor(tmp_path: 
     local_copy = Path(result["local_copy"]["path"])
     assert local_copy.suffix == ".html"
     assert local_copy.read_text(encoding="utf-8") == "<html><body>Article</body></html>"
+    assert result["article_standard"]["ok"] is True
+    assert result["raw_html_fallback"] is False
+
+
+def test_full_text_attachment_service_rejects_html_when_polish_fails(
+    monkeypatch: Any,
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "article.html"
+    source.write_text("<html><body>Article</body></html>", encoding="utf-8")
+    metadata = SimpleNamespace(
+        library_id="LIB1",
+        data_dir=tmp_path,
+        key="ITEM1234",
+        item_id=10,
+        title="Article",
+    )
+    attachment = SimpleNamespace(storage_dir=tmp_path / "storage")
+    create_calls: list[dict[str, Any]] = []
+
+    monkeypatch.setattr(
+        full_text_attachment,
+        "standardize_native_html_download",
+        lambda *_args, **_kwargs: {"ok": False, "reason": "quality_failed"},
+    )
+
+    service = FullTextAttachmentService(
+        relay_enabled=True,
+        create_parent_attachment=lambda **kwargs: create_calls.append(kwargs) or {"ok": True},
+        enqueue_pdf_for_ocr=lambda **_kwargs: {"unexpected": "ocr"},
+        enqueue_pdf_for_html=lambda **_kwargs: {"unexpected": "html"},
+    )
+
+    result = service.attach(
+        attachment=attachment,
+        metadata=metadata,
+        inventory={"attachments": []},
+        payload={
+            "html_downloads": [{"ok": True, "output_path": str(source), "article": _article_html()}],
+            "pdf_downloads": [],
+        },
+    )
+
+    assert result is not None
+    assert result["ok"] is False
+    assert result["status"] == "source_html_polish_failed"
+    assert result["article_standard"] == {"ok": False, "reason": "quality_failed"}
+    assert create_calls == []
+
+
+def test_full_text_attachment_service_raw_html_fallback_is_explicit(
+    monkeypatch: Any,
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "article.html"
+    source.write_text("<html><body>Article</body></html>", encoding="utf-8")
+    metadata = SimpleNamespace(
+        library_id="LIB1",
+        data_dir=tmp_path,
+        key="ITEM1234",
+        item_id=10,
+        title="Article",
+    )
+    attachment = SimpleNamespace(storage_dir=tmp_path / "storage")
+    create_calls: list[dict[str, Any]] = []
+
+    monkeypatch.setattr(
+        full_text_attachment,
+        "standardize_native_html_download",
+        lambda *_args, **_kwargs: {"ok": False, "reason": "quality_failed"},
+    )
+
+    service = FullTextAttachmentService(
+        relay_enabled=True,
+        create_parent_attachment=lambda **kwargs: create_calls.append(kwargs) or {
+            "ok": True,
+            "newAttachmentKey": "HTML1234",
+        },
+        enqueue_pdf_for_ocr=lambda **_kwargs: {"unexpected": "ocr"},
+        enqueue_pdf_for_html=lambda **_kwargs: {"unexpected": "html"},
+        allow_raw_html_fallback=True,
+    )
+
+    result = service.attach(
+        attachment=attachment,
+        metadata=metadata,
+        inventory={"attachments": []},
+        payload={
+            "html_downloads": [{"ok": True, "output_path": str(source), "article": _article_html()}],
+            "pdf_downloads": [],
+        },
+    )
+
+    assert result is not None
+    assert result["ok"] is True
+    assert result["raw_html_fallback"] is True
+    assert Path(result["attachment_source_path"]) == source
+    assert create_calls[0]["source_path"] == source
 
 
 def test_full_text_attachment_service_skips_html_when_source_html_exists(tmp_path: Path) -> None:
