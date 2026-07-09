@@ -73,6 +73,34 @@ def test_source_html_audit_accepts_standard_polished_html(tmp_path: Path) -> Non
     assert report["all_records"][0]["job_ok"] is True
 
 
+def test_source_html_audit_treats_legacy_non_ru_html_as_source(tmp_path: Path) -> None:
+    data_dir = tmp_path / "Zotero_Test"
+    _write_html_attachment(
+        data_dir,
+        key="HTMLZH01",
+        parent_key="PARENT1",
+        title="Chinese Article [ZH HTML]",
+        html=GOOD_HTML,
+    )
+    state_db = tmp_path / "state.sqlite"
+    _write_html_job(
+        state_db,
+        library_id=library_id_for_data_dir(data_dir),
+        attachment_key="HTMLZH01",
+        status="succeeded",
+        pipeline_key="translate=1|en=1|ru=1|source_html=1",
+    )
+
+    report = run_audit(zotero_data_dirs=(data_dir,), state_db=state_db)
+    record = report["all_records"][0]
+
+    assert report["summary"]["source_html_files"] == 1
+    assert report["summary"]["non_source_html_files"] == 0
+    assert record["is_source_html"] is True
+    assert record["is_generated_html"] is False
+    assert record["job_ok"] is True
+
+
 def test_source_html_audit_reports_quality_defects(tmp_path: Path) -> None:
     data_dir = tmp_path / "Zotero_Test"
     _write_html_attachment(

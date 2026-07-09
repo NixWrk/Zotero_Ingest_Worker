@@ -44,7 +44,14 @@ class FullTextAttachmentRecord:
         if not self.is_html:
             return False
         haystack = f"{self.title} {self.path} {self.file_path}".casefold()
-        return "[source html]" in haystack or re.search(r"\bsource\s+html\b", haystack) is not None
+        if "[source html]" in haystack or re.search(r"\bsource\s+html\b", haystack) is not None:
+            return True
+        match = re.search(
+            r"\[([a-z0-9]{2,12}|mixed|unknown) html\](?:\.x?html?)?",
+            haystack,
+            re.IGNORECASE,
+        )
+        return bool(match and _is_source_html_language_marker(match.group(1)))
 
     @property
     def is_generated_html(self) -> bool:
@@ -158,6 +165,11 @@ def inventory_fingerprint(inventory: dict[str, object] | FullTextInventory) -> s
         f"source_html={int(bool(data.get('has_source_html')))}:{int(data.get('source_html_count') or 0)}|"
         f"html={int(bool(data.get('has_html')))}:{int(data.get('html_count') or 0)}"
     )
+
+
+def _is_source_html_language_marker(value: str) -> bool:
+    marker = re.sub(r"[^a-z0-9]+", "", value.casefold())
+    return marker not in {"ru", "source", "arxiv", "ocr", "fulltext", "pdf", "html"}
 
 
 def resolved_attachment_path(

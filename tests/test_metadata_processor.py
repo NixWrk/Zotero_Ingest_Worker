@@ -9,12 +9,14 @@ from types import SimpleNamespace
 from typing import Any
 
 from zotero_ingest_worker.local_zotero import LocalAttachment, LocalZoteroStore
+from zotero_ingest_worker.arxiv_html import ArxivHtmlValidationError
 from zotero_ingest_worker.metadata_jobs import METADATA_JOB_FULL_TEXT
 from zotero_ingest_worker.metadata_processor import (
     MetadataCandidate,
     _best_successful_html_download,
     _html_attachment_source_with_embedded_assets,
     _is_nonretryable_worker_error,
+    _nonactionable_metadata_http_error_reason,
     _relay_url_candidates,
     arxiv_html_filename,
     build_metadata_diff,
@@ -460,6 +462,63 @@ def test_web_api_config_errors_are_not_retryable() -> None:
     assert not _is_nonretryable_worker_error(RuntimeError("temporary connection refused"))
 
 
+def test_library_binding_errors_are_skipped_not_failed() -> None:
+    processor = ZoteroMetadataProcessor.__new__(ZoteroMetadataProcessor)
+    captured: dict[str, Any] = {}
+
+    class FakeState:
+        def mark_metadata_job_skipped(self, **kwargs: Any) -> dict[str, Any]:
+            captured.update(kwargs)
+            return {"status": "skipped", **kwargs}
+
+        def mark_metadata_job_failed(self, **kwargs: Any) -> dict[str, Any]:
+            raise AssertionError(f"metadata job should not fail: {kwargs}")
+
+    processor.state = FakeState()
+
+    result = processor._mark_metadata_job_failed_or_skipped_for_exception(
+        job_id="job1",
+        exc=RuntimeError("zotero-file-relay failed: LIBRARY_BINDING_NOT_CONFIGURED"),
+    )
+
+    assert result["status"] == "skipped"
+    assert captured["result"]["reason"] == "library_binding_not_configured"
+
+
+def test_deleted_local_attachment_errors_are_skipped_not_failed() -> None:
+    processor = ZoteroMetadataProcessor.__new__(ZoteroMetadataProcessor)
+    captured: dict[str, Any] = {}
+
+    class FakeState:
+        def mark_metadata_job_skipped(self, **kwargs: Any) -> dict[str, Any]:
+            captured.update(kwargs)
+            return {"status": "skipped", **kwargs}
+
+        def mark_metadata_job_failed(self, **kwargs: Any) -> dict[str, Any]:
+            raise AssertionError(f"metadata job should not fail: {kwargs}")
+
+    processor.state = FakeState()
+
+    result = processor._mark_metadata_job_failed_or_skipped_for_exception(
+        job_id="job1",
+        exc=FileNotFoundError("Local Zotero PDF attachment is deleted or inactive: PDF1234"),
+    )
+
+    assert result["status"] == "skipped"
+    assert captured["result"]["reason"] == "local_attachment_deleted_or_inactive"
+
+
+def test_cloudflare_metadata_403_is_nonactionable() -> None:
+    assert (
+        _nonactionable_metadata_http_error_reason(
+            403,
+            '<html><head><title>Just a moment...</title></head><body>Cloudflare</body></html>',
+        )
+        == "metadata_provider_blocked"
+    )
+    assert _nonactionable_metadata_http_error_reason(500, "Cloudflare") is None
+
+
 def test_metadata_patch_relay_payload_includes_library_id(monkeypatch: Any) -> None:
     processor = ZoteroMetadataProcessor.__new__(ZoteroMetadataProcessor)
     processor.config = SimpleNamespace(zotero_relay_url="http://relay")
@@ -795,6 +854,53 @@ def test_validate_arxiv_html_rejects_non_html_and_short_pages() -> None:
     assert validate_arxiv_html("<html><body>tiny</body></html>", min_text_chars=100)["reason"] == "too_little_text"
 
 
+def test_arxiv_validation_failure_is_skipped_not_failed(monkeypatch: Any, tmp_path: Path) -> None:
+    data_dir = _write_full_text_fixture(tmp_path, with_pdf=True)
+    config = _metadata_processor_test_config(tmp_path, data_dir)
+    processor = ZoteroMetadataProcessor(config)
+    processor._library_configs = lambda **_kwargs: [config]  # type: ignore[method-assign]
+    pdf_path = data_dir / "storage" / "PDF1234" / "paper.pdf"
+    pdf_path.parent.mkdir(parents=True, exist_ok=True)
+    pdf_path.write_bytes(b"%PDF")
+
+    processor.state.enqueue_metadata_job(
+        job_type="arxiv_html",
+        queue_key="arxiv_html|PDF1234",
+        library_id="LOCAL",
+        attachment_key="PDF1234",
+        data_dir=data_dir,
+        source_path=pdf_path,
+        signature=FileSignature.from_path(pdf_path),
+        status="queued",
+        reason="test",
+    )
+    monkeypatch.setattr(
+        "zotero_ingest_worker.metadata_processor.ArxivHtmlJobService.lookup_candidate",
+        lambda self, **_kwargs: MetadataCandidate(
+            source="arxiv",
+            identifier="2401.01234",
+            score=1.0,
+            fields={"title": "Example"},
+            raw={},
+        ),
+    )
+    monkeypatch.setattr(
+        "zotero_ingest_worker.metadata_processor.ArxivHtmlJobService.fetch_html",
+        lambda self, arxiv_id: (_ for _ in ()).throw(
+            ArxivHtmlValidationError(arxiv_id=arxiv_id, reason="too_little_text")
+        ),
+    )
+
+    result = processor.drain_arxiv_html_queue(limit=1, require_relay=False)
+
+    assert result["ok"] is True
+    assert result["failed"] == 0
+    assert result["results"][0]["status"] == "skipped"
+    stored = json.loads(result["results"][0]["result_json"])
+    assert stored["reason"] == "arxiv_html_validation_failed"
+    assert stored["validation_reason"] == "too_little_text"
+
+
 def test_local_zotero_reads_extended_parent_metadata(tmp_path: Path) -> None:
     data_dir = tmp_path / "Zotero_Test_Data"
     storage_dir = data_dir / "storage" / "PDF1234"
@@ -980,6 +1086,62 @@ def test_metadata_state_queue_lifecycle(tmp_path: Path) -> None:
 
     assert done["status"] == "succeeded"
     assert store.metadata_queue_summary(job_type="enrich")["succeeded"] == 1
+
+
+def test_metadata_retry_can_reset_exhausted_attempts(tmp_path: Path) -> None:
+    source = tmp_path / "paper.pdf"
+    source.write_bytes(b"%PDF")
+    store = OcrStateStore(tmp_path / "state.sqlite")
+    signature = FileSignature.from_path(source)
+
+    keep_attempts = store.enqueue_metadata_job(
+        job_type="arxiv_html",
+        library_id="LIB1",
+        attachment_key="PDF1234",
+        data_dir=tmp_path,
+        source_path=source,
+        signature=signature,
+        status="queued",
+        reason="test",
+        queue_key="keep",
+        max_attempts=1,
+    )
+    leased = store.lease_next_metadata_job(job_type="arxiv_html", owner="test", lease_seconds=60)
+    assert leased is not None
+    failed = store.mark_metadata_job_failed(
+        job_id=str(leased["job_id"]),
+        message="timed out",
+        retryable=True,
+    )
+    assert failed["status"] == "failed_final"
+    retried = store.retry_metadata_job(str(keep_attempts["job_id"]))
+    assert retried["status"] == "queued"
+    assert retried["attempts"] == 1
+    store.cancel_metadata_job(str(keep_attempts["job_id"]))
+
+    reset_attempts = store.enqueue_metadata_job(
+        job_type="arxiv_html",
+        library_id="LIB1",
+        attachment_key="PDF5678",
+        data_dir=tmp_path,
+        source_path=source,
+        signature=signature,
+        status="queued",
+        reason="test",
+        queue_key="reset",
+        max_attempts=1,
+    )
+    leased = store.lease_next_metadata_job(job_type="arxiv_html", owner="test", lease_seconds=60)
+    assert leased is not None
+    failed = store.mark_metadata_job_failed(
+        job_id=str(leased["job_id"]),
+        message="timed out",
+        retryable=True,
+    )
+    assert failed["status"] == "failed_final"
+    retried = store.retry_metadata_job(str(reset_attempts["job_id"]), reset_attempts=True)
+    assert retried["status"] == "queued"
+    assert retried["attempts"] == 0
 
 
 def test_metadata_state_parent_scope_dedupes_changed_container_signature(tmp_path: Path) -> None:
@@ -1330,6 +1492,82 @@ def test_scihub_drain_grouped_job_tries_next_identifier(
     assert calls[1] in {"31044789", "PMC1234567"}
     stored = json.loads(result["results"][0]["result_json"])
     assert [attempt["query"] for attempt in stored["attempts"][:2]] == calls[:2]
+
+
+def test_scihub_drain_marks_all_unresolved_grouped_job_skipped(
+    monkeypatch: Any,
+    tmp_path: Path,
+) -> None:
+    data_dir = _write_full_text_fixture(tmp_path, with_pdf=False)
+    _add_full_text_html_attachment(data_dir)
+    connection = sqlite3.connect(data_dir / "zotero.sqlite")
+    try:
+        connection.executescript(
+            """
+            insert into fields values (3, 'extra');
+            insert into itemDataValues values (3, 'PMID: 31044789; PMCID: PMC1234567');
+            insert into itemData values (10, 3, 3);
+            """
+        )
+        connection.commit()
+    finally:
+        connection.close()
+    config = _metadata_processor_test_config(tmp_path, data_dir)
+    processor = ZoteroMetadataProcessor(config)
+    processor._library_configs = lambda **_kwargs: [config]  # type: ignore[method-assign]
+    processor.scihub_pdf_backlog_scan(limit=10)
+
+    def fake_download_and_attach_scihub_pdf(config: Any, options: Any) -> dict[str, Any]:
+        return {"ok": False, "status": "unresolved", "error": "not found"}
+
+    monkeypatch.setattr(
+        "zotero_ingest_worker.metadata_processor.download_and_attach_scihub_pdf",
+        fake_download_and_attach_scihub_pdf,
+    )
+
+    result = processor.drain_scihub_pdf_queue(limit=1, require_relay=False)
+
+    assert result["ok"] is True
+    assert result["failed"] == 0
+    assert result["results"][0]["status"] == "skipped"
+    stored = json.loads(result["results"][0]["result_json"])
+    assert stored["reason"] == "scihub_pdf_not_found"
+    assert {attempt["status"] for attempt in stored["attempts"]} == {"unresolved"}
+
+
+def test_scihub_drain_marks_exhausted_fetch_error_skipped(
+    monkeypatch: Any,
+    tmp_path: Path,
+) -> None:
+    data_dir = _write_full_text_fixture(tmp_path, with_pdf=False)
+    _add_full_text_html_attachment(data_dir)
+    config = _metadata_processor_test_config(tmp_path, data_dir)
+    processor = ZoteroMetadataProcessor(config)
+    processor._library_configs = lambda **_kwargs: [config]  # type: ignore[method-assign]
+    processor.scihub_pdf_backlog_scan(limit=10)
+    queued = processor.state.list_metadata_jobs(job_type="scihub_pdf", statuses={"queued"}, limit=1)[0]
+    with processor.state._connect() as connection:
+        connection.execute(
+            "update metadata_jobs set max_attempts = 1 where job_id = ?",
+            (queued["job_id"],),
+        )
+
+    def fake_download_and_attach_scihub_pdf(config: Any, options: Any) -> dict[str, Any]:
+        return {"ok": False, "status": "fetch_error", "error": "timed out"}
+
+    monkeypatch.setattr(
+        "zotero_ingest_worker.metadata_processor.download_and_attach_scihub_pdf",
+        fake_download_and_attach_scihub_pdf,
+    )
+
+    result = processor.drain_scihub_pdf_queue(limit=1, require_relay=False)
+
+    assert result["ok"] is True
+    assert result["failed"] == 0
+    assert result["results"][0]["status"] == "skipped"
+    stored = json.loads(result["results"][0]["result_json"])
+    assert stored["reason"] == "scihub_pdf_retry_exhausted"
+    assert stored["status"] == "fetch_error"
 
 
 def test_full_text_backlog_scan_dedupes_parent_when_sqlite_mtime_changes(tmp_path: Path) -> None:

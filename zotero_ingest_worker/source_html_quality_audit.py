@@ -29,6 +29,7 @@ from .local_zotero_paths import library_id_for_data_dir
 SOURCE_HTML_RE = re.compile(r"\[\s*source\s+html\s*\]|\bsource\s+html\b", re.IGNORECASE)
 ARXIV_HTML_RE = re.compile(r"\[\s*arxiv\s+html\s*\]|\barxiv\s+html\b", re.IGNORECASE)
 GENERATED_HTML_RE = re.compile(r"\[(?:[a-z]{2,12}|mixed|unknown) html\]\.html?$", re.IGNORECASE)
+LANGUAGE_HTML_RE = re.compile(r"\[([a-z0-9]{2,12}|mixed|unknown) html\](?:\.x?html?)?", re.IGNORECASE)
 SPRINGER_TABLE_PLACEHOLDER_RE = re.compile(r"/tables/\d+\b", re.IGNORECASE)
 IGNORED_BLOCK_RE = re.compile(r"<(?:script|style)\b[^>]*>[\s\S]*?</(?:script|style)>", re.IGNORECASE)
 DEF_LIST_RE = re.compile(r"<dl\b(?=[^>]*\bclass\s*=\s*['\"][^'\"]*\bdef-list\b)", re.IGNORECASE)
@@ -997,7 +998,10 @@ def _source_html_job_label(pipeline_key: str) -> str | None:
 
 def _looks_like_source_html(path: Path, *, title: str, zotero_path: str) -> bool:
     haystack = f"{path.name} {title} {zotero_path}".casefold()
-    return SOURCE_HTML_RE.search(haystack) is not None
+    if SOURCE_HTML_RE.search(haystack) is not None:
+        return True
+    match = LANGUAGE_HTML_RE.search(haystack)
+    return bool(match and _is_source_html_language_marker(match.group(1)))
 
 
 def _looks_like_arxiv_html(path: Path, *, title: str, zotero_path: str) -> bool:
@@ -1009,9 +1013,14 @@ def _looks_like_generated_html(path: Path, *, title: str, zotero_path: str) -> b
     haystack = f"{path.name} {title} {zotero_path}".casefold()
     return (
         GENERATED_HTML_RE.search(haystack) is not None
-        and SOURCE_HTML_RE.search(haystack) is None
+        and not _looks_like_source_html(path, title=title, zotero_path=zotero_path)
         and ARXIV_HTML_RE.search(haystack) is None
     )
+
+
+def _is_source_html_language_marker(value: str) -> bool:
+    marker = re.sub(r"[^a-z0-9]+", "", value.casefold())
+    return marker not in {"ru", "source", "arxiv", "ocr", "fulltext", "pdf", "html"}
 
 
 def _is_frontiers_figure_js_control(tag_name: str, attr_map: dict[str, str]) -> bool:

@@ -1411,22 +1411,38 @@ class PipelineStateStore:
             self._add_metadata_job_event(connection, job_id=job_id, event=status, message=message)
         return self.get_metadata_job(job_id) or {}
 
-    def retry_metadata_job(self, job_id: str) -> dict[str, Any]:
+    def retry_metadata_job(self, job_id: str, *, reset_attempts: bool = False) -> dict[str, Any]:
         now = _utc_now().isoformat()
         with self._connect() as connection:
-            connection.execute(
-                """
-                update metadata_jobs
-                set status = 'queued',
-                    phase = 'queued',
-                    lease_owner = null,
-                    leased_until = null,
-                    updated_at = ?
-                where job_id = ?
-                  and status in ('failed_retryable', 'failed_final', 'skipped', 'cancelled')
-                """,
-                (now, job_id),
-            )
+            if reset_attempts:
+                connection.execute(
+                    """
+                    update metadata_jobs
+                    set status = 'queued',
+                        phase = 'queued',
+                        attempts = 0,
+                        lease_owner = null,
+                        leased_until = null,
+                        updated_at = ?
+                    where job_id = ?
+                      and status in ('failed_retryable', 'failed_final', 'skipped', 'cancelled')
+                    """,
+                    (now, job_id),
+                )
+            else:
+                connection.execute(
+                    """
+                    update metadata_jobs
+                    set status = 'queued',
+                        phase = 'queued',
+                        lease_owner = null,
+                        leased_until = null,
+                        updated_at = ?
+                    where job_id = ?
+                      and status in ('failed_retryable', 'failed_final', 'skipped', 'cancelled')
+                    """,
+                    (now, job_id),
+                )
             self._add_metadata_job_event(
                 connection,
                 job_id=job_id,
@@ -2055,6 +2071,10 @@ def _metadata_failure_is_transient(last_error: str) -> bool:
         "getaddrinfo failed",
         "connection refused",
         "connection reset",
+        "winerror 10054",
+        "winerror 10060",
+        "удаленный хост принудительно разорвал",
+        "попытка установить соединение",
         "temporary failure",
         "temporarily unavailable",
         "too many requests",

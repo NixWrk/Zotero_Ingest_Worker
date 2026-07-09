@@ -38,6 +38,13 @@ from .state import FileSignature
 HttpText = Callable[[str], str]
 
 
+class ArxivHtmlValidationError(RuntimeError):
+    def __init__(self, *, arxiv_id: str, reason: str):
+        self.arxiv_id = arxiv_id
+        self.reason = reason
+        super().__init__(f"arXiv HTML validation failed for {arxiv_id}: {reason}")
+
+
 @dataclass
 class ArxivHtmlJobService:
     config: Any
@@ -86,8 +93,9 @@ class ArxivHtmlJobService:
             min_text_chars=self.config.arxiv_html_min_text_chars,
         )
         if not validation["ok"]:
-            raise RuntimeError(
-                f"arXiv HTML validation failed for {arxiv_id}: {validation['reason']}"
+            raise ArxivHtmlValidationError(
+                arxiv_id=arxiv_id,
+                reason=str(validation["reason"]),
             )
         return text
 

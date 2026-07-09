@@ -24,6 +24,7 @@ from zotero_metadata_enrichment import (  # type: ignore[import-not-found]
 
 from .arxiv_html import (
     ArxivHtmlJobService,
+    ArxivHtmlValidationError,
     arxiv_html_filename,
     parse_arxiv_atom,
     validate_arxiv_html,
@@ -866,6 +867,25 @@ class ZoteroMetadataProcessor:
             return {"require_relay": require_relay}
         return {}
 
+    def _mark_metadata_job_failed_or_skipped_for_exception(
+        self,
+        *,
+        job_id: str,
+        exc: Exception,
+    ) -> dict[str, Any]:
+        reason = _nonactionable_metadata_exception_reason(exc)
+        if reason:
+            return self.state.mark_metadata_job_skipped(
+                job_id=job_id,
+                message=str(exc),
+                result={"reason": reason, "error": str(exc)},
+            )
+        return self.state.mark_metadata_job_failed(
+            job_id=job_id,
+            message=str(exc),
+            retryable=not _is_nonretryable_worker_error(exc),
+        )
+
     def _drain_enrich_job(
         self,
         job: dict[str, Any],
@@ -981,17 +1001,21 @@ class ZoteroMetadataProcessor:
                 relay_result=relay_result,
             )
         except urllib.error.HTTPError as exc:
+            body = _http_error_body(exc)
+            skip_reason = _nonactionable_metadata_http_error_reason(exc.code, body)
+            if skip_reason:
+                return self.state.mark_metadata_job_skipped(
+                    job_id=job_id,
+                    message=f"HTTP {exc.code} while enriching metadata: {body}",
+                    result={"reason": skip_reason, "http_status": exc.code, "body": body},
+                )
             return self.state.mark_metadata_job_failed(
                 job_id=job_id,
-                message=f"HTTP {exc.code} while enriching metadata: {_http_error_body(exc)}",
+                message=f"HTTP {exc.code} while enriching metadata: {body}",
                 retryable=exc.code in {408, 409, 425, 429, 500, 502, 503, 504},
             )
         except Exception as exc:
-            return self.state.mark_metadata_job_failed(
-                job_id=job_id,
-                message=str(exc),
-                retryable=not _is_nonretryable_worker_error(exc),
-            )
+            return self._mark_metadata_job_failed_or_skipped_for_exception(job_id=job_id, exc=exc)
 
     def _drain_full_text_job(self, job: dict[str, Any]) -> dict[str, Any]:
         job_id = str(job["job_id"])
@@ -1058,11 +1082,7 @@ class ZoteroMetadataProcessor:
                 retryable=exc.code in {408, 409, 425, 429, 500, 502, 503, 504},
             )
         except Exception as exc:
-            return self.state.mark_metadata_job_failed(
-                job_id=job_id,
-                message=str(exc),
-                retryable=not _is_nonretryable_worker_error(exc),
-            )
+            return self._mark_metadata_job_failed_or_skipped_for_exception(job_id=job_id, exc=exc)
 
     def _drain_researchgate_pdf_job(self, job: dict[str, Any]) -> dict[str, Any]:
         job_id = str(job["job_id"])
@@ -1111,11 +1131,7 @@ class ZoteroMetadataProcessor:
                 retryable=_researchgate_result_retryable(result),
             )
         except Exception as exc:
-            return self.state.mark_metadata_job_failed(
-                job_id=job_id,
-                message=str(exc),
-                retryable=not _is_nonretryable_worker_error(exc),
-            )
+            return self._mark_metadata_job_failed_or_skipped_for_exception(job_id=job_id, exc=exc)
 
     def _drain_scihub_pdf_job(self, job: dict[str, Any]) -> dict[str, Any]:
         job_id = str(job["job_id"])
@@ -1181,17 +1197,33 @@ class ZoteroMetadataProcessor:
             result = dict(attempts[-1]) if attempts else {"ok": False, "status": "missing_query"}
             result["ok"] = False
             result["attempts"] = attempts
+            retryable = any(_scihub_result_retryable(attempt) for attempt in attempts)
+            if not retryable:
+                status = str(result.get("status") or "unresolved")
+                return self.state.mark_metadata_job_skipped(
+                    job_id=job_id,
+                    message=f"Sci-Hub PDF lookup finished without an attachable PDF: {status}.",
+                    result={
+                        **result,
+                        "reason": "scihub_pdf_not_found",
+                    },
+                )
+            if _metadata_job_attempts_exhausted(job):
+                return self.state.mark_metadata_job_skipped(
+                    job_id=job_id,
+                    message="Sci-Hub PDF lookup exhausted retryable attempts without an attachable PDF.",
+                    result={
+                        **result,
+                        "reason": "scihub_pdf_retry_exhausted",
+                    },
+                )
             return self.state.mark_metadata_job_failed(
                 job_id=job_id,
                 message=str(result.get("error") or result.get("status") or "Sci-Hub PDF download failed."),
-                retryable=any(_scihub_result_retryable(attempt) for attempt in attempts),
+                retryable=retryable,
             )
         except Exception as exc:
-            return self.state.mark_metadata_job_failed(
-                job_id=job_id,
-                message=str(exc),
-                retryable=not _is_nonretryable_worker_error(exc),
-            )
+            return self._mark_metadata_job_failed_or_skipped_for_exception(job_id=job_id, exc=exc)
 
     def _drain_arxiv_html_job(self, job: dict[str, Any], *, require_relay: bool) -> dict[str, Any]:
         job_id = str(job["job_id"])
@@ -1290,6 +1322,16 @@ class ZoteroMetadataProcessor:
                 output_path=str(output_path),
                 relay_result=relay_result,
             )
+        except ArxivHtmlValidationError as exc:
+            return self.state.mark_metadata_job_skipped(
+                job_id=job_id,
+                message=str(exc),
+                result={
+                    "reason": "arxiv_html_validation_failed",
+                    "validation_reason": exc.reason,
+                    "arxiv_id": exc.arxiv_id,
+                },
+            )
         except urllib.error.HTTPError as exc:
             return self.state.mark_metadata_job_failed(
                 job_id=job_id,
@@ -1297,11 +1339,7 @@ class ZoteroMetadataProcessor:
                 retryable=exc.code in {408, 409, 425, 429, 500, 502, 503, 504},
             )
         except Exception as exc:
-            return self.state.mark_metadata_job_failed(
-                job_id=job_id,
-                message=str(exc),
-                retryable=not _is_nonretryable_worker_error(exc),
-            )
+            return self._mark_metadata_job_failed_or_skipped_for_exception(job_id=job_id, exc=exc)
 
     def _lookup_metadata_candidate(
         self,
@@ -1908,3 +1946,28 @@ def _safe_path_exists(path: Path) -> bool:
         return path.exists()
     except OSError:
         return False
+
+
+def _nonactionable_metadata_exception_reason(exc: Exception) -> str | None:
+    message = str(exc)
+    if "LIBRARY_BINDING_NOT_CONFIGURED" in message:
+        return "library_binding_not_configured"
+    if message.startswith("Local Zotero PDF attachment is deleted or inactive:"):
+        return "local_attachment_deleted_or_inactive"
+    return None
+
+
+def _nonactionable_metadata_http_error_reason(code: int, body: str) -> str | None:
+    text = str(body or "").casefold()
+    if code == 403 and ("cloudflare" in text or "just a moment" in text):
+        return "metadata_provider_blocked"
+    return None
+
+
+def _metadata_job_attempts_exhausted(job: dict[str, Any]) -> bool:
+    try:
+        attempts = int(job.get("attempts") or 0)
+        max_attempts = int(job.get("max_attempts") or 0)
+    except (TypeError, ValueError):
+        return False
+    return max_attempts > 0 and attempts >= max_attempts

@@ -162,7 +162,13 @@ def run_post_action(
         job_id = _optional_str(payload.get("job_id"))
         if not job_id:
             raise ValueError("metadata queue/retry requires job_id.")
-        return {"ok": True, "job": metadata_processor.state.retry_metadata_job(job_id)}
+        return {
+            "ok": True,
+            "job": metadata_processor.state.retry_metadata_job(
+                job_id,
+                reset_attempts=bool(payload.get("reset_attempts", False)),
+            ),
+        }
     if path == "/api/zotero/metadata/queue/cancel":
         job_id = _optional_str(payload.get("job_id"))
         if not job_id:

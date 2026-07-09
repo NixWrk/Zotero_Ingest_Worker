@@ -36,6 +36,45 @@ def test_full_text_inventory_distinguishes_source_html_from_other_html() -> None
     assert pdf_download_limit(inventory) == 0
 
 
+def test_full_text_inventory_treats_legacy_non_ru_html_as_source() -> None:
+    inventory = FullTextInventory(
+        (
+            FullTextAttachmentRecord(
+                key="PDF1234",
+                content_type="application/pdf",
+                path="storage:paper.pdf",
+                exists=True,
+            ),
+            FullTextAttachmentRecord(
+                key="HTMLZH",
+                content_type="text/html",
+                path="storage:Article [ZH HTML].html",
+                exists=True,
+            ),
+            FullTextAttachmentRecord(
+                key="HTMLRU",
+                content_type="text/html",
+                path="storage:Article [RU HTML].html",
+                exists=True,
+            ),
+            FullTextAttachmentRecord(
+                key="ARXIV1",
+                content_type="text/html",
+                path="storage:Article [ARXIV HTML].html",
+                exists=True,
+            ),
+        )
+    )
+
+    attachments = {item["key"]: item for item in inventory.to_dict()["attachments"]}
+
+    assert inventory.source_html_count == 1
+    assert attachments["HTMLZH"]["is_source_html"] is True
+    assert attachments["HTMLRU"]["is_source_html"] is False
+    assert attachments["ARXIV1"]["is_source_html"] is False
+    assert should_skip_full_text_scan(inventory) is True
+
+
 def test_full_text_inventory_skips_scan_only_when_pdf_and_source_html_exist() -> None:
     inventory = FullTextInventory(
         (
