@@ -8,6 +8,7 @@ from typing import Any
 import zotero_ingest_worker.metadata_processor as metadata_processor
 import zotero_ingest_worker.researchgate_pdf as researchgate_pdf
 from zotero_ingest_worker.metadata_processor import ZoteroMetadataProcessor
+from zotero_ingest_worker.local_zotero import LocalItemMetadata
 
 
 def test_researchgate_pdf_adapter_uses_passed_config(monkeypatch: Any, tmp_path: Path) -> None:
@@ -114,3 +115,48 @@ def test_researchgate_fallback_ignores_non_researchgate_urls() -> None:
     fallback = metadata_processor._first_researchgate_browser_fallback(payload)
 
     assert fallback == {"url": "https://www.researchgate.net/publication/example"}
+
+
+def test_researchgate_browser_fallback_enqueues_without_undefined_force(tmp_path: Path) -> None:
+    captured: dict[str, Any] = {}
+
+    class FakeState:
+        def enqueue_metadata_job(self, **kwargs: Any) -> dict[str, Any]:
+            captured.update(kwargs)
+            return {"job_id": "researchgate-1", "created": True, **kwargs}
+
+    sqlite_path = tmp_path / "zotero.sqlite"
+    sqlite_path.write_bytes(b"state")
+    processor = ZoteroMetadataProcessor.__new__(ZoteroMetadataProcessor)
+    processor.config = SimpleNamespace()
+    processor.state = FakeState()
+    processor._queue_key = lambda _job_type: "researchgate-v1"
+    metadata = LocalItemMetadata(
+        library_id="LIB1",
+        data_dir=tmp_path,
+        key="PARENT1",
+        item_id=1,
+        version=None,
+        item_type="journalArticle",
+        date_modified=None,
+        fields={"title": "Paper"},
+        creators=[],
+        tags=[],
+        collections=[],
+        relations=[],
+    )
+
+    result = processor._enqueue_researchgate_pdf_fallback(
+        metadata=metadata,
+        payload={
+            "browser_fallbacks": [
+                {"url": "https://www.researchgate.net/publication/example"}
+            ]
+        },
+        reason="test",
+    )
+
+    assert result is not None
+    assert result["classification"] == "queued"
+    assert captured["force"] is False
+    assert captured["parent_item_key"] == "PARENT1"

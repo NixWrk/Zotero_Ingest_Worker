@@ -501,7 +501,7 @@ class ZoteroMetadataProcessor:
             signature=signature,
             status="queued",
             reason=reason,
-            force=force,
+            force=False,
             parent_item_key=metadata.key,
             parent_version=metadata.version,
             queue_key=queue_key,
