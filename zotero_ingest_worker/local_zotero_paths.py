@@ -1,15 +1,57 @@
 from __future__ import annotations
 
 import hashlib
+import json
+import os
 import re
 from pathlib import Path
 
 
 def library_id_for_data_dir(data_dir: Path) -> str:
+    binding_id = _zotero_library_id_for_data_dir(data_dir)
+    if binding_id:
+        return binding_id
+    return path_library_id_for_data_dir(data_dir)
+
+
+def path_library_id_for_data_dir(data_dir: Path) -> str:
     resolved = str(data_dir.resolve()).lower()
     digest = hashlib.sha1(resolved.encode("utf-8")).hexdigest()[:8]
     label = re.sub(r"[^A-Za-z0-9]+", "_", data_dir.name).strip("_") or "zotero"
     return f"{label}_{digest}"
+
+
+def _zotero_library_id_for_data_dir(data_dir: Path) -> str:
+    for binding in _zfr_library_bindings_from_env():
+        library_id = str(binding.get("zoteroLibraryId") or "").strip()
+        if not library_id:
+            continue
+        for key in ("hostDataDir", "dataDir"):
+            raw_path = str(binding.get(key) or "").strip()
+            if raw_path and _same_path(Path(raw_path), data_dir):
+                return library_id
+    return ""
+
+
+def _zfr_library_bindings_from_env() -> tuple[dict[str, object], ...]:
+    value = os.environ.get("ZFR_LIBRARY_BINDINGS", "").strip()
+    if not value:
+        return ()
+    bindings = json.loads(value)
+    if not isinstance(bindings, list):
+        raise ValueError("Invalid ZFR_LIBRARY_BINDINGS: expected a JSON list.")
+    return tuple(binding for binding in bindings if isinstance(binding, dict))
+
+
+def _same_path(left: Path, right: Path) -> bool:
+    try:
+        return left.expanduser().resolve() == right.expanduser().resolve()
+    except (OSError, RuntimeError, ValueError):
+        return _normalize_path_text(str(left)) == _normalize_path_text(str(right))
+
+
+def _normalize_path_text(value: str) -> str:
+    return value.replace("\\", "/").rstrip("/").casefold()
 
 
 def safe_mtime(path: Path) -> float:

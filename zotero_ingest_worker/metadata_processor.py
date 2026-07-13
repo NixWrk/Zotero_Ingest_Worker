@@ -628,7 +628,7 @@ class ZoteroMetadataProcessor:
             signature=signature,
             status="queued",
             reason=reason,
-            force=False,
+            force=force,
             parent_item_key=metadata.key,
             parent_version=metadata.version,
             queue_key=queue_key,
@@ -1172,6 +1172,7 @@ class ZoteroMetadataProcessor:
                         mirrors=tuple(self.config.scihub_mirrors),
                         user_agent=self.config.scihub_user_agent,
                         timeout_seconds=self.config.scihub_request_timeout_seconds,
+                        force_attach=bool(job.get("force")),
                     ),
                 )
                 result["query"] = query

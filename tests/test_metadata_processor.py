@@ -1382,6 +1382,44 @@ def test_scihub_backlog_scan_skips_parent_items_with_pdf(tmp_path: Path) -> None
     assert result["results"][0]["classification"] == "pdf_exists"
 
 
+def test_scihub_backlog_force_replaces_existing_pdf(
+    monkeypatch: Any,
+    tmp_path: Path,
+) -> None:
+    data_dir = _write_full_text_fixture(tmp_path, with_pdf=True)
+    config = _metadata_processor_test_config(tmp_path, data_dir)
+    processor = ZoteroMetadataProcessor(config)
+    processor._library_configs = lambda **_kwargs: [config]  # type: ignore[method-assign]
+    force_attach_values: list[bool] = []
+
+    def fake_download_and_attach_scihub_pdf(config: Any, options: Any) -> dict[str, Any]:
+        force_attach_values.append(bool(options.force_attach))
+        return {
+            "ok": True,
+            "status": "attached",
+            "download": {"ok": True, "output_path": str(tmp_path / "scihub.pdf")},
+            "attach": {"ok": True},
+        }
+
+    monkeypatch.setattr(
+        "zotero_ingest_worker.metadata_processor.download_and_attach_scihub_pdf",
+        fake_download_and_attach_scihub_pdf,
+    )
+
+    result = processor.scihub_pdf_backlog_scan(limit=1, force=True)
+    queued = processor.state.list_metadata_jobs(
+        job_type="scihub_pdf",
+        statuses={"queued"},
+        limit=1,
+    )
+    drained = processor.drain_scihub_pdf_queue(limit=1, require_relay=False)
+
+    assert result["queued"] == 1
+    assert queued[0]["force"] == 1
+    assert drained["results"][0]["status"] == "succeeded"
+    assert force_attach_values == [True]
+
+
 def test_scihub_backlog_scan_respects_remote_parent_filter_alias(
     monkeypatch: Any,
     tmp_path: Path,

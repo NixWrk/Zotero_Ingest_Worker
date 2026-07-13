@@ -1,7 +1,11 @@
 from __future__ import annotations
 
+import json
+
 from zotero_ingest_worker.local_zotero_paths import (
+    library_id_for_data_dir,
     looks_like_generated_html,
+    path_library_id_for_data_dir,
     resolve_attachment_path_for_suffixes,
 )
 
@@ -30,3 +34,13 @@ def test_resolve_attachment_path_for_storage_path(tmp_path) -> None:
     )
 
     assert resolved == target
+
+
+def test_library_id_prefers_matching_relay_binding(monkeypatch, tmp_path) -> None:
+    monkeypatch.setenv(
+        "ZFR_LIBRARY_BINDINGS",
+        json.dumps([{"zoteroLibraryId": "19686658", "dataDir": str(tmp_path)}]),
+    )
+
+    assert library_id_for_data_dir(tmp_path) == "19686658"
+    assert path_library_id_for_data_dir(tmp_path) != "19686658"
