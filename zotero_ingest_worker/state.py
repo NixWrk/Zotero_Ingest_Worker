@@ -1661,8 +1661,9 @@ class PipelineStateStore:
                 (now,),
             ).fetchall()
             job_ids = [str(row["job_id"]) for row in rows]
+            recovered = 0
             for job_id in job_ids:
-                connection.execute(
+                cursor = connection.execute(
                     """
                     update ocr_jobs
                     set status = 'queued',
@@ -1672,22 +1673,29 @@ class PipelineStateStore:
                         last_error = 'Recovered expired running job lease.',
                         updated_at = ?
                     where job_id = ?
+                      and status = 'running'
+                      and leased_until is not null
+                      and leased_until < ?
                     """,
-                    (now, job_id),
+                    (now, job_id, now),
                 )
+                if cursor.rowcount != 1:
+                    continue
+                recovered += 1
                 self._add_job_event(
                     connection,
                     job_id=job_id,
                     event="recovered",
                     message="Expired running job lease was returned to queued.",
                 )
-        return len(job_ids)
+        return recovered
 
     def lease_next_job(self, *, owner: str, lease_seconds: int) -> dict[str, Any] | None:
         self.recover_expired_jobs()
         now = _utc_now()
         leased_until = now + timedelta(seconds=lease_seconds)
         with self._connect() as connection:
+            connection.execute("begin immediate")
             row = connection.execute(
                 """
                 select *
@@ -1700,7 +1708,7 @@ class PipelineStateStore:
             if row is None:
                 return None
             job = dict(row)
-            connection.execute(
+            cursor = connection.execute(
                 """
                 update ocr_jobs
                 set status = 'running',
@@ -1710,9 +1718,12 @@ class PipelineStateStore:
                     leased_until = ?,
                     updated_at = ?
                 where job_id = ?
+                  and status = 'queued'
                 """,
                 (owner, leased_until.isoformat(), now.isoformat(), job["job_id"]),
             )
+            if cursor.rowcount != 1:
+                return None
             self._add_job_event(
                 connection,
                 job_id=job["job_id"],
@@ -1729,11 +1740,13 @@ class PipelineStateStore:
         result_path: str | None = None,
         backup_path: str | None = None,
         relay_result: Any = None,
+        owner: str | None = None,
     ) -> dict[str, Any]:
         now = _utc_now().isoformat()
+        owner_clause, owner_params = _terminal_owner_clause(owner)
         with self._connect() as connection:
-            connection.execute(
-                """
+            cursor = connection.execute(
+                f"""
                 update ocr_jobs
                 set status = 'succeeded',
                     phase = 'complete',
@@ -1746,6 +1759,7 @@ class PipelineStateStore:
                     relay_result = ?,
                     updated_at = ?
                 where job_id = ?
+                  {owner_clause}
                 """,
                 (
                     result_path,
@@ -1754,9 +1768,20 @@ class PipelineStateStore:
                     _json_or_none(relay_result),
                     now,
                     job_id,
+                    *owner_params,
                 ),
             )
-            self._add_job_event(connection, job_id=job_id, event="succeeded", message=message)
+            if cursor.rowcount != 1:
+                self._add_job_event(
+                    connection,
+                    job_id=job_id,
+                    event="stale_completion_discarded",
+                    message=_stale_job_update_message("OCR", owner),
+                )
+            else:
+                self._add_job_event(
+                    connection, job_id=job_id, event="succeeded", message=message
+                )
         return self.get_job(job_id) or {}
 
     def mark_job_failed(
@@ -1765,6 +1790,7 @@ class PipelineStateStore:
         job_id: str,
         message: str,
         retryable: bool,
+        owner: str | None = None,
     ) -> dict[str, Any]:
         job = self.get_job(job_id)
         if job is None:
@@ -1773,9 +1799,10 @@ class PipelineStateStore:
         max_attempts = int(job["max_attempts"])
         status = "failed_retryable" if retryable and attempts < max_attempts else "failed_final"
         now = _utc_now().isoformat()
+        owner_clause, owner_params = _terminal_owner_clause(owner)
         with self._connect() as connection:
-            connection.execute(
-                """
+            cursor = connection.execute(
+                f"""
                 update ocr_jobs
                 set status = ?,
                     phase = 'failed',
@@ -1784,17 +1811,35 @@ class PipelineStateStore:
                     last_error = ?,
                     updated_at = ?
                 where job_id = ?
+                  {owner_clause}
                 """,
-                (status, message, now, job_id),
+                (status, message, now, job_id, *owner_params),
             )
-            self._add_job_event(connection, job_id=job_id, event=status, message=message)
+            if cursor.rowcount != 1:
+                self._add_job_event(
+                    connection,
+                    job_id=job_id,
+                    event="stale_completion_discarded",
+                    message=_stale_job_update_message("OCR", owner),
+                )
+            else:
+                self._add_job_event(
+                    connection, job_id=job_id, event=status, message=message
+                )
         return self.get_job(job_id) or {}
 
-    def mark_job_manual_review(self, *, job_id: str, message: str) -> dict[str, Any]:
+    def mark_job_manual_review(
+        self,
+        *,
+        job_id: str,
+        message: str,
+        owner: str | None = None,
+    ) -> dict[str, Any]:
         now = _utc_now().isoformat()
+        owner_clause, owner_params = _terminal_owner_clause(owner)
         with self._connect() as connection:
-            connection.execute(
-                """
+            cursor = connection.execute(
+                f"""
                 update ocr_jobs
                 set status = 'manual_review',
                     phase = 'manual_review',
@@ -1803,17 +1848,35 @@ class PipelineStateStore:
                     last_error = ?,
                     updated_at = ?
                 where job_id = ?
+                  {owner_clause}
                 """,
-                (message, now, job_id),
+                (message, now, job_id, *owner_params),
             )
-            self._add_job_event(connection, job_id=job_id, event="manual_review", message=message)
+            if cursor.rowcount != 1:
+                self._add_job_event(
+                    connection,
+                    job_id=job_id,
+                    event="stale_completion_discarded",
+                    message=_stale_job_update_message("OCR", owner),
+                )
+            else:
+                self._add_job_event(
+                    connection, job_id=job_id, event="manual_review", message=message
+                )
         return self.get_job(job_id) or {}
 
-    def mark_job_problem_document(self, *, job_id: str, message: str) -> dict[str, Any]:
+    def mark_job_problem_document(
+        self,
+        *,
+        job_id: str,
+        message: str,
+        owner: str | None = None,
+    ) -> dict[str, Any]:
         now = _utc_now().isoformat()
+        owner_clause, owner_params = _terminal_owner_clause(owner)
         with self._connect() as connection:
-            connection.execute(
-                """
+            cursor = connection.execute(
+                f"""
                 update ocr_jobs
                 set status = 'problem_document',
                     phase = 'problem_document',
@@ -1822,10 +1885,21 @@ class PipelineStateStore:
                     last_error = ?,
                     updated_at = ?
                 where job_id = ?
+                  {owner_clause}
                 """,
-                (message, now, job_id),
+                (message, now, job_id, *owner_params),
             )
-            self._add_job_event(connection, job_id=job_id, event="problem_document", message=message)
+            if cursor.rowcount != 1:
+                self._add_job_event(
+                    connection,
+                    job_id=job_id,
+                    event="stale_completion_discarded",
+                    message=_stale_job_update_message("OCR", owner),
+                )
+            else:
+                self._add_job_event(
+                    connection, job_id=job_id, event="problem_document", message=message
+                )
         return self.get_job(job_id) or {}
 
     def retry_job(self, job_id: str) -> dict[str, Any]:
@@ -1866,19 +1940,53 @@ class PipelineStateStore:
             self._add_job_event(connection, job_id=job_id, event="cancelled", message="Job cancelled.")
         return self.get_job(job_id) or {}
 
-    def mark_job_progress(self, *, job_id: str, phase: str, message: str) -> dict[str, Any]:
-        now = _utc_now().isoformat()
+    def mark_job_progress(
+        self,
+        *,
+        job_id: str,
+        phase: str,
+        message: str,
+        owner: str | None = None,
+        lease_seconds: int | None = None,
+    ) -> dict[str, Any]:
+        now = _utc_now()
+        leased_until = (
+            now + timedelta(seconds=max(1, int(lease_seconds)))
+            if lease_seconds is not None
+            else None
+        )
+        normalized_owner = str(owner or "").strip()
+        owner_clause = "and status = 'running' and lease_owner = ?" if normalized_owner else ""
+        owner_params = (normalized_owner,) if normalized_owner else ()
         with self._connect() as connection:
-            connection.execute(
-                """
+            cursor = connection.execute(
+                f"""
                 update ocr_jobs
                 set phase = ?,
+                    leased_until = coalesce(?, leased_until),
                     updated_at = ?
                 where job_id = ?
+                  {owner_clause}
                 """,
-                (phase, now, job_id),
+                (
+                    phase,
+                    leased_until.isoformat() if leased_until else None,
+                    now.isoformat(),
+                    job_id,
+                    *owner_params,
+                ),
             )
-            self._add_job_event(connection, job_id=job_id, event="progress", message=message)
+            if cursor.rowcount != 1:
+                self._add_job_event(
+                    connection,
+                    job_id=job_id,
+                    event="stale_progress_discarded",
+                    message=_stale_job_update_message("OCR", owner),
+                )
+            else:
+                self._add_job_event(
+                    connection, job_id=job_id, event="progress", message=message
+                )
         return self.get_job(job_id) or {}
 
     def create_full_run(self, *, options: dict[str, Any]) -> dict[str, Any]:

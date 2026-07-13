@@ -282,6 +282,102 @@ def test_stale_html_owner_cannot_complete_reclaimed_job(tmp_path):
     assert events.count("succeeded") == 1
 
 
+def test_ocr_job_lease_is_unique_under_parallel_workers(tmp_path):
+    source = tmp_path / "paper.pdf"
+    source.write_bytes(b"%PDF")
+    store = PipelineStateStore(tmp_path / "state.sqlite")
+    store.enqueue_job(
+        library_id="LIB1",
+        attachment_key="PDF1",
+        data_dir=tmp_path,
+        source_path=source,
+        signature=FileSignature.from_path(source),
+        status="queued",
+        reason="test",
+    )
+
+    def lease(owner: str):
+        return store.lease_next_job(owner=owner, lease_seconds=60)
+
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        leases = list(executor.map(lease, [f"worker-{index}" for index in range(4)]))
+
+    leased = [job for job in leases if job is not None]
+    assert len(leased) == 1
+    assert leased[0]["status"] == "running"
+
+
+def test_stale_ocr_owner_cannot_update_reclaimed_job(tmp_path):
+    source = tmp_path / "paper.pdf"
+    source.write_bytes(b"%PDF")
+    store = PipelineStateStore(tmp_path / "state.sqlite")
+    created = store.enqueue_job(
+        library_id="LIB1",
+        attachment_key="PDF1",
+        data_dir=tmp_path,
+        source_path=source,
+        signature=FileSignature.from_path(source),
+        status="queued",
+        reason="test",
+    )
+    job_id = str(created["job_id"])
+    first = store.lease_next_job(owner="old-owner", lease_seconds=60)
+    assert first is not None
+    with store._connect() as connection:
+        connection.execute(
+            "update ocr_jobs set leased_until = ? where job_id = ?",
+            ("2000-01-01T00:00:00+00:00", job_id),
+        )
+    assert store.recover_expired_jobs() == 1
+    second = store.lease_next_job(owner="new-owner", lease_seconds=60)
+    assert second is not None
+    before_heartbeat = str(second["leased_until"])
+
+    stale_progress = store.mark_job_progress(
+        job_id=job_id,
+        phase="late-old-progress",
+        message="old worker still running",
+        owner="old-owner",
+        lease_seconds=600,
+    )
+    stale_completion = store.mark_job_succeeded(
+        job_id=job_id,
+        message="old worker finished late",
+        owner="old-owner",
+    )
+    heartbeat = store.mark_job_progress(
+        job_id=job_id,
+        phase="new-progress",
+        message="new worker heartbeat",
+        owner="new-owner",
+        lease_seconds=600,
+    )
+    completed = store.mark_job_succeeded(
+        job_id=job_id,
+        message="new worker finished",
+        owner="new-owner",
+    )
+
+    assert stale_progress["status"] == "running"
+    assert stale_progress["lease_owner"] == "new-owner"
+    assert stale_completion["status"] == "running"
+    assert stale_completion["lease_owner"] == "new-owner"
+    assert heartbeat["phase"] == "new-progress"
+    assert str(heartbeat["leased_until"]) > before_heartbeat
+    assert completed["status"] == "succeeded"
+    with store._connect() as connection:
+        events = [
+            str(row["event"])
+            for row in connection.execute(
+                "select event from ocr_job_events where job_id = ? order by event_id",
+                (job_id,),
+            ).fetchall()
+        ]
+    assert "stale_progress_discarded" in events
+    assert "stale_completion_discarded" in events
+    assert events.count("succeeded") == 1
+
+
 def test_recover_orphaned_metadata_jobs_returns_running_jobs_to_queue(tmp_path):
     source = tmp_path / "zotero.sqlite"
     source.write_bytes(b"state")
