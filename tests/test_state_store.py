@@ -282,6 +282,75 @@ def test_stale_html_owner_cannot_complete_reclaimed_job(tmp_path):
     assert events.count("succeeded") == 1
 
 
+def test_html_attempt_budget_requires_explicit_reset(tmp_path):
+    source = tmp_path / "paper.pdf"
+    source.write_bytes(b"%PDF")
+    store = PipelineStateStore(tmp_path / "state.sqlite")
+    created = store.enqueue_html_job(
+        library_id="LIB1",
+        attachment_key="PDF1",
+        data_dir=tmp_path,
+        source_path=source,
+        signature=FileSignature.from_path(source),
+        collection_key="direct_pdf",
+        status="queued",
+        reason="test",
+        max_attempts=1,
+    )
+    job_id = str(created["job_id"])
+    leased = store.lease_next_html_job(owner="worker-1", lease_seconds=60)
+    assert leased is not None
+    failed = store.mark_html_job_failed(
+        job_id=job_id,
+        message="transient",
+        retryable=True,
+        owner="worker-1",
+    )
+    assert failed["status"] == "failed_final"
+
+    rejected = store.retry_html_job(job_id)
+    assert rejected["status"] == "failed_final"
+    assert store.lease_next_html_job(owner="worker-2", lease_seconds=60) is None
+    reset = store.retry_html_job(job_id, reset_attempts=True)
+    assert reset["status"] == "queued"
+    assert reset["attempts"] == 0
+    next_generation = store.lease_next_html_job(owner="worker-2", lease_seconds=60)
+    assert next_generation is not None
+    assert next_generation["attempts"] == 1
+
+
+def test_html_zero_max_attempts_is_unlimited(tmp_path):
+    source = tmp_path / "paper.pdf"
+    source.write_bytes(b"%PDF")
+    store = PipelineStateStore(tmp_path / "state.sqlite")
+    created = store.enqueue_html_job(
+        library_id="LIB1",
+        attachment_key="PDF1",
+        data_dir=tmp_path,
+        source_path=source,
+        signature=FileSignature.from_path(source),
+        collection_key="direct_pdf",
+        status="queued",
+        reason="test",
+        max_attempts=0,
+    )
+    job_id = str(created["job_id"])
+    first = store.lease_next_html_job(owner="worker-1", lease_seconds=60)
+    assert first is not None
+    failed = store.mark_html_job_failed(
+        job_id=job_id,
+        message="transient",
+        retryable=True,
+        owner="worker-1",
+    )
+    assert failed["status"] == "failed_retryable"
+    retried = store.retry_html_job(job_id)
+    assert retried["status"] == "queued"
+    second = store.lease_next_html_job(owner="worker-2", lease_seconds=60)
+    assert second is not None
+    assert second["attempts"] == 2
+
+
 def test_ocr_job_lease_is_unique_under_parallel_workers(tmp_path):
     source = tmp_path / "paper.pdf"
     source.write_bytes(b"%PDF")

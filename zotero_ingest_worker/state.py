@@ -752,11 +752,43 @@ class PipelineStateStore:
         leased_until = now + timedelta(seconds=lease_seconds)
         with self._connect() as connection:
             connection.execute("begin immediate")
+            exhausted_rows = connection.execute(
+                """
+                select job_id
+                from html_jobs
+                where status = 'queued'
+                  and max_attempts > 0
+                  and attempts >= max_attempts
+                """
+            ).fetchall()
+            for exhausted_row in exhausted_rows:
+                exhausted_job_id = str(exhausted_row["job_id"])
+                connection.execute(
+                    """
+                    update html_jobs
+                    set status = 'failed_final',
+                        phase = 'failed',
+                        last_error = coalesce(last_error, 'Attempt budget exhausted before claim.'),
+                        updated_at = ?
+                    where job_id = ?
+                      and status = 'queued'
+                      and max_attempts > 0
+                      and attempts >= max_attempts
+                    """,
+                    (now.isoformat(), exhausted_job_id),
+                )
+                self._add_html_job_event(
+                    connection,
+                    job_id=exhausted_job_id,
+                    event="attempts_exhausted",
+                    message="HTML job was finalized because its attempt budget is exhausted.",
+                )
             row = connection.execute(
                 """
                 select *
                 from html_jobs
                 where status = 'queued'
+                  and (max_attempts <= 0 or attempts < max_attempts)
                 order by created_at asc
                 limit 1
                 """
@@ -775,6 +807,7 @@ class PipelineStateStore:
                     updated_at = ?
                 where job_id = ?
                   and status = 'queued'
+                  and (max_attempts <= 0 or attempts < max_attempts)
                 """,
                 (owner, leased_until.isoformat(), now.isoformat(), job["job_id"]),
             )
@@ -904,7 +937,11 @@ class PipelineStateStore:
             return {}
         attempts = int(job["attempts"])
         max_attempts = int(job["max_attempts"])
-        status = "failed_retryable" if retryable and attempts < max_attempts else "failed_final"
+        status = (
+            "failed_retryable"
+            if retryable and (max_attempts <= 0 or attempts < max_attempts)
+            else "failed_final"
+        )
         now = _utc_now().isoformat()
         owner_clause, owner_params = _terminal_owner_clause(owner)
         with self._connect() as connection:
@@ -958,28 +995,72 @@ class PipelineStateStore:
             )
         return cursor.rowcount == 1
 
-    def retry_html_job(self, job_id: str) -> dict[str, Any]:
+    def retry_html_job(self, job_id: str, *, reset_attempts: bool = False) -> dict[str, Any]:
         now = _utc_now().isoformat()
         with self._connect() as connection:
-            connection.execute(
-                """
-                update html_jobs
-                set status = 'queued',
-                    phase = 'queued',
-                    lease_owner = null,
-                    leased_until = null,
-                    updated_at = ?
-                where job_id = ?
-                  and status in ('failed_retryable', 'failed_final', 'cancelled', 'needs_chunk_fallback')
-                """,
-                (now, job_id),
-            )
-            self._add_html_job_event(
-                connection,
-                job_id=job_id,
-                event="retry",
-                message="HTML job returned to queue.",
-            )
+            connection.execute("begin immediate")
+            row = connection.execute(
+                "select * from html_jobs where job_id = ?",
+                (job_id,),
+            ).fetchone()
+            if row is None:
+                return {}
+            attempts = int(row["attempts"])
+            max_attempts = int(row["max_attempts"])
+            if not reset_attempts and max_attempts > 0 and attempts >= max_attempts:
+                self._add_html_job_event(
+                    connection,
+                    job_id=job_id,
+                    event="retry_rejected_exhausted",
+                    message=(
+                        "HTML retry was rejected because the attempt budget is exhausted; "
+                        "use reset_attempts=true to start a new retry generation."
+                    ),
+                )
+                return dict(row)
+            if reset_attempts:
+                cursor = connection.execute(
+                    """
+                    update html_jobs
+                    set status = 'queued',
+                        phase = 'queued',
+                        attempts = 0,
+                        lease_owner = null,
+                        leased_until = null,
+                        updated_at = ?
+                    where job_id = ?
+                      and status in ('failed_retryable', 'failed_final', 'cancelled', 'needs_chunk_fallback')
+                    """,
+                    (now, job_id),
+                )
+                event = "retry_generation_reset"
+            else:
+                cursor = connection.execute(
+                    """
+                    update html_jobs
+                    set status = 'queued',
+                        phase = 'queued',
+                        lease_owner = null,
+                        leased_until = null,
+                        updated_at = ?
+                    where job_id = ?
+                      and status in ('failed_retryable', 'failed_final', 'cancelled', 'needs_chunk_fallback')
+                      and (max_attempts <= 0 or attempts < max_attempts)
+                    """,
+                    (now, job_id),
+                )
+                event = "retry"
+            if cursor.rowcount == 1:
+                self._add_html_job_event(
+                    connection,
+                    job_id=job_id,
+                    event=event,
+                    message=(
+                        "HTML job started a new retry generation."
+                        if reset_attempts
+                        else "HTML job returned to queue."
+                    ),
+                )
         return self.get_html_job(job_id) or {}
 
     def cancel_html_job(self, job_id: str) -> dict[str, Any]:
