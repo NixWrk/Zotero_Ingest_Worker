@@ -1214,8 +1214,9 @@ class PipelineStateStore:
                 params,
             ).fetchall()
             job_ids = [str(row["job_id"]) for row in rows]
+            recovered = 0
             for job_id in job_ids:
-                connection.execute(
+                cursor = connection.execute(
                     """
                     update metadata_jobs
                     set status = 'queued',
@@ -1225,16 +1226,22 @@ class PipelineStateStore:
                         last_error = 'Recovered expired metadata job lease.',
                         updated_at = ?
                     where job_id = ?
+                      and status = 'running'
+                      and leased_until is not null
+                      and leased_until < ?
                     """,
-                    (now, job_id),
+                    (now, job_id, now),
                 )
+                if cursor.rowcount != 1:
+                    continue
+                recovered += 1
                 self._add_metadata_job_event(
                     connection,
                     job_id=job_id,
                     event="recovered",
                     message="Expired running metadata job lease was returned to queued.",
                 )
-        return len(job_ids)
+        return recovered
 
     def recover_orphaned_metadata_jobs(
         self,
@@ -1260,13 +1267,14 @@ class PipelineStateStore:
                 """,
                 params,
             ).fetchall()
-            job_ids = [
-                str(row["job_id"])
+            jobs = [
+                (str(row["job_id"]), str(row["lease_owner"] or ""))
                 for row in rows
                 if not owner_alive(str(row["lease_owner"] or ""))
             ]
-            for job_id in job_ids:
-                connection.execute(
+            recovered = 0
+            for job_id, previous_owner in jobs:
+                cursor = connection.execute(
                     """
                     update metadata_jobs
                     set status = 'queued',
@@ -1277,16 +1285,20 @@ class PipelineStateStore:
                         updated_at = ?
                     where job_id = ?
                       and status = 'running'
+                      and lease_owner = ?
                     """,
-                    (now, job_id),
+                    (now, job_id, previous_owner),
                 )
+                if cursor.rowcount != 1:
+                    continue
+                recovered += 1
                 self._add_metadata_job_event(
                     connection,
                     job_id=job_id,
                     event="recovered",
                     message="Orphaned running metadata job lease was returned to queued.",
                 )
-        return len(job_ids)
+        return recovered
 
     def lease_next_metadata_job(
         self,
@@ -1314,7 +1326,7 @@ class PipelineStateStore:
             if row is None:
                 return None
             job = dict(row)
-            connection.execute(
+            cursor = connection.execute(
                 """
                 update metadata_jobs
                 set status = 'running',
@@ -1324,9 +1336,12 @@ class PipelineStateStore:
                     leased_until = ?,
                     updated_at = ?
                 where job_id = ?
+                  and status = 'queued'
                 """,
                 (owner, leased_until.isoformat(), now.isoformat(), job["job_id"]),
             )
+            if cursor.rowcount != 1:
+                return None
             self._add_metadata_job_event(
                 connection,
                 job_id=job["job_id"],
@@ -1343,11 +1358,13 @@ class PipelineStateStore:
         result: Any = None,
         output_path: str | None = None,
         relay_result: Any = None,
+        owner: str | None = None,
     ) -> dict[str, Any]:
         now = _utc_now().isoformat()
+        owner_clause, owner_params = _terminal_owner_clause(owner)
         with self._connect() as connection:
-            connection.execute(
-                """
+            cursor = connection.execute(
+                f"""
                 update metadata_jobs
                 set status = 'succeeded',
                     phase = 'complete',
@@ -1360,6 +1377,7 @@ class PipelineStateStore:
                     relay_result = ?,
                     updated_at = ?
                 where job_id = ?
+                  {owner_clause}
                 """,
                 (
                     _json_or_none(result),
@@ -1368,9 +1386,20 @@ class PipelineStateStore:
                     _json_or_none(relay_result),
                     now,
                     job_id,
+                    *owner_params,
                 ),
             )
-            self._add_metadata_job_event(connection, job_id=job_id, event="succeeded", message=message)
+            if cursor.rowcount != 1:
+                self._add_metadata_job_event(
+                    connection,
+                    job_id=job_id,
+                    event="stale_completion_discarded",
+                    message=_stale_job_update_message("metadata", owner),
+                )
+            else:
+                self._add_metadata_job_event(
+                    connection, job_id=job_id, event="succeeded", message=message
+                )
         return self.get_metadata_job(job_id) or {}
 
     def mark_metadata_job_skipped(
@@ -1379,11 +1408,13 @@ class PipelineStateStore:
         job_id: str,
         message: str,
         result: Any = None,
+        owner: str | None = None,
     ) -> dict[str, Any]:
         now = _utc_now().isoformat()
+        owner_clause, owner_params = _terminal_owner_clause(owner)
         with self._connect() as connection:
-            connection.execute(
-                """
+            cursor = connection.execute(
+                f"""
                 update metadata_jobs
                 set status = 'skipped',
                     phase = 'skipped',
@@ -1394,10 +1425,21 @@ class PipelineStateStore:
                     relay_status = 'skipped',
                     updated_at = ?
                 where job_id = ?
+                  {owner_clause}
                 """,
-                (message, _json_or_none(result), now, job_id),
+                (message, _json_or_none(result), now, job_id, *owner_params),
             )
-            self._add_metadata_job_event(connection, job_id=job_id, event="skipped", message=message)
+            if cursor.rowcount != 1:
+                self._add_metadata_job_event(
+                    connection,
+                    job_id=job_id,
+                    event="stale_completion_discarded",
+                    message=_stale_job_update_message("metadata", owner),
+                )
+            else:
+                self._add_metadata_job_event(
+                    connection, job_id=job_id, event="skipped", message=message
+                )
         return self.get_metadata_job(job_id) or {}
 
     def mark_metadata_job_failed(
@@ -1406,6 +1448,7 @@ class PipelineStateStore:
         job_id: str,
         message: str,
         retryable: bool,
+        owner: str | None = None,
     ) -> dict[str, Any]:
         job = self.get_metadata_job(job_id)
         if job is None:
@@ -1414,9 +1457,10 @@ class PipelineStateStore:
         max_attempts = int(job["max_attempts"])
         status = "failed_retryable" if retryable and attempts < max_attempts else "failed_final"
         now = _utc_now().isoformat()
+        owner_clause, owner_params = _terminal_owner_clause(owner)
         with self._connect() as connection:
-            connection.execute(
-                """
+            cursor = connection.execute(
+                f"""
                 update metadata_jobs
                 set status = ?,
                     phase = 'failed',
@@ -1425,11 +1469,45 @@ class PipelineStateStore:
                     last_error = ?,
                     updated_at = ?
                 where job_id = ?
+                  {owner_clause}
                 """,
-                (status, message, now, job_id),
+                (status, message, now, job_id, *owner_params),
             )
-            self._add_metadata_job_event(connection, job_id=job_id, event=status, message=message)
+            if cursor.rowcount != 1:
+                self._add_metadata_job_event(
+                    connection,
+                    job_id=job_id,
+                    event="stale_completion_discarded",
+                    message=_stale_job_update_message("metadata", owner),
+                )
+            else:
+                self._add_metadata_job_event(
+                    connection, job_id=job_id, event=status, message=message
+                )
         return self.get_metadata_job(job_id) or {}
+
+    def heartbeat_metadata_job(
+        self,
+        *,
+        job_id: str,
+        owner: str,
+        lease_seconds: int,
+    ) -> bool:
+        now = _utc_now()
+        leased_until = now + timedelta(seconds=max(1, int(lease_seconds)))
+        with self._connect() as connection:
+            cursor = connection.execute(
+                """
+                update metadata_jobs
+                set leased_until = ?,
+                    updated_at = ?
+                where job_id = ?
+                  and status = 'running'
+                  and lease_owner = ?
+                """,
+                (leased_until.isoformat(), now.isoformat(), job_id, str(owner)),
+            )
+        return cursor.rowcount == 1
 
     def retry_metadata_job(self, job_id: str, *, reset_attempts: bool = False) -> dict[str, Any]:
         now = _utc_now().isoformat()
@@ -1978,6 +2056,26 @@ class PipelineStateStore:
 
 
 OcrStateStore = PipelineStateStore
+
+
+def _terminal_owner_clause(owner: str | None) -> tuple[str, tuple[str, ...]]:
+    normalized = str(owner or "").strip()
+    if not normalized:
+        return "", ()
+    return (
+        "and (lease_owner = ? or (status = 'queued' and lease_owner is null))",
+        (normalized,),
+    )
+
+
+def _stale_job_update_message(queue_name: str, owner: str | None) -> str:
+    normalized = str(owner or "").strip()
+    if not normalized:
+        return f"Stale {queue_name} job update was discarded because the job state changed."
+    return (
+        f"Stale {queue_name} job update was discarded because the job is no longer "
+        f"leased by {normalized}."
+    )
 
 
 def _utc_now() -> datetime:

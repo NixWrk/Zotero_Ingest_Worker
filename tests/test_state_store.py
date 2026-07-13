@@ -113,6 +113,81 @@ def test_metadata_job_lease_is_unique_under_parallel_workers(tmp_path):
     assert store.metadata_queue_summary(job_type="full_text")["running"] == 20
 
 
+def test_stale_metadata_owner_cannot_complete_reclaimed_job(tmp_path):
+    source = tmp_path / "zotero.sqlite"
+    source.write_bytes(b"state")
+    store = PipelineStateStore(tmp_path / "state.sqlite")
+    created = store.enqueue_metadata_job(
+        job_type="full_text",
+        library_id="LIB1",
+        attachment_key="PARENT1",
+        data_dir=tmp_path,
+        source_path=source,
+        signature=FileSignature.from_path(source),
+        status="queued",
+        reason="test",
+        parent_item_key="PARENT1",
+        parent_version=1,
+        queue_key="full-text-v1",
+    )
+    job_id = str(created["job_id"])
+    first = store.lease_next_metadata_job(
+        job_type="full_text", owner="old-owner", lease_seconds=60
+    )
+    assert first is not None
+    with store._connect() as connection:
+        connection.execute(
+            "update metadata_jobs set leased_until = ? where job_id = ?",
+            ("2000-01-01T00:00:00+00:00", job_id),
+        )
+    assert store.recover_expired_metadata_jobs(job_type="full_text") == 1
+    second = store.lease_next_metadata_job(
+        job_type="full_text", owner="new-owner", lease_seconds=60
+    )
+    assert second is not None
+    before_heartbeat = str(second["leased_until"])
+
+    stale_heartbeat = store.heartbeat_metadata_job(
+        job_id=job_id,
+        owner="old-owner",
+        lease_seconds=600,
+    )
+    stale_completion = store.mark_metadata_job_succeeded(
+        job_id=job_id,
+        message="old worker finished late",
+        owner="old-owner",
+    )
+    heartbeat = store.heartbeat_metadata_job(
+        job_id=job_id,
+        owner="new-owner",
+        lease_seconds=600,
+    )
+    completed = store.mark_metadata_job_succeeded(
+        job_id=job_id,
+        message="new worker finished",
+        owner="new-owner",
+    )
+
+    assert stale_heartbeat is False
+    assert stale_completion["status"] == "running"
+    assert stale_completion["lease_owner"] == "new-owner"
+    assert heartbeat is True
+    refreshed = store.get_metadata_job(job_id)
+    assert refreshed is not None
+    assert str(refreshed["leased_until"]) > before_heartbeat
+    assert completed["status"] == "succeeded"
+    with store._connect() as connection:
+        events = [
+            str(row["event"])
+            for row in connection.execute(
+                "select event from metadata_job_events where job_id = ? order by event_id",
+                (job_id,),
+            ).fetchall()
+        ]
+    assert "stale_completion_discarded" in events
+    assert events.count("succeeded") == 1
+
+
 def test_recover_orphaned_metadata_jobs_returns_running_jobs_to_queue(tmp_path):
     source = tmp_path / "zotero.sqlite"
     source.write_bytes(b"state")

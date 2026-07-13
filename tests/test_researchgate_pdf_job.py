@@ -91,6 +91,7 @@ def test_researchgate_pdf_drain_job_marks_success(monkeypatch: Any, tmp_path: Pa
     result = processor._drain_researchgate_pdf_job(
         {
             "job_id": "job_1",
+            "lease_owner": "owner-a",
             "parent_item_key": "ITEM1",
             "attachment_key": "ITEM1",
             "data_dir": str(tmp_path),
@@ -102,6 +103,7 @@ def test_researchgate_pdf_drain_job_marks_success(monkeypatch: Any, tmp_path: Pa
     assert captured["options"].url == url
     assert captured["options"].item_key == "ITEM1"
     assert captured["succeeded"]["output_path"] == str(tmp_path / "paper.pdf")
+    assert captured["succeeded"]["owner"] == "owner-a"
 
 
 def test_researchgate_fallback_ignores_non_researchgate_urls() -> None:

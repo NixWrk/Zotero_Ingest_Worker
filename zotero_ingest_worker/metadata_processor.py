@@ -839,6 +839,58 @@ class ZoteroMetadataProcessor:
         require_relay: bool,
         policy: str | None,
     ) -> dict[str, Any]:
+        owner = _metadata_job_lease_owner(job)
+        lease_seconds = max(int(getattr(self.config, "metadata_job_lease_seconds", 900)), 60)
+        if owner and not self.state.heartbeat_metadata_job(
+            job_id=str(job["job_id"]),
+            owner=owner,
+            lease_seconds=lease_seconds,
+        ):
+            current = self.state.get_metadata_job(str(job["job_id"])) or {}
+            return {
+                "job_id": str(job["job_id"]),
+                "status": current.get("status", "stale_lease"),
+                "stale_lease": True,
+                "job": current,
+            }
+
+        heartbeat_stop: threading.Event | None = None
+        heartbeat_thread: threading.Thread | None = None
+        if owner:
+            heartbeat_stop = threading.Event()
+            heartbeat_thread = threading.Thread(
+                target=self._heartbeat_metadata_job_until_stopped,
+                kwargs={
+                    "job_id": str(job["job_id"]),
+                    "owner": owner,
+                    "lease_seconds": lease_seconds,
+                    "stop": heartbeat_stop,
+                },
+                name=f"metadata-heartbeat-{job['job_id']}",
+                daemon=True,
+            )
+            heartbeat_thread.start()
+        try:
+            return self._dispatch_leased_metadata_job(
+                job_type=job_type,
+                job=job,
+                require_relay=require_relay,
+                policy=policy,
+            )
+        finally:
+            if heartbeat_stop is not None:
+                heartbeat_stop.set()
+            if heartbeat_thread is not None:
+                heartbeat_thread.join(timeout=1.0)
+
+    def _dispatch_leased_metadata_job(
+        self,
+        *,
+        job_type: str,
+        job: dict[str, Any],
+        require_relay: bool,
+        policy: str | None,
+    ) -> dict[str, Any]:
         handler_name = metadata_job_drain_handler(job_type)
         handler = getattr(self, handler_name, None) if handler_name else None
         if handler is not None:
@@ -850,11 +902,37 @@ class ZoteroMetadataProcessor:
                     policy=policy,
                 ),
             )
-        return self.state.mark_metadata_job_failed(
+        return self._mark_metadata_job_failed(
+            job,
             job_id=str(job["job_id"]),
             message=f"Unknown metadata job type: {job_type}",
             retryable=False,
         )
+
+    def _heartbeat_metadata_job_until_stopped(
+        self,
+        *,
+        job_id: str,
+        owner: str,
+        lease_seconds: int,
+        stop: threading.Event,
+    ) -> None:
+        interval = self._metadata_job_heartbeat_interval_seconds(lease_seconds)
+        while not stop.wait(interval):
+            try:
+                alive = self.state.heartbeat_metadata_job(
+                    job_id=job_id,
+                    owner=owner,
+                    lease_seconds=lease_seconds,
+                )
+            except Exception:
+                return
+            if not alive:
+                return
+
+    @staticmethod
+    def _metadata_job_heartbeat_interval_seconds(lease_seconds: int) -> float:
+        return max(1.0, min(30.0, float(lease_seconds) / 3.0))
 
     def _drain_job_kwargs(
         self,
@@ -872,20 +950,53 @@ class ZoteroMetadataProcessor:
             return {"require_relay": require_relay}
         return {}
 
+    def _mark_metadata_job_succeeded(
+        self,
+        job: dict[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        return self.state.mark_metadata_job_succeeded(
+            **kwargs,
+            owner=_metadata_job_lease_owner(job),
+        )
+
+    def _mark_metadata_job_skipped(
+        self,
+        job: dict[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        return self.state.mark_metadata_job_skipped(
+            **kwargs,
+            owner=_metadata_job_lease_owner(job),
+        )
+
+    def _mark_metadata_job_failed(
+        self,
+        job: dict[str, Any] | None = None,
+        **kwargs: Any,
+    ) -> dict[str, Any]:
+        return self.state.mark_metadata_job_failed(
+            **kwargs,
+            owner=_metadata_job_lease_owner(job),
+        )
+
     def _mark_metadata_job_failed_or_skipped_for_exception(
         self,
         *,
         job_id: str,
         exc: Exception,
+        job: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         reason = _nonactionable_metadata_exception_reason(exc)
         if reason:
-            return self.state.mark_metadata_job_skipped(
+            return self._mark_metadata_job_skipped(
+                job,
                 job_id=job_id,
                 message=str(exc),
                 result={"reason": reason, "error": str(exc)},
             )
-        return self.state.mark_metadata_job_failed(
+        return self._mark_metadata_job_failed(
+            job,
             job_id=job_id,
             message=str(exc),
             retryable=not _is_nonretryable_worker_error(exc),
@@ -907,7 +1018,8 @@ class ZoteroMetadataProcessor:
                 attachment=attachment,
             )
             if metadata is None:
-                return self.state.mark_metadata_job_skipped(
+                return self._mark_metadata_job_skipped(
+                    job,
                     job_id=job_id,
                     message="PDF attachment has no parent item to patch.",
                     result={
@@ -920,7 +1032,8 @@ class ZoteroMetadataProcessor:
             self._provider_events = []
             candidate = self._lookup_metadata_candidate(metadata=metadata, attachment=attachment)
             if candidate is None:
-                return self.state.mark_metadata_job_skipped(
+                return self._mark_metadata_job_skipped(
+                    job,
                     job_id=job_id,
                     message="No confident metadata candidate was found.",
                     result={
@@ -935,7 +1048,8 @@ class ZoteroMetadataProcessor:
             diff = filter_metadata_diff_for_item_type(diff, item_type=metadata.item_type)
             patch = diff["patch"]
             if not patch:
-                return self.state.mark_metadata_job_skipped(
+                return self._mark_metadata_job_skipped(
+                    job,
                     job_id=job_id,
                     message="Metadata candidate did not contain patchable fields.",
                     result={
@@ -947,7 +1061,8 @@ class ZoteroMetadataProcessor:
                     },
                 )
             if metadata.version is None and not getattr(self.config, "zotero_relay_url", ""):
-                return self.state.mark_metadata_job_failed(
+                return self._mark_metadata_job_failed(
+                    job,
                     job_id=job_id,
                     message="Parent item version is unavailable; cannot safely PATCH Zotero metadata.",
                     retryable=False,
@@ -999,7 +1114,8 @@ class ZoteroMetadataProcessor:
                 "relay": relay_result,
                 "local_metadata": local_metadata,
             }
-            return self.state.mark_metadata_job_succeeded(
+            return self._mark_metadata_job_succeeded(
+                job,
                 job_id=job_id,
                 message=f"Metadata enrichment completed from {candidate.source}.",
                 result=result,
@@ -1009,25 +1125,30 @@ class ZoteroMetadataProcessor:
             body = _http_error_body(exc)
             skip_reason = _nonactionable_metadata_http_error_reason(exc.code, body)
             if skip_reason:
-                return self.state.mark_metadata_job_skipped(
+                return self._mark_metadata_job_skipped(
+                    job,
                     job_id=job_id,
                     message=f"HTTP {exc.code} while enriching metadata: {body}",
                     result={"reason": skip_reason, "http_status": exc.code, "body": body},
                 )
-            return self.state.mark_metadata_job_failed(
+            return self._mark_metadata_job_failed(
+                job,
                 job_id=job_id,
                 message=f"HTTP {exc.code} while enriching metadata: {body}",
                 retryable=exc.code in {408, 409, 425, 429, 500, 502, 503, 504},
             )
         except Exception as exc:
-            return self._mark_metadata_job_failed_or_skipped_for_exception(job_id=job_id, exc=exc)
+            return self._mark_metadata_job_failed_or_skipped_for_exception(
+                job_id=job_id, exc=exc, job=job
+            )
 
     def _drain_full_text_job(self, job: dict[str, Any]) -> dict[str, Any]:
         job_id = str(job["job_id"])
         try:
             context = self._full_text_context_for_job(job)
             if context is None:
-                return self.state.mark_metadata_job_skipped(
+                return self._mark_metadata_job_skipped(
+                    job,
                     job_id=job_id,
                     message="Full-text discovery job has no usable parent item.",
                     result={"reason": "no_parent_item", "job": job},
@@ -1074,34 +1195,40 @@ class ZoteroMetadataProcessor:
             )
             if scihub_enqueue is not None:
                 payload["scihub_pdf_enqueue"] = scihub_enqueue
-            return self.state.mark_metadata_job_succeeded(
+            return self._mark_metadata_job_succeeded(
+                job,
                 job_id=job_id,
                 message=f"Full-text discovery finished with status {payload['worker_status']}.",
                 result=payload,
                 output_path=first_full_text_output_path(payload),
             )
         except urllib.error.HTTPError as exc:
-            return self.state.mark_metadata_job_failed(
+            return self._mark_metadata_job_failed(
+                job,
                 job_id=job_id,
                 message=f"HTTP {exc.code} while discovering full text: {_http_error_body(exc)}",
                 retryable=exc.code in {408, 409, 425, 429, 500, 502, 503, 504},
             )
         except Exception as exc:
-            return self._mark_metadata_job_failed_or_skipped_for_exception(job_id=job_id, exc=exc)
+            return self._mark_metadata_job_failed_or_skipped_for_exception(
+                job_id=job_id, exc=exc, job=job
+            )
 
     def _drain_researchgate_pdf_job(self, job: dict[str, Any]) -> dict[str, Any]:
         job_id = str(job["job_id"])
         try:
             url = _researchgate_url_from_job(job)
             if not url:
-                return self.state.mark_metadata_job_skipped(
+                return self._mark_metadata_job_skipped(
+                    job,
                     job_id=job_id,
                     message="ResearchGate PDF job has no URL.",
                     result={"reason": "missing_researchgate_url", "job": job},
                 )
             item_key = str(job.get("parent_item_key") or job.get("attachment_key") or "").strip()
             if not item_key:
-                return self.state.mark_metadata_job_skipped(
+                return self._mark_metadata_job_skipped(
+                    job,
                     job_id=job_id,
                     message="ResearchGate PDF job has no parent item key.",
                     result={"reason": "missing_parent_item_key", "url": url, "job": job},
@@ -1123,20 +1250,24 @@ class ZoteroMetadataProcessor:
                 output_path = None
                 if isinstance(download, dict):
                     output_path = str(download.get("output_path") or "").strip() or None
-                return self.state.mark_metadata_job_succeeded(
+                return self._mark_metadata_job_succeeded(
+                    job,
                     job_id=job_id,
                     message=f"ResearchGate PDF job finished with status {result.get('status')}.",
                     result=result,
                     output_path=output_path,
                     relay_result=result.get("attach") if isinstance(result.get("attach"), dict) else None,
                 )
-            return self.state.mark_metadata_job_failed(
+            return self._mark_metadata_job_failed(
+                job,
                 job_id=job_id,
                 message=str(result.get("error") or result.get("status") or "ResearchGate PDF download failed."),
                 retryable=_researchgate_result_retryable(result),
             )
         except Exception as exc:
-            return self._mark_metadata_job_failed_or_skipped_for_exception(job_id=job_id, exc=exc)
+            return self._mark_metadata_job_failed_or_skipped_for_exception(
+                job_id=job_id, exc=exc, job=job
+            )
 
     def _drain_scihub_pdf_job(self, job: dict[str, Any]) -> dict[str, Any]:
         job_id = str(job["job_id"])
@@ -1149,7 +1280,8 @@ class ZoteroMetadataProcessor:
                 queries = [{"type": _scihub_query_type_from_job(job), "query": _scihub_query_from_job(job)}]
             item_key = str(job.get("parent_item_key") or job.get("attachment_key") or "").strip()
             if not item_key:
-                return self.state.mark_metadata_job_skipped(
+                return self._mark_metadata_job_skipped(
+                    job,
                     job_id=job_id,
                     message="Sci-Hub PDF job has no parent item key.",
                     result={
@@ -1190,7 +1322,8 @@ class ZoteroMetadataProcessor:
                     output_path = None
                     if isinstance(download, dict):
                         output_path = str(download.get("output_path") or "").strip() or None
-                    return self.state.mark_metadata_job_succeeded(
+                    return self._mark_metadata_job_succeeded(
+                        job,
                         job_id=job_id,
                         message=f"Sci-Hub PDF job finished with status {result.get('status')}.",
                         result=success_result,
@@ -1206,7 +1339,8 @@ class ZoteroMetadataProcessor:
             retryable = any(_scihub_result_retryable(attempt) for attempt in attempts)
             if not retryable:
                 status = str(result.get("status") or "unresolved")
-                return self.state.mark_metadata_job_skipped(
+                return self._mark_metadata_job_skipped(
+                    job,
                     job_id=job_id,
                     message=f"Sci-Hub PDF lookup finished without an attachable PDF: {status}.",
                     result={
@@ -1215,7 +1349,8 @@ class ZoteroMetadataProcessor:
                     },
                 )
             if _metadata_job_attempts_exhausted(job):
-                return self.state.mark_metadata_job_skipped(
+                return self._mark_metadata_job_skipped(
+                    job,
                     job_id=job_id,
                     message="Sci-Hub PDF lookup exhausted retryable attempts without an attachable PDF.",
                     result={
@@ -1223,13 +1358,16 @@ class ZoteroMetadataProcessor:
                         "reason": "scihub_pdf_retry_exhausted",
                     },
                 )
-            return self.state.mark_metadata_job_failed(
+            return self._mark_metadata_job_failed(
+                job,
                 job_id=job_id,
                 message=str(result.get("error") or result.get("status") or "Sci-Hub PDF download failed."),
                 retryable=retryable,
             )
         except Exception as exc:
-            return self._mark_metadata_job_failed_or_skipped_for_exception(job_id=job_id, exc=exc)
+            return self._mark_metadata_job_failed_or_skipped_for_exception(
+                job_id=job_id, exc=exc, job=job
+            )
 
     def _drain_arxiv_html_job(self, job: dict[str, Any], *, require_relay: bool) -> dict[str, Any]:
         job_id = str(job["job_id"])
@@ -1240,7 +1378,8 @@ class ZoteroMetadataProcessor:
             arxiv_service = ArxivHtmlJobService(self.config)
             candidate = arxiv_service.lookup_candidate(metadata=metadata, attachment=attachment)
             if candidate is None:
-                return self.state.mark_metadata_job_skipped(
+                return self._mark_metadata_job_skipped(
+                    job,
                     job_id=job_id,
                     message="No confident arXiv match was found.",
                     result={
@@ -1256,7 +1395,8 @@ class ZoteroMetadataProcessor:
                 html_text = arxiv_service.fetch_html(arxiv_id)
             except urllib.error.HTTPError as exc:
                 if exc.code == 404:
-                    return self.state.mark_metadata_job_skipped(
+                    return self._mark_metadata_job_skipped(
+                        job,
                         job_id=job_id,
                         message=f"arXiv has no HTML endpoint for {arxiv_id}.",
                         result={"reason": "arxiv_html_404", "candidate": candidate.to_dict()},
@@ -1321,7 +1461,8 @@ class ZoteroMetadataProcessor:
                 "provider_events": list(arxiv_service.provider_events),
                 "relay": relay_result,
             }
-            return self.state.mark_metadata_job_succeeded(
+            return self._mark_metadata_job_succeeded(
+                job,
                 job_id=job_id,
                 message=f"arXiv HTML saved for {arxiv_id}.",
                 result=result,
@@ -1329,7 +1470,8 @@ class ZoteroMetadataProcessor:
                 relay_result=relay_result,
             )
         except ArxivHtmlValidationError as exc:
-            return self.state.mark_metadata_job_skipped(
+            return self._mark_metadata_job_skipped(
+                job,
                 job_id=job_id,
                 message=str(exc),
                 result={
@@ -1339,13 +1481,16 @@ class ZoteroMetadataProcessor:
                 },
             )
         except urllib.error.HTTPError as exc:
-            return self.state.mark_metadata_job_failed(
+            return self._mark_metadata_job_failed(
+                job,
                 job_id=job_id,
                 message=f"HTTP {exc.code} while fetching arXiv HTML: {_http_error_body(exc)}",
                 retryable=exc.code in {408, 409, 425, 429, 500, 502, 503, 504},
             )
         except Exception as exc:
-            return self._mark_metadata_job_failed_or_skipped_for_exception(job_id=job_id, exc=exc)
+            return self._mark_metadata_job_failed_or_skipped_for_exception(
+                job_id=job_id, exc=exc, job=job
+            )
 
     def _lookup_metadata_candidate(
         self,
@@ -1977,3 +2122,7 @@ def _metadata_job_attempts_exhausted(job: dict[str, Any]) -> bool:
     except (TypeError, ValueError):
         return False
     return max_attempts > 0 and attempts >= max_attempts
+
+
+def _metadata_job_lease_owner(job: dict[str, Any] | None) -> str | None:
+    return str((job or {}).get("lease_owner") or "").strip() or None

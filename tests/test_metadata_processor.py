@@ -439,6 +439,79 @@ def test_metadata_drain_queue_uses_bounded_parallel_workers(monkeypatch: Any) ->
     assert len({owner.rsplit("-", 1)[-1] for owner in fake_state.owners}) >= 2
 
 
+def test_metadata_drain_heartbeats_while_handler_runs(monkeypatch: Any) -> None:
+    processor = ZoteroMetadataProcessor.__new__(ZoteroMetadataProcessor)
+    processor.config = SimpleNamespace(metadata_job_lease_seconds=60)
+    heartbeats: list[dict[str, Any]] = []
+
+    class FakeState:
+        def heartbeat_metadata_job(self, **kwargs: Any) -> bool:
+            heartbeats.append(kwargs)
+            return True
+
+        def get_metadata_job(self, _job_id: str) -> dict[str, Any]:
+            return {}
+
+    processor.state = FakeState()
+    monkeypatch.setattr(
+        processor,
+        "_metadata_job_heartbeat_interval_seconds",
+        lambda _lease_seconds: 0.01,
+    )
+
+    def slow_handler(job: dict[str, Any]) -> dict[str, Any]:
+        assert job["lease_owner"] == "owner-a"
+        time.sleep(0.04)
+        return {"job_id": job["job_id"], "status": "succeeded"}
+
+    monkeypatch.setattr(processor, "_drain_full_text_job", slow_handler)
+    result = processor._drain_leased_job(
+        job_type=METADATA_JOB_FULL_TEXT,
+        job={"job_id": "job-1", "lease_owner": "owner-a"},
+        require_relay=False,
+        policy=None,
+    )
+
+    assert result["status"] == "succeeded"
+    assert len(heartbeats) >= 3
+    assert all(call["job_id"] == "job-1" for call in heartbeats)
+    assert all(call["owner"] == "owner-a" for call in heartbeats)
+    assert all(call["lease_seconds"] == 60 for call in heartbeats)
+
+
+def test_metadata_drain_rejects_stale_lease_before_handler(monkeypatch: Any) -> None:
+    processor = ZoteroMetadataProcessor.__new__(ZoteroMetadataProcessor)
+    processor.config = SimpleNamespace(metadata_job_lease_seconds=60)
+
+    class FakeState:
+        def heartbeat_metadata_job(self, **_kwargs: Any) -> bool:
+            return False
+
+        def get_metadata_job(self, job_id: str) -> dict[str, Any]:
+            return {
+                "job_id": job_id,
+                "status": "running",
+                "lease_owner": "new-owner",
+            }
+
+    processor.state = FakeState()
+
+    def stale_handler(_job: dict[str, Any]) -> dict[str, Any]:
+        raise AssertionError("stale metadata handler must not execute")
+
+    monkeypatch.setattr(processor, "_drain_full_text_job", stale_handler)
+    result = processor._drain_leased_job(
+        job_type=METADATA_JOB_FULL_TEXT,
+        job={"job_id": "job-1", "lease_owner": "old-owner"},
+        require_relay=False,
+        policy=None,
+    )
+
+    assert result["status"] == "running"
+    assert result["stale_lease"] is True
+    assert result["job"]["lease_owner"] == "new-owner"
+
+
 def test_relay_url_candidates_add_localhost_for_compose_service_name() -> None:
     assert _relay_url_candidates(
         "http://zotero-file-relay:23119",
