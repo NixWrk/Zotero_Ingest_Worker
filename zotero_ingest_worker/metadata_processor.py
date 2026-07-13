@@ -119,14 +119,19 @@ class ZoteroMetadataProcessor:
         job_type: str | None = None,
         statuses: set[str] | None = None,
         limit: int = 100,
+        library_ids: set[str] | None = None,
     ) -> dict[str, Any]:
         return {
             "ok": True,
-            "summary": self.state.metadata_queue_summary(job_type=job_type),
+            "summary": self.state.metadata_queue_summary(
+                job_type=job_type,
+                library_ids=library_ids,
+            ),
             "jobs": self.state.list_metadata_jobs(
                 job_type=job_type,
                 statuses=statuses,
                 limit=limit,
+                library_ids=library_ids,
             ),
         }
 

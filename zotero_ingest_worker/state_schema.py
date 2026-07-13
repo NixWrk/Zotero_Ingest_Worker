@@ -3,7 +3,7 @@ from __future__ import annotations
 import sqlite3
 
 
-PIPELINE_STATE_SCHEMA_VERSION = 1
+PIPELINE_STATE_SCHEMA_VERSION = 2
 
 
 def initialize_pipeline_state_schema(connection: sqlite3.Connection) -> None:
@@ -214,6 +214,12 @@ def initialize_pipeline_state_schema(connection: sqlite3.Connection) -> None:
     )
     connection.execute(
         "create index if not exists idx_metadata_jobs_type_status on metadata_jobs(job_type, status)"
+    )
+    connection.execute(
+        """
+        create index if not exists idx_metadata_jobs_type_library_status
+        on metadata_jobs(job_type, library_id, status)
+        """
     )
     connection.execute(
         "create index if not exists idx_metadata_jobs_attachment on metadata_jobs(library_id, attachment_key)"

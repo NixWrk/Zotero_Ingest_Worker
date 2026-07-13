@@ -281,3 +281,61 @@ def test_metadata_queue_summary_counts_transient_failed_final(tmp_path):
     assert enrich["failed_transient"] == 1
     assert total["failed_final"] == 3
     assert total["failed_transient"] == 2
+
+
+def test_metadata_queue_summary_and_listing_are_scoped_by_library(tmp_path):
+    source = tmp_path / "zotero.sqlite"
+    source.write_bytes(b"state")
+    signature = FileSignature.from_path(source)
+    store = PipelineStateStore(tmp_path / "state.sqlite")
+
+    created = {}
+    for library_id, attachment_key in (
+        ("LIB2", "PARENT-OTHER"),
+        ("LIB1", "PARENT-TARGET"),
+        ("LIB1", "PARENT-TARGET-2"),
+    ):
+        created[library_id, attachment_key] = store.enqueue_metadata_job(
+            job_type="full_text",
+            library_id=library_id,
+            attachment_key=attachment_key,
+            data_dir=tmp_path,
+            source_path=source,
+            signature=signature,
+            status="queued",
+            reason="test",
+            parent_item_key=attachment_key,
+            parent_version=1,
+            queue_key="full-text-v1",
+        )
+
+    with store._connect() as connection:
+        connection.execute(
+            """
+            update metadata_jobs
+            set status = 'failed_final', last_error = 'HTTP 429: too many requests'
+            where job_id = ?
+            """,
+            (created["LIB2", "PARENT-OTHER"]["job_id"],),
+        )
+
+    scoped_summary = store.metadata_queue_summary(
+        job_type="full_text",
+        library_ids={"LIB1"},
+    )
+    scoped_jobs = store.list_metadata_jobs(
+        job_type="full_text",
+        statuses={"queued"},
+        library_ids={"LIB1"},
+        limit=1,
+    )
+    global_summary = store.metadata_queue_summary(job_type="full_text")
+
+    assert scoped_summary["queued"] == 2
+    assert scoped_summary["library_ids"] == ["LIB1"]
+    assert scoped_summary["failed_transient"] == 0
+    assert len(scoped_jobs) == 1
+    assert scoped_jobs[0]["library_id"] == "LIB1"
+    assert global_summary["queued"] == 2
+    assert global_summary["failed_final"] == 1
+    assert global_summary["failed_transient"] == 1

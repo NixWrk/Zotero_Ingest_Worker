@@ -1102,6 +1102,7 @@ class PipelineStateStore:
         job_type: str | None = None,
         statuses: set[str] | None = None,
         limit: int | None = 100,
+        library_ids: set[str] | None = None,
     ) -> list[dict[str, Any]]:
         params: list[Any] = []
         clauses: list[str] = []
@@ -1112,6 +1113,12 @@ class PipelineStateStore:
             placeholders = ",".join("?" for _ in statuses)
             clauses.append(f"status in ({placeholders})")
             params.extend(sorted(statuses))
+        scoped_library_ids = sorted(
+            {str(value).strip() for value in (library_ids or set()) if str(value).strip()}
+        )
+        if scoped_library_ids:
+            clauses.append(f"library_id in ({','.join('?' for _ in scoped_library_ids)})")
+            params.extend(scoped_library_ids)
         where = f"where {' and '.join(clauses)}" if clauses else ""
         limit_clause = "" if limit is None else "limit ?"
         if limit is not None:
@@ -1129,12 +1136,24 @@ class PipelineStateStore:
             ).fetchall()
         return [dict(row) for row in rows]
 
-    def metadata_queue_summary(self, *, job_type: str | None = None) -> dict[str, Any]:
+    def metadata_queue_summary(
+        self,
+        *,
+        job_type: str | None = None,
+        library_ids: set[str] | None = None,
+    ) -> dict[str, Any]:
         params: list[Any] = []
-        where = ""
+        clauses: list[str] = []
         if job_type:
-            where = "where job_type = ?"
+            clauses.append("job_type = ?")
             params.append(job_type)
+        scoped_library_ids = sorted(
+            {str(value).strip() for value in (library_ids or set()) if str(value).strip()}
+        )
+        if scoped_library_ids:
+            clauses.append(f"library_id in ({','.join('?' for _ in scoped_library_ids)})")
+            params.extend(scoped_library_ids)
+        where = f"where {' and '.join(clauses)}" if clauses else ""
         with self._connect() as connection:
             rows = connection.execute(
                 f"""
@@ -1146,14 +1165,14 @@ class PipelineStateStore:
                 """,
                 params,
             ).fetchall()
+            failed_where = " and ".join(("status = 'failed_final'", *clauses))
             transient_rows = connection.execute(
                 f"""
                 select last_error
                 from metadata_jobs
-                where status = 'failed_final'
-                  {"and job_type = ?" if job_type else ""}
+                where {failed_where}
                 """,
-                [job_type] if job_type else [],
+                params,
             ).fetchall()
         counts = {str(row["status"]): int(row["count"]) for row in rows}
         failed_transient = sum(
@@ -1163,6 +1182,7 @@ class PipelineStateStore:
         )
         return {
             "job_type": job_type,
+            "library_ids": scoped_library_ids or None,
             "queued": counts.get("queued", 0),
             "running": counts.get("running", 0),
             "succeeded": counts.get("succeeded", 0),

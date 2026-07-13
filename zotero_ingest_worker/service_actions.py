@@ -39,7 +39,8 @@ def run_post_action(
         return metadata_processor.queue(
             job_type=_optional_str(payload.get("job_type") or payload.get("type")),
             statuses=_status_filter(payload),
-            limit=int(payload.get("limit") or 100),
+            limit=max(0, _int_value(payload.get("limit"), 100)),
+            library_ids=_library_id_filter(payload),
         )
     if path == "/api/zotero/metadata/enrich/backlog-scan":
         result = metadata_processor.metadata_backlog_scan(
@@ -204,6 +205,22 @@ def _status_filter(payload: dict[str, Any]) -> set[str] | None:
     if isinstance(raw, str):
         values = [part.strip() for part in raw.split(",")]
     elif isinstance(raw, list):
+        values = [str(part).strip() for part in raw]
+    else:
+        values = [str(raw).strip()]
+    result = {value for value in values if value}
+    return result or None
+
+
+def _library_id_filter(payload: dict[str, Any]) -> set[str] | None:
+    raw = payload.get("library_ids")
+    if raw is None:
+        raw = payload.get("library_id")
+    if raw is None or raw == "":
+        return None
+    if isinstance(raw, str):
+        values = [part.strip() for part in raw.split(",")]
+    elif isinstance(raw, (list, tuple, set)):
         values = [str(part).strip() for part in raw]
     else:
         values = [str(raw).strip()]

@@ -40,7 +40,12 @@ def test_run_post_action_routes_metadata_queue(monkeypatch: Any) -> None:
     result = run_post_action(
         "/api/zotero/metadata/queue/summary",
         from_env(load_file=False),
-        {"type": "full_text", "status": "queued,failed", "limit": "5"},
+        {
+            "type": "full_text",
+            "status": "queued,failed",
+            "limit": "5",
+            "library_ids": ["LIB2", "", "LIB1", "LIB1"],
+        },
         _FakeFullRunManager(),
     )
 
@@ -50,7 +55,36 @@ def test_run_post_action_routes_metadata_queue(monkeypatch: Any) -> None:
             "job_type": "full_text",
             "statuses": {"queued", "failed"},
             "limit": 5,
+            "library_ids": {"LIB1", "LIB2"},
         },
+    }
+
+
+def test_run_post_action_metadata_queue_preserves_zero_limit(monkeypatch: Any) -> None:
+    class FakeMetadataProcessor:
+        def __init__(self, _config: Any) -> None:
+            pass
+
+        def queue(self, **kwargs: Any) -> dict[str, Any]:
+            return kwargs
+
+    monkeypatch.setattr(
+        "zotero_ingest_worker.service_actions.ZoteroMetadataProcessor",
+        FakeMetadataProcessor,
+    )
+
+    result = run_post_action(
+        "/api/zotero/metadata/queue/summary",
+        from_env(load_file=False),
+        {"type": "full_text", "limit": 0},
+        _FakeFullRunManager(),
+    )
+
+    assert result == {
+        "job_type": "full_text",
+        "statuses": None,
+        "limit": 0,
+        "library_ids": None,
     }
 
 
