@@ -8,6 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
 
+import zotero_ingest_worker.full_text_attachment as full_text_attachment_module
 from zotero_ingest_worker.local_zotero import LocalAttachment, LocalZoteroStore
 from zotero_ingest_worker.arxiv_html import ArxivHtmlValidationError
 from zotero_ingest_worker.metadata_jobs import METADATA_JOB_FULL_TEXT
@@ -2105,6 +2106,119 @@ def test_html_attachment_source_reports_missing_css_asset_and_keeps_external_url
     assert "<link" not in saved
     assert "https://cdn.example/logo.png" in saved
     assert "missing.png" in saved
+
+
+def test_html_attachment_source_rejects_oversized_source_before_embedding(tmp_path: Path) -> None:
+    source = tmp_path / "article.html"
+    assets_dir = tmp_path / "article_assets"
+    assets_dir.mkdir()
+    (assets_dir / "figure.png").write_bytes(b"PNG")
+    source.write_text(
+        '<html><body><img src="article_assets/figure.png"></body></html>',
+        encoding="utf-8",
+    )
+
+    attachment_source, report = _html_attachment_source_with_embedded_assets(
+        source,
+        max_source_bytes=16,
+    )
+
+    assert attachment_source == source
+    assert report["enabled"] is False
+    assert report["reason"] == "source_too_large"
+    assert report["source_bytes"] > report["max_source_bytes"]
+
+
+def test_html_attachment_source_skips_asset_over_individual_budget(tmp_path: Path) -> None:
+    source = tmp_path / "article.html"
+    assets_dir = tmp_path / "article_assets"
+    assets_dir.mkdir()
+    (assets_dir / "figure.png").write_bytes(b"X" * 17)
+    source.write_text(
+        '<html><body><img src="article_assets/figure.png"></body></html>',
+        encoding="utf-8",
+    )
+
+    attachment_source, report = _html_attachment_source_with_embedded_assets(
+        source,
+        max_asset_bytes=16,
+    )
+
+    assert attachment_source == source
+    assert report["reason"] == "no_embeddable_assets"
+    assert report["skipped_asset_count"] == 1
+    assert report["skipped_assets"][0]["reason"] == "asset_too_large"
+
+
+def test_html_attachment_source_rejects_candidate_outside_assets_root(
+    monkeypatch: Any,
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "article.html"
+    assets_dir = tmp_path / "article_assets"
+    assets_dir.mkdir()
+    outside = tmp_path / "host-secret.txt"
+    outside.write_text("DO NOT EMBED", encoding="utf-8")
+    source.write_text(
+        '<html><body><img src="article_assets/host-secret.txt"></body></html>',
+        encoding="utf-8",
+    )
+    monkeypatch.setattr(
+        full_text_attachment_module,
+        "_local_asset_candidates",
+        lambda *_args, **_kwargs: ([outside], False),
+    )
+
+    attachment_source, report = _html_attachment_source_with_embedded_assets(source)
+
+    assert attachment_source == source
+    assert report["reason"] == "no_embeddable_assets"
+    assert report["skipped_assets"][0]["reason"] == "asset_outside_root"
+    assert "DO NOT EMBED" not in source.read_text(encoding="utf-8")
+
+
+def test_html_attachment_source_enforces_total_asset_budget(tmp_path: Path) -> None:
+    source = tmp_path / "article.html"
+    assets_dir = tmp_path / "article_assets"
+    assets_dir.mkdir()
+    (assets_dir / "a.png").write_bytes(b"A" * 8)
+    (assets_dir / "b.png").write_bytes(b"B" * 8)
+    source.write_text(
+        '<html><body><img src="article_assets/a.png"><img src="article_assets/b.png"></body></html>',
+        encoding="utf-8",
+    )
+
+    attachment_source, report = _html_attachment_source_with_embedded_assets(
+        source,
+        max_asset_bytes=8,
+        max_total_asset_bytes=8,
+    )
+
+    assert attachment_source != source
+    assert report["embedded_assets"] == 1
+    assert report["embedded_source_bytes"] == 8
+    assert report["skipped_assets"][0]["reason"] == "asset_total_bytes_limit"
+    assert attachment_source.read_text(encoding="utf-8").count("data:image/png;base64,") == 1
+
+
+def test_html_attachment_source_counts_css_before_recursive_assets(tmp_path: Path) -> None:
+    source = tmp_path / "article.html"
+    assets_dir = tmp_path / "article_assets"
+    assets_dir.mkdir()
+    (assets_dir / "figure.png").write_bytes(b"PNG")
+    (assets_dir / "style.css").write_text("body { background: url(figure.png); }", encoding="utf-8")
+    source.write_text(
+        '<html><head><link rel="stylesheet" href="article_assets/style.css"></head></html>',
+        encoding="utf-8",
+    )
+
+    attachment_source, report = _html_attachment_source_with_embedded_assets(source, max_assets=1)
+
+    assert attachment_source != source
+    assert report["embedded_stylesheets"] == 1
+    assert report["embedded_assets"] == 0
+    assert report["missing_local_refs"] == ["figure.png"]
+    assert report["skipped_assets"][0]["reason"] == "asset_count_limit"
 
 
 def test_full_text_attach_returns_none_without_relay(tmp_path: Path) -> None:

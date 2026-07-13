@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import html
 import json
+import os
 import re
 import shutil
 from datetime import datetime, timezone
@@ -13,6 +14,11 @@ ARTICLE_HTML_STANDARD_VERSION = "article-html-standard/v1"
 NATIVE_HTML_NORMALIZER_VERSION = "native-html-normalizer/v1"
 ARTICLE_HTML_FILENAME = "article.html"
 ASSETS_DIRNAME = "assets"
+ARTICLE_PACKAGE_MAX_SOURCE_BYTES = 16_000_000
+ARTICLE_PACKAGE_MAX_ASSET_BYTES = 8_000_000
+ARTICLE_PACKAGE_MAX_TOTAL_ASSET_BYTES = 64_000_000
+ARTICLE_PACKAGE_MAX_ASSETS = 80
+ARTICLE_PACKAGE_MAX_SCANNED_ASSETS = 512
 
 
 def standardize_native_html_download(
@@ -25,11 +31,25 @@ def standardize_native_html_download(
     source_path = Path(str(download.get("output_path") or ""))
     verdict = download.get("article_verdict")
     verdict_data = verdict if isinstance(verdict, dict) else {}
+    if source_path.is_symlink():
+        return {
+            "ok": False,
+            "reason": "source_html_symlink",
+            "source_path": str(source_path),
+        }
     if not source_path.exists():
         return {
             "ok": False,
             "reason": "source_html_missing",
             "source_path": str(source_path),
+        }
+    source_bytes = _file_size_or_zero(source_path)
+    if source_bytes > ARTICLE_PACKAGE_MAX_SOURCE_BYTES:
+        return {
+            "ok": False,
+            "reason": "source_html_too_large",
+            "source_path": str(source_path),
+            "source_bytes": source_bytes,
         }
     package_dir = package_root / _package_dirname(download, source_path)
     return write_article_package(
@@ -208,28 +228,83 @@ def _article_html_with_standard_assets(
     *,
     source_html: Path,
     package_dir: Path,
+    max_asset_bytes: int = ARTICLE_PACKAGE_MAX_ASSET_BYTES,
+    max_total_asset_bytes: int = ARTICLE_PACKAGE_MAX_TOTAL_ASSET_BYTES,
+    max_assets: int = ARTICLE_PACKAGE_MAX_ASSETS,
+    max_scanned_assets: int = ARTICLE_PACKAGE_MAX_SCANNED_ASSETS,
 ) -> tuple[str, list[dict[str, Any]]]:
     html_text = source_html.read_text(encoding="utf-8", errors="replace")
     source_assets_dir = source_html.parent / f"{source_html.stem}_assets"
     target_assets_dir = package_dir / ASSETS_DIRNAME
     assets: list[dict[str, Any]] = []
+    _reset_generated_assets_dir(target_assets_dir)
     if not source_assets_dir.is_dir():
         return html_text, assets
+    if source_assets_dir.is_symlink():
+        assets.append(
+            {
+                "path": source_assets_dir.name,
+                "bytes": 0,
+                "status": "skipped",
+                "reason": "assets_dir_symlink",
+            }
+        )
+        return html_text, assets
 
+    source_root = source_assets_dir.resolve()
+    candidates, scan_truncated = _source_asset_candidates(
+        source_assets_dir,
+        max_scanned_assets=max_scanned_assets,
+    )
     target_assets_dir.mkdir(exist_ok=True)
-    for source in sorted(source_assets_dir.rglob("*")):
-        if not source.is_file():
+    copied_count = 0
+    total_bytes = 0
+    for source in candidates:
+        display_path = str(source)
+        if source.is_symlink():
+            assets.append(_skipped_asset(display_path, "asset_symlink"))
             continue
-        relative = source.relative_to(source_assets_dir)
+        try:
+            relative = source.relative_to(source_assets_dir)
+            resolved = source.resolve(strict=True)
+            resolved.relative_to(source_root)
+        except (OSError, ValueError):
+            assets.append(_skipped_asset(display_path, "asset_outside_root"))
+            continue
+        if not resolved.is_file():
+            assets.append(_skipped_asset(display_path, "asset_not_file"))
+            continue
+        size = _file_size_or_zero(resolved)
+        if size > max(max_asset_bytes, 0):
+            assets.append(_skipped_asset(relative.as_posix(), "asset_too_large", size=size))
+            continue
+        if copied_count >= max(max_assets, 0):
+            assets.append(_skipped_asset(relative.as_posix(), "asset_count_limit", size=size))
+            continue
+        if total_bytes + size > max(max_total_asset_bytes, 0):
+            assets.append(_skipped_asset(relative.as_posix(), "asset_total_bytes_limit", size=size))
+            continue
         target = target_assets_dir / relative
         target.parent.mkdir(parents=True, exist_ok=True)
-        shutil.copy2(source, target)
+        copied_bytes = _copy_file_bounded(
+            resolved,
+            target,
+            max_bytes=min(max(max_asset_bytes, 0), max(max_total_asset_bytes, 0) - total_bytes),
+        )
+        if copied_bytes is None:
+            assets.append(_skipped_asset(relative.as_posix(), "asset_changed_or_too_large", size=size))
+            continue
+        copied_count += 1
+        total_bytes += copied_bytes
         assets.append(
             {
                 "path": f"{ASSETS_DIRNAME}/{relative.as_posix()}",
-                "bytes": target.stat().st_size,
+                "bytes": copied_bytes,
+                "status": "copied",
             }
         )
+    if scan_truncated:
+        assets.append(_skipped_asset(source_assets_dir.name, "asset_scan_limit"))
 
     old_prefix = source_assets_dir.name
     if old_prefix != ASSETS_DIRNAME:
@@ -240,6 +315,70 @@ def _article_html_with_standard_assets(
             html_text,
         )
     return html_text, assets
+
+
+def _source_asset_candidates(
+    source_assets_dir: Path,
+    *,
+    max_scanned_assets: int,
+) -> tuple[list[Path], bool]:
+    limit = max(max_scanned_assets, 0)
+    files: list[Path] = []
+    truncated = False
+    for path in source_assets_dir.rglob("*"):
+        if not path.is_file() and not path.is_symlink():
+            continue
+        if len(files) >= limit:
+            truncated = True
+            break
+        files.append(path)
+    files.sort(key=lambda path: str(path).casefold())
+    return files, truncated
+
+
+def _reset_generated_assets_dir(target_assets_dir: Path) -> None:
+    if target_assets_dir.is_symlink():
+        target_assets_dir.unlink()
+    elif target_assets_dir.exists():
+        shutil.rmtree(target_assets_dir)
+
+
+def _copy_file_bounded(source: Path, target: Path, *, max_bytes: int) -> int | None:
+    limit = max(max_bytes, 0)
+    temp = target.with_name(f".{target.name}.article-asset-tmp")
+    copied = 0
+    try:
+        with source.open("rb") as source_stream, temp.open("wb") as target_stream:
+            while True:
+                chunk = source_stream.read(min(1_048_576, limit - copied + 1))
+                if not chunk:
+                    break
+                copied += len(chunk)
+                if copied > limit:
+                    return None
+                target_stream.write(chunk)
+        shutil.copystat(source, temp)
+        os.replace(temp, target)
+        return copied
+    finally:
+        if temp.exists():
+            temp.unlink()
+
+
+def _skipped_asset(path: str, reason: str, *, size: int = 0) -> dict[str, Any]:
+    return {
+        "path": path,
+        "bytes": max(size, 0),
+        "status": "skipped",
+        "reason": reason,
+    }
+
+
+def _file_size_or_zero(path: Path) -> int:
+    try:
+        return max(int(path.stat().st_size), 0)
+    except OSError:
+        return 0
 
 
 def _package_dirname(download: dict[str, Any], source_path: Path) -> str:

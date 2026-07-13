@@ -11,16 +11,27 @@ from zotero_metadata_enrichment.html_sources import (
     download_html_sources,
     fetch_html_source,
     parse_srcset,
+    write_html_snapshot,
 )
 from zotero_metadata_enrichment.models import FullTextLocation
 from zotero_metadata_enrichment.provider_http import HostThrottle
 
 
 class FakeResponse:
-    def __init__(self, *, url: str, content_type: str, body: bytes) -> None:
+    def __init__(
+        self,
+        *,
+        url: str,
+        content_type: str,
+        body: bytes,
+        content_length: int | str | None = None,
+    ) -> None:
         self.url = url
         self.headers = {"Content-Type": content_type}
+        if content_length is not None:
+            self.headers["Content-Length"] = str(content_length)
         self._body = body
+        self.read_sizes: list[int] = []
 
     def __enter__(self) -> "FakeResponse":
         return self
@@ -29,7 +40,8 @@ class FakeResponse:
         return None
 
     def read(self, _size: int = -1) -> bytes:
-        return self._body
+        self.read_sizes.append(_size)
+        return self._body if _size < 0 else self._body[:_size]
 
 
 def test_fetch_html_source_saves_html(monkeypatch: Any, tmp_path: Path) -> None:
@@ -186,6 +198,179 @@ def test_fetch_html_source_saves_style_import_assets(monkeypatch: Any, tmp_path:
     assert "@import \"./ar5iv.css\"" not in saved
     assert "_assets/" in saved
     assert result.assets["saved"] == 1
+
+
+def test_fetch_html_source_rejects_declared_oversize_before_read(
+    monkeypatch: Any,
+    tmp_path: Path,
+) -> None:
+    response = FakeResponse(
+        url="https://journal.example/article",
+        content_type="text/html; charset=utf-8",
+        body=b"not read",
+        content_length=101,
+    )
+    monkeypatch.setattr("urllib.request.urlopen", lambda *_args, **_kwargs: response)
+
+    result = fetch_html_source(
+        FullTextLocation(source="crossref", url="https://journal.example/article", kind="html"),
+        output_dir=tmp_path,
+        max_bytes=100,
+    )
+
+    assert result.status == "too_large"
+    assert result.size == 101
+    assert response.read_sizes == []
+
+
+def test_fetch_html_source_rejects_redirect_to_private_host_before_read(
+    monkeypatch: Any,
+    tmp_path: Path,
+) -> None:
+    response = FakeResponse(
+        url="http://127.0.0.1/private",
+        content_type="text/html",
+        body=b"not read",
+    )
+    monkeypatch.setattr("urllib.request.urlopen", lambda *_args, **_kwargs: response)
+
+    result = fetch_html_source(
+        FullTextLocation(source="crossref", url="https://journal.example/article", kind="html"),
+        output_dir=tmp_path,
+    )
+
+    assert result.status == "unsafe_redirect"
+    assert result.error == "blocked_ip"
+    assert response.read_sizes == []
+
+
+def test_snapshot_asset_rejects_declared_oversize_before_read(
+    monkeypatch: Any,
+    tmp_path: Path,
+) -> None:
+    asset_response = FakeResponse(
+        url="https://journal.example/figure.png",
+        content_type="image/png",
+        body=b"not read",
+        content_length=8_000_001,
+    )
+
+    def fake_urlopen(request: Any, timeout: int) -> FakeResponse:
+        if request.full_url == "https://journal.example/article":
+            return FakeResponse(
+                url=request.full_url,
+                content_type="text/html",
+                body=(
+                    "<html><head><title>Article</title></head><body><article>"
+                    f"{'Methods results discussion conclusion. ' * 400}"
+                    '<section>References</section><img src="figure.png"></article></body></html>'
+                ).encode("utf-8"),
+            )
+        return asset_response
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    result = fetch_html_source(
+        FullTextLocation(source="crossref", url="https://journal.example/article", kind="html"),
+        output_dir=tmp_path,
+        expected_title="Article",
+    )
+
+    assert result.ok
+    assert result.assets["saved"] == 0
+    assert result.assets["failures"][0]["reason"] == "asset_too_large"
+    assert asset_response.read_sizes == []
+
+
+def test_snapshot_asset_rejects_redirect_to_private_host(
+    monkeypatch: Any,
+    tmp_path: Path,
+) -> None:
+    asset_response = FakeResponse(
+        url="http://169.254.169.254/latest/meta-data",
+        content_type="image/png",
+        body=b"not read",
+    )
+
+    def fake_urlopen(request: Any, timeout: int) -> FakeResponse:
+        if request.full_url == "https://journal.example/article":
+            return FakeResponse(
+                url=request.full_url,
+                content_type="text/html",
+                body=(
+                    "<html><head><title>Article</title></head><body><article>"
+                    f"{'Methods results discussion conclusion. ' * 400}"
+                    '<section>References</section><img src="figure.png"></article></body></html>'
+                ).encode("utf-8"),
+            )
+        return asset_response
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    result = fetch_html_source(
+        FullTextLocation(source="crossref", url="https://journal.example/article", kind="html"),
+        output_dir=tmp_path,
+        expected_title="Article",
+    )
+
+    assert result.ok
+    assert result.assets["saved"] == 0
+    assert result.assets["failures"][0]["reason"] == "unsafe_redirect:blocked_ip"
+    assert asset_response.read_sizes == []
+
+
+def test_snapshot_asset_enforces_total_budget_before_read(
+    monkeypatch: Any,
+    tmp_path: Path,
+) -> None:
+    response = FakeResponse(
+        url="https://journal.example/figure.png",
+        content_type="image/png",
+        body=b"not read",
+        content_length=6,
+    )
+    monkeypatch.setattr("urllib.request.urlopen", lambda *_args, **_kwargs: response)
+
+    report = write_html_snapshot(
+        b'<html><body><img src="https://journal.example/figure.png"></body></html>',
+        base_url="https://journal.example/article",
+        output_path=tmp_path / "article.html",
+        timeout_seconds=10,
+        user_agent="test",
+        max_total_asset_bytes=5,
+    )
+
+    assert report["saved"] == 0
+    assert report["failures"][0]["reason"] == "asset_total_bytes_limit"
+    assert response.read_sizes == []
+
+
+def test_snapshot_css_reserves_asset_slot_before_recursive_fetch(
+    monkeypatch: Any,
+    tmp_path: Path,
+) -> None:
+    requested_urls: list[str] = []
+
+    def fake_urlopen(request: Any, timeout: int) -> FakeResponse:
+        requested_urls.append(request.full_url)
+        assert request.full_url == "https://journal.example/style.css"
+        return FakeResponse(
+            url=request.full_url,
+            content_type="text/css",
+            body=b"body { background: url(figure.png); }",
+        )
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    report = write_html_snapshot(
+        b'<html><head><link rel="stylesheet" href="style.css"></head></html>',
+        base_url="https://journal.example/article",
+        output_path=tmp_path / "article.html",
+        timeout_seconds=10,
+        user_agent="test",
+        max_assets=1,
+    )
+
+    assert report["saved"] == 1
+    assert report["failures"][0]["reason"] == "asset_limit"
+    assert requested_urls == ["https://journal.example/style.css"]
 
 
 def test_fetch_html_source_rejects_title_mismatch(monkeypatch: Any, tmp_path: Path) -> None:

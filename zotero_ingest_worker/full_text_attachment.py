@@ -23,6 +23,11 @@ from .source_html_maintenance import TrashAttachment, cleanup_source_html_invent
 CreateParentAttachment = Callable[..., dict[str, Any]]
 EnqueueAttachedPdf = Callable[..., dict[str, Any]]
 EnqueueAttachedHtml = Callable[..., dict[str, Any]]
+HTML_ATTACHMENT_MAX_SOURCE_BYTES = 16_000_000
+HTML_ATTACHMENT_MAX_ASSET_BYTES = 8_000_000
+HTML_ATTACHMENT_MAX_TOTAL_ASSET_BYTES = 64_000_000
+HTML_ATTACHMENT_MAX_ASSETS = 80
+HTML_ATTACHMENT_MAX_SCANNED_ASSETS = 512
 
 
 class FullTextAttachmentService:
@@ -593,7 +598,15 @@ def _html_download_score(item: dict[str, Any]) -> tuple[int, int, int, int, int]
 _is_arxiv_abs_landing_download = is_arxiv_abs_landing_download
 
 
-def _html_attachment_source_with_embedded_assets(source_path: Path) -> tuple[Path, dict[str, Any]]:
+def _html_attachment_source_with_embedded_assets(
+    source_path: Path,
+    *,
+    max_source_bytes: int = HTML_ATTACHMENT_MAX_SOURCE_BYTES,
+    max_asset_bytes: int = HTML_ATTACHMENT_MAX_ASSET_BYTES,
+    max_total_asset_bytes: int = HTML_ATTACHMENT_MAX_TOTAL_ASSET_BYTES,
+    max_assets: int = HTML_ATTACHMENT_MAX_ASSETS,
+    max_scanned_assets: int = HTML_ATTACHMENT_MAX_SCANNED_ASSETS,
+) -> tuple[Path, dict[str, Any]]:
     if source_path.suffix.casefold() not in {".html", ".htm", ".xhtml"}:
         return source_path, {"enabled": False, "reason": "not_html"}
 
@@ -605,14 +618,30 @@ def _html_attachment_source_with_embedded_assets(source_path: Path) -> tuple[Pat
     if not assets_dir.is_dir():
         return source_path, {"enabled": False, "reason": "assets_dir_missing"}
 
-    asset_files = sorted(
-        [path for path in assets_dir.rglob("*") if path.is_file()],
-        key=lambda path: path.relative_to(assets_dir).as_posix().casefold(),
+    asset_files, scan_truncated = _local_asset_candidates(
+        assets_dir,
+        max_scanned_assets=max_scanned_assets,
     )
     if not asset_files:
         return source_path, {"enabled": False, "reason": "assets_empty", "assets_dir": str(assets_dir)}
 
-    html_text = source_path.read_text(encoding="utf-8", errors="replace")
+    source_payload = _read_file_bounded(source_path, max_bytes=max_source_bytes)
+    if source_payload is None:
+        return source_path, {
+            "enabled": False,
+            "reason": "source_too_large",
+            "assets_dir": str(assets_dir),
+            "source_bytes": _file_size_or_zero(source_path),
+            "max_source_bytes": max(max_source_bytes, 0),
+        }
+
+    html_text = source_payload.decode("utf-8", errors="replace")
+    budget = _LocalAssetEmbeddingBudget(
+        assets_dir=assets_dir,
+        max_asset_bytes=max_asset_bytes,
+        max_total_bytes=max_total_asset_bytes,
+        max_assets=max_assets,
+    )
     css_text_by_rel: dict[str, str] = {}
     data_uri_by_rel: dict[str, str] = {}
     missing_local_refs: list[str] = []
@@ -620,16 +649,45 @@ def _html_attachment_source_with_embedded_assets(source_path: Path) -> tuple[Pat
     for asset in asset_files:
         if _is_css_asset(asset):
             continue
+        if budget.relative_path(asset) is None:
+            continue
         rel = _asset_html_relpath(assets_dir, asset)
-        data_uri_by_rel[rel] = _data_uri_for_file(asset)
+        variants = _asset_reference_variants(rel)
+        if not any(variant in html_text for variant in variants):
+            continue
+        data_uri = budget.data_uri(asset)
+        if data_uri is not None:
+            data_uri_by_rel[rel] = data_uri
 
     for asset in asset_files:
         if not _is_css_asset(asset):
             continue
+        if budget.relative_path(asset) is None:
+            continue
         rel = _asset_html_relpath(assets_dir, asset)
-        css_text, css_missing = _css_with_embedded_local_assets(asset, assets_dir=assets_dir)
+        variants = _asset_reference_variants(rel)
+        if not any(variant in html_text for variant in variants):
+            continue
+        css_text, css_missing = _css_with_embedded_local_assets(
+            asset,
+            assets_dir=assets_dir,
+            budget=budget,
+        )
         missing_local_refs.extend(css_missing)
-        css_text_by_rel[rel] = css_text
+        if css_text is not None:
+            css_text_by_rel[rel] = css_text
+
+    if scan_truncated:
+        budget.record_skip(assets_dir, "asset_scan_limit")
+    if not data_uri_by_rel and not css_text_by_rel:
+        return source_path, {
+            "enabled": False,
+            "reason": "no_embeddable_assets",
+            "assets_dir": str(assets_dir),
+            "asset_count": len(asset_files),
+            "skipped_asset_count": budget.skipped_count,
+            "skipped_assets": budget.skipped[:20],
+        }
 
     rewritten = _replace_stylesheet_links_with_style_tags(html_text, css_text_by_rel)
     rewritten = _replace_style_imports_with_embedded_css(rewritten, css_text_by_rel)
@@ -645,9 +703,12 @@ def _html_attachment_source_with_embedded_assets(source_path: Path) -> tuple[Pat
         "output_path": str(embedded_path),
         "assets_dir": str(assets_dir),
         "asset_count": len(asset_files),
-        "embedded_assets": len(data_uri_by_rel),
-        "embedded_stylesheets": len(css_text_by_rel),
+        "embedded_assets": budget.embedded_asset_count,
+        "embedded_stylesheets": budget.embedded_stylesheet_count,
+        "embedded_source_bytes": budget.total_bytes,
         "missing_local_refs": missing_local_refs[:20],
+        "skipped_asset_count": budget.skipped_count,
+        "skipped_assets": budget.skipped[:20],
     }
 
 
@@ -689,14 +750,20 @@ def _css_with_embedded_local_assets(
     css_path: Path,
     *,
     assets_dir: Path,
+    budget: _LocalAssetEmbeddingBudget,
     seen: set[Path] | None = None,
-) -> tuple[str, list[str]]:
+) -> tuple[str | None, list[str]]:
     seen = seen or set()
-    resolved_css_path = css_path.resolve()
+    resolved_css_path = budget.resolved_path(css_path)
+    if resolved_css_path is None:
+        return None, [str(css_path)]
     if resolved_css_path in seen:
-        return "", [str(css_path)]
+        return None, [str(css_path)]
     seen.add(resolved_css_path)
-    css_text = css_path.read_text(encoding="utf-8", errors="replace")
+    css_text = budget.css_text(css_path)
+    if css_text is None:
+        seen.discard(resolved_css_path)
+        return None, [str(css_path)]
     missing: list[str] = []
 
     def replace_import(match: re.Match[str]) -> str:
@@ -707,8 +774,15 @@ def _css_with_embedded_local_assets(
         if not target.is_file():
             missing.append(raw_url)
             return match.group(0)
-        imported_css, imported_missing = _css_with_embedded_local_assets(target, assets_dir=assets_dir, seen=seen)
+        imported_css, imported_missing = _css_with_embedded_local_assets(
+            target,
+            assets_dir=assets_dir,
+            budget=budget,
+            seen=seen,
+        )
         missing.extend(imported_missing)
+        if imported_css is None:
+            return match.group(0)
         return _css_import_replacement(imported_css, match.group("tail") or "")
 
     def replace(match: re.Match[str]) -> str:
@@ -721,7 +795,11 @@ def _css_with_embedded_local_assets(
         if not target.is_file():
             missing.append(raw_url)
             return match.group(0)
-        return f'url("{_data_uri_for_file(target)}")'
+        data_uri = budget.data_uri(target)
+        if data_uri is None:
+            missing.append(raw_url)
+            return match.group(0)
+        return f'url("{data_uri}")'
 
     css_text = _css_import_pattern().sub(replace_import, css_text)
     css_text = re.sub(r"url\(([^)]+)\)", replace, css_text, flags=re.IGNORECASE)
@@ -790,9 +868,155 @@ def _asset_reference_variants(rel: str) -> list[str]:
     return list(dict.fromkeys(variants))
 
 
-def _data_uri_for_file(path: Path) -> str:
-    mime_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
-    return _data_uri(path.read_bytes(), mime_type)
+def _local_asset_candidates(
+    assets_dir: Path,
+    *,
+    max_scanned_assets: int,
+) -> tuple[list[Path], bool]:
+    limit = max(max_scanned_assets, 0)
+    files: list[Path] = []
+    truncated = False
+    for path in assets_dir.rglob("*"):
+        if not path.is_file() and not path.is_symlink():
+            continue
+        if len(files) >= limit:
+            truncated = True
+            break
+        files.append(path)
+    files.sort(key=lambda path: str(path).casefold())
+    return files, truncated
+
+
+def _read_file_bounded(path: Path, *, max_bytes: int) -> bytes | None:
+    limit = max(max_bytes, 0)
+    with path.open("rb") as stream:
+        payload = stream.read(limit + 1)
+    if len(payload) > limit:
+        return None
+    return payload
+
+
+def _file_size_or_zero(path: Path) -> int:
+    try:
+        return max(int(path.stat().st_size), 0)
+    except OSError:
+        return 0
+
+
+class _LocalAssetEmbeddingBudget:
+    def __init__(
+        self,
+        *,
+        assets_dir: Path,
+        max_asset_bytes: int,
+        max_total_bytes: int,
+        max_assets: int,
+    ) -> None:
+        self.assets_dir = assets_dir
+        self.root = assets_dir.resolve()
+        self.max_asset_bytes = max(max_asset_bytes, 0)
+        self.max_total_bytes = max(max_total_bytes, 0)
+        self.max_assets = max(max_assets, 0)
+        self.total_bytes = 0
+        self.skipped: list[dict[str, str]] = []
+        self._skipped_keys: set[tuple[str, str]] = set()
+        self._reserved: dict[Path, int] = {}
+        self._data_uris: dict[Path, str] = {}
+        self._css_text: dict[Path, str] = {}
+
+    @property
+    def embedded_asset_count(self) -> int:
+        return len(self._data_uris)
+
+    @property
+    def embedded_stylesheet_count(self) -> int:
+        return len(self._css_text)
+
+    @property
+    def skipped_count(self) -> int:
+        return len(self.skipped)
+
+    def record_skip(self, path: Path, reason: str) -> None:
+        key = (str(path), reason)
+        if key in self._skipped_keys:
+            return
+        self._skipped_keys.add(key)
+        self.skipped.append({"path": str(path), "reason": reason})
+
+    def resolved_path(self, path: Path) -> Path | None:
+        if path.is_symlink():
+            self.record_skip(path, "asset_symlink")
+            return None
+        try:
+            lexical_relative = path.relative_to(self.assets_dir)
+            resolved = path.resolve(strict=True)
+            resolved.relative_to(self.root)
+        except (OSError, ValueError):
+            self.record_skip(path, "asset_outside_root")
+            return None
+        if not lexical_relative.parts or not resolved.is_file():
+            self.record_skip(path, "asset_not_file")
+            return None
+        return resolved
+
+    def relative_path(self, path: Path) -> Path | None:
+        if self.resolved_path(path) is None:
+            return None
+        return path.relative_to(self.assets_dir)
+
+    def data_uri(self, path: Path) -> str | None:
+        resolved = self.resolved_path(path)
+        if resolved is None:
+            return None
+        cached = self._data_uris.get(resolved)
+        if cached is not None:
+            return cached
+        payload = self._reserve_and_read(path, resolved)
+        if payload is None:
+            return None
+        mime_type = mimetypes.guess_type(path.name)[0] or "application/octet-stream"
+        data_uri = _data_uri(payload, mime_type)
+        self._data_uris[resolved] = data_uri
+        return data_uri
+
+    def css_text(self, path: Path) -> str | None:
+        resolved = self.resolved_path(path)
+        if resolved is None:
+            return None
+        cached = self._css_text.get(resolved)
+        if cached is not None:
+            return cached
+        payload = self._reserve_and_read(path, resolved)
+        if payload is None:
+            return None
+        css_text = payload.decode("utf-8", errors="replace")
+        self._css_text[resolved] = css_text
+        return css_text
+
+    def _reserve_and_read(self, path: Path, resolved: Path) -> bytes | None:
+        if resolved in self._reserved:
+            self.record_skip(path, "asset_type_conflict")
+            return None
+        if len(self._reserved) >= self.max_assets:
+            self.record_skip(path, "asset_count_limit")
+            return None
+        size = _file_size_or_zero(resolved)
+        if size > self.max_asset_bytes:
+            self.record_skip(path, "asset_too_large")
+            return None
+        if self.total_bytes + size > self.max_total_bytes:
+            self.record_skip(path, "asset_total_bytes_limit")
+            return None
+        payload = _read_file_bounded(resolved, max_bytes=self.max_asset_bytes)
+        if payload is None:
+            self.record_skip(path, "asset_too_large")
+            return None
+        if self.total_bytes + len(payload) > self.max_total_bytes:
+            self.record_skip(path, "asset_total_bytes_limit")
+            return None
+        self._reserved[resolved] = len(payload)
+        self.total_bytes += len(payload)
+        return payload
 
 
 def _data_uri(payload: bytes, mime_type: str) -> str:

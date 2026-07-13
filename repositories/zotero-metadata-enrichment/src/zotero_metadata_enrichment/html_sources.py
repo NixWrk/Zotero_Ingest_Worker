@@ -21,6 +21,7 @@ PDF_CONTENT_TYPES = {"application/pdf", "application/x-pdf"}
 ARTICLE_MIN_TEXT_CHARS = 8_000
 DEFAULT_MAX_ASSETS = 80
 DEFAULT_MAX_ASSET_BYTES = 8_000_000
+DEFAULT_MAX_TOTAL_ASSET_BYTES = 64_000_000
 
 
 @dataclass(frozen=True)
@@ -255,10 +256,35 @@ def fetch_html_source(
     )
     try:
         with throttled_urlopen(request, timeout=timeout_seconds) as response:
-            final_url = getattr(response, "url", location.url)
+            final_url = str(getattr(response, "url", location.url) or location.url)
             content_type = str(response.headers.get("Content-Type") or "")
             mime = content_type.split(";", 1)[0].strip().casefold()
-            body = response.read(max_bytes + 1)
+            redirect_safety = validate_fetch_url(final_url)
+            if not redirect_safety.ok:
+                return HtmlSourceFetchResult(
+                    source=location.source,
+                    url=location.url,
+                    kind=location.kind,
+                    ok=False,
+                    status="unsafe_redirect",
+                    final_url=final_url,
+                    content_type=content_type,
+                    error=redirect_safety.reason,
+                )
+            byte_limit = max(max_bytes, 0)
+            declared_bytes = _response_content_length(response.headers)
+            if declared_bytes is not None and declared_bytes > byte_limit:
+                return HtmlSourceFetchResult(
+                    source=location.source,
+                    url=location.url,
+                    kind=location.kind,
+                    ok=False,
+                    status="too_large",
+                    final_url=final_url,
+                    content_type=content_type,
+                    size=declared_bytes,
+                )
+            body = response.read(byte_limit + 1)
     except urllib.error.HTTPError as exc:
         return HtmlSourceFetchResult(
             source=location.source,
@@ -278,7 +304,7 @@ def fetch_html_source(
             error=str(exc),
         )
 
-    if len(body) > max_bytes:
+    if len(body) > max(max_bytes, 0):
         return HtmlSourceFetchResult(
             source=location.source,
             url=location.url,
@@ -923,7 +949,7 @@ def write_html_snapshot(
     user_agent: str,
     save_assets: bool = True,
     max_assets: int = DEFAULT_MAX_ASSETS,
-    max_total_asset_bytes: int = 120_000_000,
+    max_total_asset_bytes: int = DEFAULT_MAX_TOTAL_ASSET_BYTES,
 ) -> dict[str, Any]:
     if not save_assets:
         output_path.write_bytes(body)
@@ -1092,6 +1118,10 @@ class SnapshotAssetDownloader:
             self.failed_count += 1
             self.failures.append({"url": absolute_url, "reason": "asset_limit"})
             return None
+        if self.total_bytes >= self.max_total_bytes:
+            self.failed_count += 1
+            self.failures.append({"url": absolute_url, "reason": "asset_total_bytes_limit"})
+            return None
         safety = validate_fetch_url(absolute_url)
         if not safety.ok:
             self.failed_count += 1
@@ -1105,34 +1135,68 @@ class SnapshotAssetDownloader:
         try:
             self._in_progress.add(absolute_url)
             with throttled_urlopen(request, timeout=self.timeout_seconds) as response:
-                final_url = getattr(response, "url", absolute_url)
+                final_url = str(getattr(response, "url", absolute_url) or absolute_url)
                 content_type = str(response.headers.get("Content-Type") or "")
-                payload = response.read(DEFAULT_MAX_ASSET_BYTES + 1)
+                redirect_safety = validate_fetch_url(final_url)
+                if not redirect_safety.ok:
+                    self.failed_count += 1
+                    self.failures.append(
+                        {"url": absolute_url, "reason": f"unsafe_redirect:{redirect_safety.reason}"}
+                    )
+                    return None
+                remaining_bytes = self.max_total_bytes - self.total_bytes
+                read_limit = min(DEFAULT_MAX_ASSET_BYTES, remaining_bytes)
+                declared_bytes = _response_content_length(response.headers)
+                if declared_bytes is not None and declared_bytes > DEFAULT_MAX_ASSET_BYTES:
+                    self.failed_count += 1
+                    self.failures.append({"url": absolute_url, "reason": "asset_too_large"})
+                    return None
+                if declared_bytes is not None and declared_bytes > remaining_bytes:
+                    self.failed_count += 1
+                    self.failures.append({"url": absolute_url, "reason": "asset_total_bytes_limit"})
+                    return None
+                payload = response.read(read_limit + 1)
         except Exception as exc:
             self.failed_count += 1
             self.failures.append({"url": absolute_url, "reason": str(exc)[:200]})
             return None
         finally:
             self._in_progress.discard(absolute_url)
-        if len(payload) > DEFAULT_MAX_ASSET_BYTES:
+        if len(payload) > read_limit:
             self.failed_count += 1
-            self.failures.append({"url": absolute_url, "reason": "asset_too_large"})
-            return None
-        if self.total_bytes + len(payload) > self.max_total_bytes:
-            self.failed_count += 1
-            self.failures.append({"url": absolute_url, "reason": "asset_total_bytes_limit"})
+            reason = (
+                "asset_too_large"
+                if read_limit == DEFAULT_MAX_ASSET_BYTES
+                else "asset_total_bytes_limit"
+            )
+            self.failures.append({"url": absolute_url, "reason": reason})
             return None
 
         self.assets_dir.mkdir(parents=True, exist_ok=True)
         rel_path = f"{asset_filename(self.saved_count + 1, final_url, content_type)}"
         target = self.assets_dir / rel_path
-        if is_css_resource(final_url, content_type):
-            payload = self._rewrite_css_assets(payload, base_url=final_url, depth=depth + 1)
-        target.write_bytes(payload)
         local = f"{self.assets_dir.name}/{rel_path}"
+        original_bytes = len(payload)
         self.saved_count += 1
-        self.total_bytes += len(payload)
+        self.total_bytes += original_bytes
+        if is_css_resource(final_url, content_type):
+            self._in_progress.add(absolute_url)
+            try:
+                rewritten = self._rewrite_css_assets(payload, base_url=final_url, depth=depth + 1)
+            finally:
+                self._in_progress.discard(absolute_url)
+            delta = len(rewritten) - original_bytes
+            if delta <= 0 or self.total_bytes + delta <= self.max_total_bytes:
+                payload = rewritten
+                self.total_bytes += delta
+            else:
+                self.failed_count += 1
+                self.failures.append(
+                    {"url": absolute_url, "reason": "css_rewrite_total_bytes_limit"}
+                )
+        target.write_bytes(payload)
         self._seen[absolute_url] = local
+        self._seen[final_url] = local
         return local
 
     def _rewrite_css_assets(self, payload: bytes, *, base_url: str, depth: int) -> bytes:
@@ -1145,6 +1209,19 @@ class SnapshotAssetDownloader:
         for raw_url, local in sorted(replacements.items(), key=lambda item: len(item[0]), reverse=True):
             css = css.replace(raw_url, local)
         return css.encode("utf-8")
+
+
+def _response_content_length(headers: Any) -> int | None:
+    raw_value = headers.get("Content-Length") if headers is not None else None
+    if raw_value is None:
+        return None
+    try:
+        value = int(str(raw_value).strip())
+    except (TypeError, ValueError):
+        return None
+    if value < 0:
+        return None
+    return value
 
 
 def parse_srcset(value: str) -> list[str]:
