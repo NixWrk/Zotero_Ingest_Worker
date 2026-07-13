@@ -3,6 +3,7 @@ from pathlib import Path
 
 import pytest
 
+from zoteropdf2md.html_images import to_data_url, validate_data_url
 from zoteropdf2md.html_links import (
     canonicalize_same_document_links as canonicalize_links_from_shared_module,
     count_same_document_absolute_fragment_links as count_links_from_shared_module,
@@ -1610,6 +1611,185 @@ def test_inline_local_images_skips_inline_data_srcset() -> None:
 
     assert result.inlined_images == 0
     assert "data:image/webp;base64," in result.html
+
+
+def test_web_image_data_url_enforces_individual_byte_limit(tmp_path: Path) -> None:
+    image = tmp_path / "figure.png"
+    image.write_bytes(PNG_BYTES)
+
+    assert to_data_url(image, max_bytes=len(PNG_BYTES) - 1) is None
+    data_url = to_data_url(image, max_bytes=len(PNG_BYTES))
+    assert data_url is not None
+    assert validate_data_url(data_url, image, max_bytes=len(PNG_BYTES)) is True
+    assert validate_data_url(data_url, image, max_bytes=len(PNG_BYTES) - 1) is False
+
+
+def test_inline_local_images_counts_repeated_file_once_against_total_budget(tmp_path: Path) -> None:
+    image = tmp_path / "figure.png"
+    image.write_bytes(PNG_BYTES)
+    html = '<img src="figure.png"><img src="figure.png">'
+
+    result = inline_local_images_from_web_html_document(
+        html,
+        base_dir=tmp_path,
+        max_image_bytes=len(PNG_BYTES),
+        max_total_bytes=len(PNG_BYTES),
+    )
+
+    assert result.inlined_images == 2
+    assert result.html.count("data:image/png;base64,") == 2
+
+
+def test_inline_local_images_stops_at_document_total_budget(tmp_path: Path) -> None:
+    first = tmp_path / "first.png"
+    second = tmp_path / "second.png"
+    first.write_bytes(PNG_BYTES)
+    second.write_bytes(PNG_BYTES)
+    html = '<img src="first.png"><img src="second.png">'
+
+    result = inline_local_images_from_web_html_document(
+        html,
+        base_dir=tmp_path,
+        max_image_bytes=len(PNG_BYTES),
+        max_total_bytes=len(PNG_BYTES),
+    )
+
+    assert result.inlined_images == 1
+    assert result.html.count("data:image/png;base64,") == 1
+    assert 'src="second.png"' in result.html
+
+
+def test_inline_remote_images_rejects_injected_oversized_payload() -> None:
+    url = "https://content.cld.iop.org/figure.png"
+    result = inline_remote_images_from_web_html_document(
+        f'<img src="{url}">',
+        allowed_hosts=frozenset({"content.cld.iop.org"}),
+        fetch_bytes=lambda _url: (b"X" * 5, "image/png"),
+        max_image_bytes=4,
+        max_total_bytes=10,
+    )
+
+    assert result.inlined_images == 0
+    assert f'src="{url}"' in result.html
+
+
+def test_inline_remote_images_enforces_total_budget_and_caches_duplicates() -> None:
+    first = "https://content.cld.iop.org/first.png"
+    second = "https://content.cld.iop.org/second.png"
+    calls: list[str] = []
+
+    def fetch(url: str) -> tuple[bytes, str]:
+        calls.append(url)
+        return b"PNG", "image/png"
+
+    result = inline_remote_images_from_web_html_document(
+        f'<img src="{first}"><img src="{first}"><img src="{second}">',
+        allowed_hosts=frozenset({"content.cld.iop.org"}),
+        fetch_bytes=fetch,
+        max_image_bytes=3,
+        max_total_bytes=3,
+    )
+
+    assert result.inlined_images == 2
+    assert result.html.count("data:image/png;base64,") == 2
+    assert f'src="{second}"' in result.html
+    assert calls == [first, second]
+
+
+class _BoundedFetchHeaders(dict[str, str]):
+    def get_content_charset(self) -> str:
+        return "utf-8"
+
+
+class _BoundedFetchResponse:
+    def __init__(
+        self,
+        *,
+        url: str,
+        content_type: str,
+        body: bytes,
+        content_length: int | None = None,
+    ) -> None:
+        self.url = url
+        self.headers = _BoundedFetchHeaders({"Content-Type": content_type})
+        if content_length is not None:
+            self.headers["Content-Length"] = str(content_length)
+        self.body = body
+        self.read_sizes: list[int] = []
+
+    def __enter__(self) -> "_BoundedFetchResponse":
+        return self
+
+    def __exit__(self, *_args: object) -> None:
+        return None
+
+    def read(self, size: int = -1) -> bytes:
+        self.read_sizes.append(size)
+        return self.body if size < 0 else self.body[:size]
+
+
+def test_remote_image_fetch_rejects_declared_oversize_before_read(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from zoteropdf2md import web_html_polish as web_polish_module
+
+    url = "https://content.cld.iop.org/figure.png"
+    response = _BoundedFetchResponse(
+        url=url,
+        content_type="image/png",
+        body=b"not read",
+        content_length=5,
+    )
+    monkeypatch.setattr("urllib.request.urlopen", lambda *_args, **_kwargs: response)
+
+    with pytest.raises(WebHtmlPolishError, match="exceeds 4 bytes"):
+        web_polish_module._fetch_remote_image(url, max_bytes=4)
+    assert response.read_sizes == []
+
+
+def test_remote_image_fetch_rejects_cross_host_redirect(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from zoteropdf2md import web_html_polish as web_polish_module
+
+    source_url = "https://content.cld.iop.org/figure.png"
+    response = _BoundedFetchResponse(
+        url="https://other.example/figure.png",
+        content_type="image/png",
+        body=b"not read",
+    )
+    monkeypatch.setattr("urllib.request.urlopen", lambda *_args, **_kwargs: response)
+
+    with pytest.raises(WebHtmlPolishError, match="Cross-host"):
+        web_polish_module._fetch_remote_image(source_url)
+    assert response.read_sizes == []
+
+
+def test_remote_html_fetch_rejects_declared_oversize_before_read(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from zoteropdf2md import web_html_polish as web_polish_module
+
+    url = "https://reference-global.com/article/example?tab=article"
+    response = _BoundedFetchResponse(
+        url=url,
+        content_type="text/html",
+        body=b"not read",
+        content_length=5,
+    )
+    monkeypatch.setattr("urllib.request.urlopen", lambda *_args, **_kwargs: response)
+
+    with pytest.raises(WebHtmlPolishError, match="exceeds 4 bytes"):
+        web_polish_module._fetch_remote_html(url, max_bytes=4)
+    assert response.read_sizes == []
+
+
+def test_polish_web_html_file_rejects_oversized_source_before_parse(tmp_path: Path) -> None:
+    source = tmp_path / "article.html"
+    source.write_text("<html><body>Article</body></html>", encoding="utf-8")
+
+    with pytest.raises(WebHtmlPolishError, match="exceeds the 8 byte limit"):
+        polish_web_html_file(source, max_html_bytes=8)
 
 
 def test_generic_canonicalizer_infers_repeated_non_arxiv_self_links() -> None:

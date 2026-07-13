@@ -34,6 +34,7 @@ IMAGE_SIGNATURES: dict[bytes, str] = {
     b"\x42\x4d": "image/bmp",
 }
 IMG_SRC_PATTERN = re.compile(r'(<img\b[^>]*?\ssrc\s*=\s*)(["\'])([^"\']+)(\2)', re.IGNORECASE)
+DEFAULT_DATA_URL_MAX_BYTES = 8 * 1024 * 1024
 
 
 def is_inline_or_remote(value: str) -> bool:
@@ -112,6 +113,7 @@ def to_data_url(
     file_path: Path,
     *,
     detect_by_signature: bool = True,
+    max_bytes: int | None = DEFAULT_DATA_URL_MAX_BYTES,
     log_func: Callable[[str], None] | None = None,
 ) -> str | None:
     """Convert image file to a data URL with signature-based MIME detection."""
@@ -127,7 +129,29 @@ def to_data_url(
             )
         return None
 
-    blob = file_path.read_bytes()
+    try:
+        file_size = file_path.stat().st_size
+    except OSError:
+        return None
+    if max_bytes is not None and file_size > max(max_bytes, 0):
+        if log_func:
+            log_func(
+                f"[DIAG] Image inline skipped: path={file_path.name} "
+                f"size={file_size} max={max(max_bytes, 0)}"
+            )
+        return None
+    try:
+        with file_path.open("rb") as handle:
+            blob = handle.read(max(max_bytes, 0) + 1) if max_bytes is not None else handle.read()
+    except OSError:
+        return None
+    if max_bytes is not None and len(blob) > max(max_bytes, 0):
+        if log_func:
+            log_func(
+                f"[DIAG] Image grew beyond inline limit while reading: "
+                f"path={file_path.name} max={max(max_bytes, 0)}"
+            )
+        return None
     file_hash = hashlib.sha256(blob).hexdigest()[:16]
 
     cmyk_warning = ""
@@ -152,7 +176,12 @@ def to_data_url(
         return None
 
 
-def validate_data_url(data_url: str, original_file: Path) -> bool:
+def validate_data_url(
+    data_url: str,
+    original_file: Path,
+    *,
+    max_bytes: int | None = DEFAULT_DATA_URL_MAX_BYTES,
+) -> bool:
     """Validate that a data URL decodes back to the original file."""
     try:
         if not data_url.startswith("data:image/"):
@@ -163,10 +192,24 @@ def validate_data_url(data_url: str, original_file: Path) -> bool:
             return False
 
         b64_content = data_url[comma_idx + 1 :]
-        decoded = base64.b64decode(b64_content)
-        original = original_file.read_bytes()
-
-        return decoded == original
+        if max_bytes is not None:
+            byte_limit = max(max_bytes, 0)
+            if original_file.stat().st_size > byte_limit:
+                return False
+            max_encoded = ((byte_limit + 2) // 3) * 4 + 4
+            if len(b64_content) > max_encoded:
+                return False
+        decoded = base64.b64decode(b64_content, validate=True)
+        if original_file.stat().st_size != len(decoded):
+            return False
+        original_hash = hashlib.sha256()
+        with original_file.open("rb") as handle:
+            while True:
+                chunk = handle.read(1024 * 1024)
+                if not chunk:
+                    break
+                original_hash.update(chunk)
+        return hashlib.sha256(decoded).digest() == original_hash.digest()
     except Exception:
         return False
 

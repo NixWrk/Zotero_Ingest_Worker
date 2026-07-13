@@ -126,6 +126,9 @@ _ROOT_RELATIVE_URL_ATTR_RE = re.compile(
 _TITLE_RE = re.compile(r"<title\b[^>]*>(?P<title>[\s\S]*?)</title>", re.IGNORECASE)
 _META_TAG_RE = re.compile(r"<meta\b(?P<attrs>[^>]*)>", re.IGNORECASE | re.DOTALL)
 _MAX_LOCAL_ASSET_REFERENCE_LENGTH = 4096
+_MAX_WEB_HTML_BYTES = 16 * 1024 * 1024
+_MAX_WEB_IMAGE_BYTES = 8 * 1024 * 1024
+_MAX_WEB_IMAGE_TOTAL_BYTES = 64 * 1024 * 1024
 _H1_RE = re.compile(r"<h1\b", re.IGNORECASE)
 _LTX_EQUATION_ROW_RE = re.compile(r"<tr\b(?P<attrs>[^>]*)>(?P<body>[\s\S]*?)</tr>", re.IGNORECASE)
 _TD_OPEN_RE = re.compile(r"<td\b(?P<attrs>[^>]*)>", re.IGNORECASE | re.DOTALL)
@@ -305,10 +308,15 @@ def polish_web_html_file(
     source_url: str | None = None,
     canonical_url: str | None = None,
     fetch_text: "RemoteHtmlFetcher | None" = None,
+    max_html_bytes: int = _MAX_WEB_HTML_BYTES,
 ) -> WebHtmlFilePolishResult:
     """Polish a web-native HTML file and inline local sidecar images."""
 
-    html = html_path.read_text(encoding="utf-8", errors="replace")
+    html = _read_text_file_bounded(html_path, max_bytes=max_html_bytes)
+    if html is None:
+        raise WebHtmlPolishError(
+            f"Web HTML source exceeds the {max(max_html_bytes, 0)} byte limit: {html_path}"
+        )
     document = polish_web_html_document(
         html,
         source_url=source_url,
@@ -467,14 +475,22 @@ def _frontiers_reference_id_from_attrs(attrs: str) -> str | None:
     return None
 
 
-def inline_local_images_from_web_html_document(html: str, *, base_dir: Path) -> InlineHtmlResult:
+def inline_local_images_from_web_html_document(
+    html: str,
+    *,
+    base_dir: Path,
+    max_image_bytes: int = _MAX_WEB_IMAGE_BYTES,
+    max_total_bytes: int = _MAX_WEB_IMAGE_TOTAL_BYTES,
+) -> InlineHtmlResult:
     """Inline local ``<img src>`` and ``srcset`` references without Marker polish."""
 
     base_dir = base_dir.resolve(strict=False)
     inlined_count = 0
+    inlined_bytes = 0
+    cache: dict[Path, str | None] = {}
 
     def inline_src_value(src_value: str) -> str | None:
-        nonlocal inlined_count
+        nonlocal inlined_count, inlined_bytes
         if not src_value or _is_nonlocal_image_src(src_value):
             return None
 
@@ -482,8 +498,30 @@ def inline_local_images_from_web_html_document(html: str, *, base_dir: Path) -> 
         if candidate is None:
             return None
 
-        data_url = to_data_url(candidate, detect_by_signature=True, log_func=None)
-        if data_url is None or not validate_data_url(data_url, candidate):
+        if candidate not in cache:
+            try:
+                size = candidate.stat().st_size
+            except OSError:
+                cache[candidate] = None
+                return None
+            image_limit = max(max_image_bytes, 0)
+            total_limit = max(max_total_bytes, 0)
+            if size > image_limit or inlined_bytes + size > total_limit:
+                cache[candidate] = None
+                return None
+            data_url = to_data_url(
+                candidate,
+                detect_by_signature=True,
+                max_bytes=min(image_limit, total_limit - inlined_bytes),
+                log_func=None,
+            )
+            if data_url is None or not validate_data_url(data_url, candidate, max_bytes=image_limit):
+                cache[candidate] = None
+                return None
+            cache[candidate] = data_url
+            inlined_bytes += size
+        data_url = cache[candidate]
+        if data_url is None:
             return None
 
         inlined_count += 1
@@ -621,6 +659,8 @@ def inline_remote_images_from_web_html_document(
     *,
     allowed_hosts: frozenset[str] = frozenset(),
     fetch_bytes: RemoteImageFetcher | None = None,
+    max_image_bytes: int = _MAX_WEB_IMAGE_BYTES,
+    max_total_bytes: int = _MAX_WEB_IMAGE_TOTAL_BYTES,
 ) -> InlineHtmlResult:
     """Inline allowed remote image URLs for Zotero-friendly source HTML."""
 
@@ -630,16 +670,24 @@ def inline_remote_images_from_web_html_document(
     fetcher = fetch_bytes or _fetch_remote_image
     cache: dict[str, str | None] = {}
     inlined_count = 0
+    inlined_bytes = 0
 
     def inline_src_value(src_value: str) -> str | None:
-        nonlocal inlined_count
+        nonlocal inlined_count, inlined_bytes
         url = unescape(src_value).strip()
         if not _is_allowed_remote_image_url(url, allowed_hosts=allowed_hosts):
             return None
         if url not in cache:
             try:
                 blob, content_type = fetcher(url)
-                cache[url] = _remote_image_data_url(url, blob, content_type)
+                if len(blob) > max(max_image_bytes, 0):
+                    cache[url] = None
+                elif inlined_bytes + len(blob) > max(max_total_bytes, 0):
+                    cache[url] = None
+                else:
+                    cache[url] = _remote_image_data_url(url, blob, content_type)
+                    if cache[url] is not None:
+                        inlined_bytes += len(blob)
             except Exception:
                 cache[url] = None
         data_url = cache[url]
@@ -704,17 +752,29 @@ def _is_allowed_remote_image_url(url: str, *, allowed_hosts: frozenset[str]) -> 
     return parsed.netloc.lower().split(":", 1)[0] in allowed_hosts
 
 
-def _fetch_remote_image(url: str) -> tuple[bytes, str | None]:
+def _fetch_remote_image(
+    url: str,
+    *,
+    max_bytes: int = _MAX_WEB_IMAGE_BYTES,
+) -> tuple[bytes, str | None]:
     request = urllib.request.Request(
         url,
         headers={"User-Agent": "Mozilla/5.0 z2m-web-polish"},
     )
     with urllib.request.urlopen(request, timeout=20) as response:
         content_type = response.headers.get("Content-Type")
-        return response.read(), content_type
+        _require_same_host_redirect(url, _response_url(response, fallback=url))
+        byte_limit = max(max_bytes, 0)
+        declared = _response_content_length(response)
+        if declared is not None and declared > byte_limit:
+            raise WebHtmlPolishError(f"Remote image exceeds {byte_limit} bytes: {url}")
+        blob = response.read(byte_limit + 1)
+    if len(blob) > byte_limit:
+        raise WebHtmlPolishError(f"Remote image exceeds {byte_limit} bytes: {url}")
+    return blob, content_type
 
 
-def _fetch_remote_html(url: str) -> str:
+def _fetch_remote_html(url: str, *, max_bytes: int = _MAX_WEB_HTML_BYTES) -> str:
     request = urllib.request.Request(
         url,
         headers={
@@ -725,7 +785,16 @@ def _fetch_remote_html(url: str) -> str:
     with urllib.request.urlopen(request, timeout=30) as response:
         content_type = response.headers.get("Content-Type") or ""
         charset = response.headers.get_content_charset() or "utf-8"
-        body = response.read()
+        final_url = _response_url(response, fallback=url)
+        if not _is_allowed_sciendo_redirect(url, final_url):
+            raise WebHtmlPolishError(f"Unsafe Sciendo redirect rejected: {url} -> {final_url}")
+        byte_limit = max(max_bytes, 0)
+        declared = _response_content_length(response)
+        if declared is not None and declared > byte_limit:
+            raise WebHtmlPolishError(f"Fetched HTML exceeds {byte_limit} bytes: {url}")
+        body = response.read(byte_limit + 1)
+    if len(body) > byte_limit:
+        raise WebHtmlPolishError(f"Fetched HTML exceeds {byte_limit} bytes: {url}")
     if "text/html" not in content_type.lower() and b"<html" not in body[:4096].lower():
         raise WebHtmlPolishError(f"Fetched Sciendo full-text URL is not HTML: {url}")
     return body.decode(charset, errors="replace")
@@ -795,6 +864,59 @@ def _valid_sciendo_article_url(url: str) -> str | None:
 def _is_sciendo_or_reference_global_host(netloc: str) -> bool:
     host = netloc.lower().split(":", 1)[0]
     return host.endswith("sciendo.com") or host.endswith("reference-global.com")
+
+
+def _is_allowed_sciendo_redirect(source_url: str, final_url: str) -> bool:
+    source = _urlsplit_or_none(source_url)
+    final = _urlsplit_or_none(final_url)
+    if source is None or final is None:
+        return False
+    if source.scheme.lower() not in {"http", "https"} or final.scheme.lower() not in {"http", "https"}:
+        return False
+    return _is_sciendo_or_reference_global_host(source.netloc) and _is_sciendo_or_reference_global_host(
+        final.netloc
+    )
+
+
+def _require_same_host_redirect(source_url: str, final_url: str) -> None:
+    source = _urlsplit_or_none(source_url)
+    final = _urlsplit_or_none(final_url)
+    if source is None or final is None:
+        raise WebHtmlPolishError(f"Invalid remote image redirect: {source_url} -> {final_url}")
+    source_host = source.netloc.lower().split(":", 1)[0]
+    final_host = final.netloc.lower().split(":", 1)[0]
+    if source.scheme.lower() not in {"http", "https"} or final.scheme.lower() not in {"http", "https"}:
+        raise WebHtmlPolishError(f"Unsafe remote image redirect: {source_url} -> {final_url}")
+    if source_host != final_host:
+        raise WebHtmlPolishError(f"Cross-host remote image redirect rejected: {source_url} -> {final_url}")
+
+
+def _response_url(response: object, *, fallback: str) -> str:
+    return str(getattr(response, "url", None) or getattr(response, "geturl", lambda: fallback)() or fallback)
+
+
+def _response_content_length(response: object) -> int | None:
+    headers = getattr(response, "headers", None)
+    raw = headers.get("Content-Length") if headers is not None else None
+    try:
+        value = int(str(raw).strip()) if raw is not None else -1
+    except (TypeError, ValueError):
+        return None
+    return value if value >= 0 else None
+
+
+def _read_text_file_bounded(path: Path, *, max_bytes: int) -> str | None:
+    byte_limit = max(max_bytes, 0)
+    try:
+        if path.stat().st_size > byte_limit:
+            return None
+        with path.open("rb") as stream:
+            payload = stream.read(byte_limit + 1)
+    except OSError:
+        return None
+    if len(payload) > byte_limit:
+        return None
+    return payload.decode("utf-8", errors="replace")
 
 
 def _remote_image_data_url(url: str, blob: bytes, content_type: str | None) -> str | None:
