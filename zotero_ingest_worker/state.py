@@ -717,8 +717,9 @@ class PipelineStateStore:
                 (now,),
             ).fetchall()
             job_ids = [str(row["job_id"]) for row in rows]
+            recovered = 0
             for job_id in job_ids:
-                connection.execute(
+                cursor = connection.execute(
                     """
                     update html_jobs
                     set status = 'queued',
@@ -728,22 +729,29 @@ class PipelineStateStore:
                         last_error = 'Recovered expired running HTML job lease.',
                         updated_at = ?
                     where job_id = ?
+                      and status = 'running'
+                      and leased_until is not null
+                      and leased_until < ?
                     """,
-                    (now, job_id),
+                    (now, job_id, now),
                 )
+                if cursor.rowcount != 1:
+                    continue
+                recovered += 1
                 self._add_html_job_event(
                     connection,
                     job_id=job_id,
                     event="recovered",
                     message="Expired running HTML job lease was returned to queued.",
                 )
-        return len(job_ids)
+        return recovered
 
     def lease_next_html_job(self, *, owner: str, lease_seconds: int) -> dict[str, Any] | None:
         self.recover_expired_html_jobs()
         now = _utc_now()
         leased_until = now + timedelta(seconds=lease_seconds)
         with self._connect() as connection:
+            connection.execute("begin immediate")
             row = connection.execute(
                 """
                 select *
@@ -756,7 +764,7 @@ class PipelineStateStore:
             if row is None:
                 return None
             job = dict(row)
-            connection.execute(
+            cursor = connection.execute(
                 """
                 update html_jobs
                 set status = 'running',
@@ -766,9 +774,12 @@ class PipelineStateStore:
                     leased_until = ?,
                     updated_at = ?
                 where job_id = ?
+                  and status = 'queued'
                 """,
                 (owner, leased_until.isoformat(), now.isoformat(), job["job_id"]),
             )
+            if cursor.rowcount != 1:
+                return None
             self._add_html_job_event(
                 connection,
                 job_id=job["job_id"],
@@ -788,11 +799,13 @@ class PipelineStateStore:
         target_language: str | None = None,
         translation_skipped_reason: str | None = None,
         relay_result: Any = None,
+        owner: str | None = None,
     ) -> dict[str, Any]:
         now = _utc_now().isoformat()
+        owner_clause, owner_params = _terminal_owner_clause(owner)
         with self._connect() as connection:
-            connection.execute(
-                """
+            cursor = connection.execute(
+                f"""
                 update html_jobs
                 set status = 'succeeded',
                     phase = 'complete',
@@ -808,6 +821,7 @@ class PipelineStateStore:
                     relay_result = ?,
                     updated_at = ?
                 where job_id = ?
+                  {owner_clause}
                 """,
                 (
                     en_html_path,
@@ -819,9 +833,20 @@ class PipelineStateStore:
                     _json_or_none(relay_result),
                     now,
                     job_id,
+                    *owner_params,
                 ),
             )
-            self._add_html_job_event(connection, job_id=job_id, event="succeeded", message=message)
+            if cursor.rowcount != 1:
+                self._add_html_job_event(
+                    connection,
+                    job_id=job_id,
+                    event="stale_completion_discarded",
+                    message=_stale_job_update_message("HTML", owner),
+                )
+            else:
+                self._add_html_job_event(
+                    connection, job_id=job_id, event="succeeded", message=message
+                )
         return self.get_html_job(job_id) or {}
 
     def mark_html_job_deferred(
@@ -831,11 +856,13 @@ class PipelineStateStore:
         status: str,
         message: str,
         metadata: Any = None,
+        owner: str | None = None,
     ) -> dict[str, Any]:
         now = _utc_now().isoformat()
+        owner_clause, owner_params = _terminal_owner_clause(owner)
         with self._connect() as connection:
-            connection.execute(
-                """
+            cursor = connection.execute(
+                f"""
                 update html_jobs
                 set status = ?,
                     phase = 'deferred',
@@ -847,10 +874,21 @@ class PipelineStateStore:
                     relay_result = ?,
                     updated_at = ?
                 where job_id = ?
+                  {owner_clause}
                 """,
-                (status, message, _json_or_none(metadata), now, job_id),
+                (status, message, _json_or_none(metadata), now, job_id, *owner_params),
             )
-            self._add_html_job_event(connection, job_id=job_id, event=status, message=message)
+            if cursor.rowcount != 1:
+                self._add_html_job_event(
+                    connection,
+                    job_id=job_id,
+                    event="stale_completion_discarded",
+                    message=_stale_job_update_message("HTML", owner),
+                )
+            else:
+                self._add_html_job_event(
+                    connection, job_id=job_id, event=status, message=message
+                )
         return self.get_html_job(job_id) or {}
 
     def mark_html_job_failed(
@@ -859,6 +897,7 @@ class PipelineStateStore:
         job_id: str,
         message: str,
         retryable: bool,
+        owner: str | None = None,
     ) -> dict[str, Any]:
         job = self.get_html_job(job_id)
         if job is None:
@@ -867,9 +906,10 @@ class PipelineStateStore:
         max_attempts = int(job["max_attempts"])
         status = "failed_retryable" if retryable and attempts < max_attempts else "failed_final"
         now = _utc_now().isoformat()
+        owner_clause, owner_params = _terminal_owner_clause(owner)
         with self._connect() as connection:
-            connection.execute(
-                """
+            cursor = connection.execute(
+                f"""
                 update html_jobs
                 set status = ?,
                     phase = 'failed',
@@ -878,11 +918,45 @@ class PipelineStateStore:
                     last_error = ?,
                     updated_at = ?
                 where job_id = ?
+                  {owner_clause}
                 """,
-                (status, message, now, job_id),
+                (status, message, now, job_id, *owner_params),
             )
-            self._add_html_job_event(connection, job_id=job_id, event=status, message=message)
+            if cursor.rowcount != 1:
+                self._add_html_job_event(
+                    connection,
+                    job_id=job_id,
+                    event="stale_completion_discarded",
+                    message=_stale_job_update_message("HTML", owner),
+                )
+            else:
+                self._add_html_job_event(
+                    connection, job_id=job_id, event=status, message=message
+                )
         return self.get_html_job(job_id) or {}
+
+    def heartbeat_html_job(
+        self,
+        *,
+        job_id: str,
+        owner: str,
+        lease_seconds: int,
+    ) -> bool:
+        now = _utc_now()
+        leased_until = now + timedelta(seconds=max(1, int(lease_seconds)))
+        with self._connect() as connection:
+            cursor = connection.execute(
+                """
+                update html_jobs
+                set leased_until = ?,
+                    updated_at = ?
+                where job_id = ?
+                  and status = 'running'
+                  and lease_owner = ?
+                """,
+                (leased_until.isoformat(), now.isoformat(), job_id, str(owner)),
+            )
+        return cursor.rowcount == 1
 
     def retry_html_job(self, job_id: str) -> dict[str, Any]:
         now = _utc_now().isoformat()

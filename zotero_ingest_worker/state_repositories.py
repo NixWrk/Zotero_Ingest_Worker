@@ -113,6 +113,9 @@ class HtmlJobRepository:
     def mark_failed(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
         return self.store.mark_html_job_failed(*args, **kwargs)
 
+    def heartbeat(self, *args: Any, **kwargs: Any) -> bool:
+        return self.store.heartbeat_html_job(*args, **kwargs)
+
     def retry(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
         return self.store.retry_html_job(*args, **kwargs)
 
