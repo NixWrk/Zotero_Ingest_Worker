@@ -1188,9 +1188,20 @@ def test_metadata_retry_can_reset_exhausted_attempts(tmp_path: Path) -> None:
     )
     assert failed["status"] == "failed_final"
     retried = store.retry_metadata_job(str(keep_attempts["job_id"]))
-    assert retried["status"] == "queued"
+    assert retried["status"] == "failed_final"
     assert retried["attempts"] == 1
-    store.cancel_metadata_job(str(keep_attempts["job_id"]))
+    assert (
+        store.lease_next_metadata_job(
+            job_type="arxiv_html", owner="test", lease_seconds=60
+        )
+        is None
+    )
+    with store._connect() as connection:
+        events = connection.execute(
+            "select event from metadata_job_events where job_id = ? order by event_id",
+            (keep_attempts["job_id"],),
+        ).fetchall()
+    assert "retry_rejected_exhausted" in {str(row["event"]) for row in events}
 
     reset_attempts = store.enqueue_metadata_job(
         job_type="arxiv_html",
@@ -1215,6 +1226,80 @@ def test_metadata_retry_can_reset_exhausted_attempts(tmp_path: Path) -> None:
     retried = store.retry_metadata_job(str(reset_attempts["job_id"]), reset_attempts=True)
     assert retried["status"] == "queued"
     assert retried["attempts"] == 0
+    leased = store.lease_next_metadata_job(
+        job_type="arxiv_html", owner="new-generation", lease_seconds=60
+    )
+    assert leased is not None
+    assert leased["job_id"] == reset_attempts["job_id"]
+    assert leased["attempts"] == 1
+
+
+def test_metadata_claim_finalizes_exhausted_queued_job(tmp_path: Path) -> None:
+    source = tmp_path / "paper.pdf"
+    source.write_bytes(b"%PDF")
+    store = OcrStateStore(tmp_path / "state.sqlite")
+    created = store.enqueue_metadata_job(
+        job_type="full_text",
+        library_id="LIB1",
+        attachment_key="PDF1",
+        data_dir=tmp_path,
+        source_path=source,
+        signature=FileSignature.from_path(source),
+        status="queued",
+        reason="test",
+        max_attempts=1,
+    )
+    with store._connect() as connection:
+        connection.execute(
+            "update metadata_jobs set attempts = max_attempts where job_id = ?",
+            (created["job_id"],),
+        )
+
+    leased = store.lease_next_metadata_job(
+        job_type="full_text", owner="worker", lease_seconds=60
+    )
+    finalized = store.get_metadata_job(str(created["job_id"]))
+
+    assert leased is None
+    assert finalized is not None
+    assert finalized["status"] == "failed_final"
+    assert finalized["last_error"] == "Attempt budget exhausted before claim."
+
+
+def test_metadata_zero_max_attempts_is_unlimited(tmp_path: Path) -> None:
+    source = tmp_path / "paper.pdf"
+    source.write_bytes(b"%PDF")
+    store = OcrStateStore(tmp_path / "state.sqlite")
+    created = store.enqueue_metadata_job(
+        job_type="full_text",
+        library_id="LIB1",
+        attachment_key="PDF1",
+        data_dir=tmp_path,
+        source_path=source,
+        signature=FileSignature.from_path(source),
+        status="queued",
+        reason="test",
+        max_attempts=0,
+    )
+
+    first = store.lease_next_metadata_job(
+        job_type="full_text", owner="worker-1", lease_seconds=60
+    )
+    assert first is not None
+    failed = store.mark_metadata_job_failed(
+        job_id=str(created["job_id"]),
+        message="transient",
+        retryable=True,
+        owner="worker-1",
+    )
+    assert failed["status"] == "failed_retryable"
+    retried = store.retry_metadata_job(str(created["job_id"]))
+    assert retried["status"] == "queued"
+    second = store.lease_next_metadata_job(
+        job_type="full_text", owner="worker-2", lease_seconds=60
+    )
+    assert second is not None
+    assert second["attempts"] == 2
 
 
 def test_metadata_state_parent_scope_dedupes_changed_container_signature(tmp_path: Path) -> None:
