@@ -7,6 +7,7 @@ import pytest
 from zoteropdf2md.html_contract import (
     CANONICAL_HTML_PROFILE,
     canonical_contract_report,
+    canonical_document_root_count,
     normalize_canonical_html,
 )
 from zoteropdf2md.web_html_polish import (
@@ -51,6 +52,7 @@ def test_normalize_canonical_html_is_idempotent_for_source_and_pdf(
     report = canonical_contract_report(normalized)
 
     assert repeated == normalized
+    assert canonical_document_root_count(normalized, document_kind=document_kind) == 1
     assert f'data-z2m-profile="{CANONICAL_HTML_PROFILE}"' in normalized
     assert f'data-z2m-document-kind="{document_kind}"' in normalized
     assert 'id="sec-1"' in normalized

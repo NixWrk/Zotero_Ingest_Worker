@@ -28,6 +28,23 @@ _PROTECTED_BLOCK_RE = re.compile(
 )
 
 
+def canonical_document_root_count(html: str, *, document_kind: str) -> int:
+    """Return the number of real legacy roots for one canonical document kind."""
+
+    return len(_document_root_matches(html, document_kind=document_kind))
+
+
+def _document_root_matches(html: str, *, document_kind: str) -> list[re.Match[str]]:
+    if document_kind not in {"source", "pdf"}:
+        raise ValueError(f"Unsupported canonical document kind: {document_kind}")
+    expected_id = "web-doc" if document_kind == "source" else "marker-doc"
+    root_pattern = re.compile(
+        rf"<main\b(?P<attrs>[^<>]*(?<![\w:-])id\s*=\s*(['\"]){re.escape(expected_id)}\2[^<>]*)>",
+        re.IGNORECASE | re.DOTALL,
+    )
+    return _unprotected_matches(root_pattern, html)
+
+
 def normalize_canonical_html(
     html: str,
     *,
@@ -42,13 +59,9 @@ def normalize_canonical_html(
     if not provenance_kind:
         raise ValueError("Canonical provenance kind must not be empty")
 
-    expected_id = "web-doc" if document_kind == "source" else "marker-doc"
-    root_pattern = re.compile(
-        rf"<main\b(?P<attrs>[^<>]*(?<![\w:-])id\s*=\s*(['\"]){re.escape(expected_id)}\2[^<>]*)>",
-        re.IGNORECASE | re.DOTALL,
-    )
-    roots = _unprotected_matches(root_pattern, html)
+    roots = _document_root_matches(html, document_kind=document_kind)
     if len(roots) != 1:
+        expected_id = "web-doc" if document_kind == "source" else "marker-doc"
         raise ValueError(
             f"Expected one {document_kind} document root #{expected_id}, found {len(roots)}"
         )
