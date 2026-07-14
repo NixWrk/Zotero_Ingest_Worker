@@ -146,6 +146,30 @@ def test_normalize_canonical_html_rejects_data_id_spoof() -> None:
         )
 
 
+@pytest.mark.parametrize(
+    ("document_kind", "root_id"),
+    [("source", "web-doc"), ("pdf", "marker-doc")],
+)
+def test_normalize_accepts_unquoted_ids_without_duplicating_semantic_ids(
+    document_kind: str,
+    root_id: str,
+) -> None:
+    raw = f"<main id={root_id}><section id=methods>Text</section></main>"
+
+    normalized = normalize_canonical_html(
+        raw,
+        document_kind=document_kind,
+        provenance_kind="strict_audit",
+    )
+    report = canonical_contract_report(normalized)
+
+    assert canonical_document_root_count(normalized, document_kind=document_kind) == 1
+    assert normalized.count("id=methods") == 1
+    assert "sec-1" not in normalized
+    assert report["status"] == "passed"
+    assert report["duplicate_attributes"] == []
+
+
 def test_attribute_reader_does_not_treat_data_role_as_reference_role() -> None:
     normalized = normalize_canonical_html(
         '<main id="web-doc"><p data-role="doc-biblioref">Text</p></main>',

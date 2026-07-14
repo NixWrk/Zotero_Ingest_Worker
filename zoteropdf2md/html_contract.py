@@ -37,11 +37,12 @@ def _document_root_matches(html: str, *, document_kind: str) -> list[re.Match[st
     if document_kind not in {"source", "pdf"}:
         raise ValueError(f"Unsupported canonical document kind: {document_kind}")
     expected_id = "web-doc" if document_kind == "source" else "marker-doc"
-    root_pattern = re.compile(
-        rf"<main\b(?P<attrs>[^<>]*(?<![\w:-])id\s*=\s*(['\"]){re.escape(expected_id)}\2[^<>]*)>",
-        re.IGNORECASE | re.DOTALL,
-    )
-    return _unprotected_matches(root_pattern, html)
+    return [
+        match
+        for match in _unprotected_matches(_OPEN_TAG_RE, html)
+        if match.group("tag").lower() == "main"
+        and _attr_value(match.group("attrs"), "id") == expected_id
+    ]
 
 
 def normalize_canonical_html(
@@ -179,11 +180,16 @@ def _semantic_counts(tags: list[tuple[str, dict[str, str]]]) -> dict[str, int]:
 
 def _attr_value(attrs: str, name: str) -> str:
     match = re.search(
-        rf"(?<![\w:-]){re.escape(name)}\s*=\s*(['\"])(?P<value>.*?)\1",
+        rf"(?<![\w:-]){re.escape(name)}\s*=\s*(?:"
+        rf"(?P<quote>['\"])(?P<quoted>.*?)(?P=quote)|"
+        rf"(?P<bare>[^\s'\"`=<>]+))",
         attrs,
         re.IGNORECASE | re.DOTALL,
     )
-    return html_lib.unescape(match.group("value")).strip() if match else ""
+    if not match:
+        return ""
+    value = match.group("quoted") if match.group("quote") else match.group("bare")
+    return html_lib.unescape(value or "").strip()
 
 
 
@@ -276,7 +282,9 @@ def _transform_unprotected(html: str, transform: Any) -> str:
 def _set_attr(tag: str, name: str, value: str) -> str:
     escaped = html_lib.escape(value, quote=True)
     pattern = re.compile(
-        rf"(?P<prefix>\s{re.escape(name)}\s*=\s*)(?P<quote>['\"])(?P<value>.*?)(?P=quote)",
+        rf"(?P<prefix>\s{re.escape(name)}\s*=\s*)(?:"
+        rf"(?P<quote>['\"])(?P<quoted>.*?)(?P=quote)|"
+        rf"(?P<bare>[^\s'\"`=<>]+))",
         re.IGNORECASE | re.DOTALL,
     )
     if pattern.search(tag):
