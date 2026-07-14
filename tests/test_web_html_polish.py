@@ -736,13 +736,18 @@ def test_polish_web_html_document_unwraps_frontiers_and_links_references() -> No
 
     assert result.html.count('id="web-doc"') == 1
     assert '<button type="button" color="Blue40"' not in result.html
-    assert 'href="#B24" id="B24-button" data-z2m-node-kind="reference"> 1995 </a>' in result.html
     assert (
-        'href="#ref9" id="ref9-button" data-z2m-node-kind="reference"> '
-        "Bourne et al., 2017 </a>" in result.html
+        '<a class="ArticleReference z2m-frontiers-citation" href="#B24" id="B24-button"> 1995 </a>'
+        in result.html
     )
-    assert 'href="#B31" id="B31-button" data-z2m-node-kind="reference"> ' in result.html
-    assert "Grill-Spector and Weiner, 2014 </a>" in result.html
+    assert (
+        '<a class="ArticleReference z2m-frontiers-citation" href="#ref9" id="ref9-button"> Bourne et al., 2017 </a>'
+        in result.html
+    )
+    assert (
+        '<a class="ArticleReference z2m-frontiers-citation" href="#B31" id="B31-button"> Grill-Spector and Weiner, 2014 </a>'
+        in result.html
+    )
     assert 'class="References"' in result.html
     assert ".References__item" in result.html
     assert ".ArticleReference.z2m-frontiers-citation" in result.html
@@ -806,17 +811,14 @@ def test_polish_web_html_document_removes_discovered_js_chrome_and_supplementary
     assert "collections-action-dialog-form" not in result.html
     assert "usa-accordion__button" not in result.html
     assert "d-button" not in result.html
-    assert '<figure id="F1" data-z2m-node-kind="figure">' in result.html
+    assert '<figure id="F1">' in result.html
     assert "Visible figure caption." in result.html
     assert (
         '<span class="ArticleReference z2m-frontiers-unresolved-reference" '
         'data-z2m-unresolved-reference="sm1">Supplementary Material</span>'
         in result.html
     )
-    assert (
-        '<a class="ArticleReference z2m-frontiers-citation" href="#B2" '
-        'data-z2m-node-kind="reference">reference two</a>' in result.html
-    )
+    assert '<a class="ArticleReference z2m-frontiers-citation" href="#B2">reference two</a>' in result.html
 
 
 def test_polish_web_html_document_does_not_inject_mathjax_when_static_katex_unavailable(monkeypatch) -> None:
@@ -1433,10 +1435,7 @@ def test_polish_web_html_document_repairs_pdf_like_block_flow() -> None:
     assert "<table" in result.html
     assert "Before table." in result.html
     assert "After table." in result.html
-    assert (
-        '<figure class="z2m-standalone-media source-media" data-z2m-node-kind="figure" '
-        'id="fig-1"><img src="figure1.png"' in result.html
-    )
+    assert '<figure class="z2m-standalone-media source-media" id="fig-1"><img src="figure1.png"' in result.html
     assert '<ul id="refs">' in result.html
     assert "<p><table" not in result.html
     assert '<p><ul id="refs">' not in result.html

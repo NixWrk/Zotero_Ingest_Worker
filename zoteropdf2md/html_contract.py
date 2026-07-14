@@ -15,7 +15,6 @@ DOCUMENT_ROOT_ATTR = "data-z2m-document-root"
 DOCUMENT_KIND_ATTR = "data-z2m-document-kind"
 PROFILE_ATTR = "data-z2m-profile"
 PROFILE_VERSION_ATTR = "data-z2m-profile-version"
-NODE_KIND_ATTR = "data-z2m-node-kind"
 
 _OPEN_TAG_RE = re.compile(r"<(?P<tag>[A-Za-z][\w:-]*)\b(?P<attrs>[^<>]*?)>", re.DOTALL)
 _REFERENCE_ID_RE = re.compile(
@@ -140,32 +139,20 @@ def _normalize_semantic_nodes(html: str) -> str:
 
     def annotate(match: re.Match[str]) -> str:
         tag = match.group("tag").lower()
-        if tag not in counters:
+        if tag not in counters or _attr_value(match.group("attrs"), "id"):
             return match.group(0)
-        opening = match.group(0)
-        opening = _append_attr_token(opening, NODE_KIND_ATTR, tag)
-        if _attr_value(match.group("attrs"), "id"):
-            return opening
         counters[tag] += 1
         candidate = f"{tag[:3]}-{counters[tag]}"
         while candidate in used_ids:
             counters[tag] += 1
             candidate = f"{tag[:3]}-{counters[tag]}"
         used_ids.add(candidate)
-        return _set_attr(opening, "id", candidate)
+        return _set_attr(match.group(0), "id", candidate)
 
-    def annotate_reference(match: re.Match[str]) -> str:
-        opening = match.group(0)
-        attrs = match.group("attrs")
-        if not _is_reference_node(attrs):
-            return opening
-        return _append_attr_token(opening, NODE_KIND_ATTR, "reference")
-
-    def normalize_markup(fragment: str) -> str:
-        normalized = _OPEN_TAG_RE.sub(annotate, fragment)
-        return _OPEN_TAG_RE.sub(annotate_reference, normalized)
-
-    return _transform_unprotected(html, normalize_markup)
+    return _transform_unprotected(
+        html,
+        lambda fragment: _OPEN_TAG_RE.sub(annotate, fragment),
+    )
 
 
 def _semantic_counts(tags: list[tuple[str, dict[str, str]]]) -> dict[str, int]:
@@ -173,15 +160,13 @@ def _semantic_counts(tags: list[tuple[str, dict[str, str]]]) -> dict[str, int]:
     annotated = {"section": 0, "figure": 0, "reference": 0}
     for tag, attrs in tags:
         identifier = attrs.get("id", "")
-        node_kinds = set(attrs.get(NODE_KIND_ATTR, "").split())
         if tag in {"section", "figure"}:
             totals[tag] += 1
-            if tag in node_kinds and identifier:
+            if identifier:
                 annotated[tag] += 1
         if _is_reference_attrs(attrs):
             totals["reference"] += 1
-            if "reference" in node_kinds:
-                annotated["reference"] += 1
+            annotated["reference"] += 1
     return {
         "section_total": totals["section"],
         "section_annotated": annotated["section"],
@@ -200,14 +185,6 @@ def _attr_value(attrs: str, name: str) -> str:
     )
     return html_lib.unescape(match.group("value")).strip() if match else ""
 
-
-def _is_reference_node(attrs: str) -> bool:
-    return _is_reference_attrs(
-        {
-            name: _attr_value(attrs, name)
-            for name in ("id", "href", "role", "epub:type")
-        }
-    )
 
 
 def _is_reference_attrs(attrs: dict[str, str]) -> bool:
@@ -294,14 +271,6 @@ def _transform_unprotected(html: str, transform: Any) -> str:
     parts.append(transform(html[cursor:]))
     return "".join(parts)
 
-
-def _append_attr_token(tag: str, name: str, token: str) -> str:
-    current = _attr_value(tag, name)
-    tokens = current.split()
-    if token in tokens:
-        return tag
-    tokens.append(token)
-    return _set_attr(tag, name, " ".join(tokens))
 
 
 def _set_attr(tag: str, name: str, value: str) -> str:

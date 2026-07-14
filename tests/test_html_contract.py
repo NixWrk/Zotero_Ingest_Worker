@@ -57,7 +57,8 @@ def test_normalize_canonical_html_is_idempotent_for_source_and_pdf(
     assert f'data-z2m-document-kind="{document_kind}"' in normalized
     assert 'id="sec-1"' in normalized
     assert 'id="fig-1"' in normalized
-    assert 'id="B2" data-z2m-node-kind="section reference"' in normalized
+    assert '<section id="B2">' in normalized
+    assert "data-z2m-node-kind" not in normalized
     assert report["status"] == "passed"
     assert report["document_kind"] == document_kind
     assert report["provenance_kind"] == provenance_kind
