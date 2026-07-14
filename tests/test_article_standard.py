@@ -12,6 +12,7 @@ from zotero_ingest_worker.article_standard import (
     standardize_native_html_download,
 )
 from zotero_ingest_worker.full_text_attachment import _html_attachment_source_with_embedded_assets
+from zoteropdf2md.html_contract import CANONICAL_HTML_PROFILE
 
 
 def test_standardize_native_html_download_writes_article_package(tmp_path: Path) -> None:
@@ -58,6 +59,7 @@ def test_standardize_native_html_download_writes_article_package(tmp_path: Path)
     assert article_html.name == "article.html"
     normalized = article_html.read_text(encoding="utf-8")
     assert 'id="web-doc"' in normalized
+    assert f'data-z2m-profile="{CANONICAL_HTML_PROFILE}"' in normalized
     assert "<script" not in normalized
     assert "unused-logo" not in normalized
     assert "assets/figure.png" in normalized
@@ -69,12 +71,17 @@ def test_standardize_native_html_download_writes_article_package(tmp_path: Path)
 
     manifest = json.loads(Path(package["manifest_path"]).read_text(encoding="utf-8"))
     quality = json.loads(Path(package["quality_path"]).read_text(encoding="utf-8"))
+    assert manifest["schema_version"] == 1
     assert manifest["standard"] == ARTICLE_HTML_STANDARD_VERSION
+    assert manifest["canonical"]["profile"] == CANONICAL_HTML_PROFILE
+    assert manifest["canonical"]["status"] == "passed"
+    assert manifest["canonical"]["provenance_kind"] == "generic_article"
     assert manifest["article"]["identifiers"]["doi"] == "10.1000/example"
     assert manifest["normalizer"]["polish"]["kind"] == "generic_article"
     assert manifest["normalizer"]["polish"]["article_extracted"] is False
     assert package["polish"]["inlined_images"] == 1
     assert quality["status"] == "passed"
+    assert quality["canonical_contract"]["status"] == "passed"
 
 
 def test_standard_article_html_assets_can_be_embedded_for_zotero_attachment(tmp_path: Path) -> None:

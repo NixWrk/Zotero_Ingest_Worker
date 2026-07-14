@@ -29,6 +29,7 @@ from .html_images import (
     to_data_url,
     validate_data_url,
 )
+from .html_contract import normalize_canonical_html
 from .raw_html_polish.katex import render_katex_html
 from .html_links import (
     _ATTR_HREF_RE,
@@ -238,8 +239,11 @@ def polish_web_html_document(
     same-document links, and wrap the result in a stable readable shell.
     """
 
+    html = html.replace("\r\n", "\n").replace("\r", "\n")
+    prior_kind, prior_selector = _existing_web_polish_metadata(html)
+    prior_title = _document_title(html) if prior_kind is not None or prior_selector else ""
     html = unwrap_existing_web_polish_document(html)
-    kind = detect_web_html_kind(html, source_url=source_url)
+    kind = prior_kind or detect_web_html_kind(html, source_url=source_url)
     if kind == WebHtmlKind.SCIENDO_ABSTRACT_PAGE:
         full_text_url = _sciendo_full_text_url(html, source_url=source_url)
         if not full_text_url:
@@ -256,7 +260,7 @@ def polish_web_html_document(
         rejection_message = rejection_message_for_kind(kind)
         if rejection_message is not None:
             raise WebHtmlPolishError(rejection_message)
-    title = _document_title(html)
+    title = prior_title or _document_title(html)
     declared_urls = _declared_document_urls(html)
     inferred_canonical_url = canonical_url or (declared_urls[0] if declared_urls else None)
     extraction = extract_web_article_fragment(html, kind=kind)
@@ -309,18 +313,24 @@ def polish_web_html_document(
     article_html = remove_empty_tables(article_html)
     article_html = remove_empty_figure_shells(article_html)
     article_html = remove_unresolved_local_fragment_hrefs(article_html)
+    article_selector = prior_selector or extraction.selector
     wrapped = _wrap_web_article_html(
         article_html,
         kind=kind,
         title=title,
-        article_selector=extraction.selector,
+        article_selector=article_selector,
     )
     wrapped = render_katex_html(wrapped, ensure_head=_ensure_web_html_head)
+    wrapped = normalize_canonical_html(
+        wrapped,
+        document_kind="source",
+        provenance_kind=kind.value,
+    )
     return WebHtmlPolishResult(
         html=wrapped,
         kind=kind,
         article_extracted=extraction.extracted,
-        article_selector=extraction.selector,
+        article_selector=article_selector,
         same_document_links_rewritten=canonicalized.rewritten_count,
         unresolved_same_document_links=canonicalized.unresolved_count,
     )
@@ -377,6 +387,25 @@ def polish_web_html_file(
         attempted_source_figures=attempted_source_figures,
         source_recovery_errors=source_recovery_errors,
     )
+
+
+def _existing_web_polish_metadata(html: str) -> tuple[WebHtmlKind | None, str | None]:
+    for match in _HTML_TAG_RE.finditer(html):
+        if match.group(0).startswith("</") or match.group("tag").lower() != "main":
+            continue
+        attrs = match.group("attrs") or ""
+        if (_attr_value(attrs, "id") or "") != "web-doc":
+            continue
+        raw_kind = (_attr_value(attrs, "data-z2m-source-kind") or "").strip()
+        try:
+            kind = WebHtmlKind(raw_kind)
+        except ValueError:
+            kind = None
+        if kind == WebHtmlKind.UNKNOWN:
+            kind = None
+        selector = (_attr_value(attrs, "data-z2m-article-selector") or "").strip() or None
+        return kind, selector
+    return None, None
 
 
 def unwrap_existing_web_polish_document(html: str) -> str:

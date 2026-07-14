@@ -10,6 +10,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from zoteropdf2md.html_contract import canonical_contract_report
 from zoteropdf2md.web_html_polish import polish_web_html_file
 from zoteropdf2md.web_polish.core import WebHtmlPolishError
 
@@ -170,7 +171,9 @@ def build_article_manifest(
 ) -> dict[str, Any]:
     identifiers = _metadata_identifiers(metadata)
     return {
+        "schema_version": 1,
         "standard": ARTICLE_HTML_STANDARD_VERSION,
+        "canonical": quality["canonical_contract"],
         "normalizer": {
             "kind": "native_html",
             "version": NATIVE_HTML_NORMALIZER_VERSION,
@@ -246,6 +249,7 @@ def evaluate_article_html(
     )
     unsafe_attribute_count = _unsafe_attribute_count(text)
     math = _math_strategy(text)
+    canonical_contract = canonical_contract_report(text)
 
     failures: list[str] = []
     warnings: list[str] = []
@@ -265,8 +269,12 @@ def evaluate_article_html(
         failures.append("active_media_present")
     if unsafe_attribute_count:
         failures.append("unsafe_attributes_present")
+    if canonical_contract["status"] == "failed":
+        failures.append("canonical_contract_failed")
     if missing_internal_links:
         warnings.append("missing_internal_link_targets")
+    if canonical_contract["status"] == "warning":
+        warnings.append("canonical_contract_warning")
     status = "failed" if failures else "warning" if warnings else "passed"
     return {
         "standard": ARTICLE_HTML_STANDARD_VERSION,
@@ -285,6 +293,7 @@ def evaluate_article_html(
         "missing_internal_links": missing_internal_links,
         "bibliography_anchor_count": _bibliography_anchor_count(anchors),
         "math_strategy": math,
+        "canonical_contract": canonical_contract,
         "article_verdict": article_verdict,
         "failures": failures,
         "warnings": warnings,
