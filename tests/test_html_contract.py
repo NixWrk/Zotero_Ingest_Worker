@@ -170,6 +170,38 @@ def test_normalize_accepts_unquoted_ids_without_duplicating_semantic_ids(
     assert report["duplicate_attributes"] == []
 
 
+@pytest.mark.parametrize(
+    ("document_kind", "root_id", "spoof_id"),
+    [
+        ("source", "web-doc", "marker-doc"),
+        ("pdf", "marker-doc", "web-doc"),
+    ],
+)
+def test_normalize_strips_spoofed_identity_from_other_main(
+    document_kind: str,
+    root_id: str,
+    spoof_id: str,
+) -> None:
+    raw = (
+        f'<main id="{root_id}"><main id={spoof_id} '
+        'data-z2m-document-root=1 data-z2m-profile=spoof '
+        'data-z2m-profile-version=999 data-z2m-document-kind=source '
+        'data-z2m-provenance-kind=spoof>Text</main></main>'
+    )
+
+    normalized = normalize_canonical_html(
+        raw,
+        document_kind=document_kind,
+        provenance_kind="strict_audit",
+    )
+    report = canonical_contract_report(normalized)
+
+    assert normalized.count('data-z2m-document-root="1"') == 1
+    assert "spoof" not in normalized
+    assert f"id={spoof_id}" in normalized
+    assert report["status"] == "passed"
+
+
 def test_attribute_reader_does_not_treat_data_role_as_reference_role() -> None:
     normalized = normalize_canonical_html(
         '<main id="web-doc"><p data-role="doc-biblioref">Text</p></main>',

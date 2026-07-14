@@ -15,6 +15,13 @@ DOCUMENT_ROOT_ATTR = "data-z2m-document-root"
 DOCUMENT_KIND_ATTR = "data-z2m-document-kind"
 PROFILE_ATTR = "data-z2m-profile"
 PROFILE_VERSION_ATTR = "data-z2m-profile-version"
+_CANONICAL_IDENTITY_ATTRS = (
+    DOCUMENT_ROOT_ATTR,
+    PROFILE_ATTR,
+    PROFILE_VERSION_ATTR,
+    DOCUMENT_KIND_ATTR,
+    "data-z2m-provenance-kind",
+)
 
 _OPEN_TAG_RE = re.compile(r"<(?P<tag>[A-Za-z][\w:-]*)\b(?P<attrs>[^<>]*?)>", re.DOTALL)
 _REFERENCE_ID_RE = re.compile(
@@ -56,6 +63,7 @@ def normalize_canonical_html(
     if document_kind not in {"source", "pdf"}:
         raise ValueError(f"Unsupported canonical document kind: {document_kind}")
     provenance_kind = provenance_kind.strip()
+    html = _strip_canonical_identity_from_other_mains(html, document_kind=document_kind)
     if not provenance_kind:
         raise ValueError("Canonical provenance kind must not be empty")
 
@@ -74,6 +82,25 @@ def normalize_canonical_html(
     opening = _set_attr(opening, "data-z2m-provenance-kind", provenance_kind)
     normalized = html[: root.start()] + opening + html[root.end() :]
     return _normalize_semantic_nodes(normalized)
+
+def _strip_canonical_identity_from_other_mains(
+    html: str,
+    *,
+    document_kind: str,
+) -> str:
+    expected_id = "web-doc" if document_kind == "source" else "marker-doc"
+
+    def strip_spoofed_identity(match: re.Match[str]) -> str:
+        if match.group("tag").lower() != "main":
+            return match.group(0)
+        if _attr_value(match.group("attrs"), "id") == expected_id:
+            return match.group(0)
+        opening = match.group(0)
+        for name in _CANONICAL_IDENTITY_ATTRS:
+            opening = _remove_attr(opening, name)
+        return opening
+
+    return _transform_unprotected(html, lambda fragment: _OPEN_TAG_RE.sub(strip_spoofed_identity, fragment))
 
 
 def canonical_contract_report(html: str) -> dict[str, Any]:
@@ -291,3 +318,13 @@ def _set_attr(tag: str, name: str, value: str) -> str:
         return pattern.sub(lambda match: f'{match.group("prefix")}"{escaped}"', tag, count=1)
     close = "/>" if tag.endswith("/>") else ">"
     return f'{tag[: -len(close)]} {name}="{escaped}"{close}'
+
+
+def _remove_attr(tag: str, name: str) -> str:
+    pattern = re.compile(
+        rf"\s+{re.escape(name)}(?=\s*=|\s|/?>)(?:\s*=\s*(?:"
+        rf"(?P<quote>['\"])(?P<quoted>.*?)(?P=quote)|"
+        rf"(?P<bare>[^\s'\"`=<>]+)))?",
+        re.IGNORECASE | re.DOTALL,
+    )
+    return pattern.sub("", tag)
