@@ -118,7 +118,6 @@ def download_html_sources(
 
 def _html_probe_priority(location: FullTextLocation) -> tuple[int, int, int, str]:
     kind = location.kind.casefold()
-    source = location.source.casefold()
     url = location.url.casefold()
     if not should_probe_for_html(location):
         return (3, 9, 9, url)
@@ -712,7 +711,6 @@ def assess_article_html(
     lower = raw.casefold()
     title = html_title(body)
     text = visible_html_text(raw)
-    text_lower = text.casefold()
     title_score = title_match_score(expected_title, title) if expected_title and title else 0.0
     markers = article_markers(raw)
     section_markers = article_section_markers(text)
@@ -1015,7 +1013,7 @@ class ResourceReferenceParser(HTMLParser):
         self._seen: set[str] = set()
         self._order = 0
         self.base_href = ""
-        self._in_style = False
+        self._embedded_media_depth = 0
 
     @property
     def resource_urls(self) -> list[str]:
@@ -1026,34 +1024,26 @@ class ResourceReferenceParser(HTMLParser):
         tag = tag.casefold()
         if tag == "base" and not self.base_href:
             self.base_href = attrs_dict.get("href", "").strip()
+        if tag in {"audio", "video"}:
+            self._embedded_media_depth += 1
+            return
         if tag in {"img", "source"}:
+            if self._embedded_media_depth:
+                return
             for attr in ("src", "data-src", "data-original", "data-lazy-src"):
-                self._add(attrs_dict.get(attr, ""), priority=1)
+                self._add_image(attrs_dict.get(attr, ""), attrs=attrs_dict)
             for attr in ("srcset", "data-srcset"):
                 for url in parse_srcset(attrs_dict.get(attr, "")):
-                    self._add(url, priority=1)
-        if tag == "video":
-            self._add(attrs_dict.get("poster", ""), priority=1)
-        if tag == "script":
-            self._add(attrs_dict.get("src", ""), priority=3)
-        if tag == "link":
-            rel = attrs_dict.get("rel", "").casefold()
-            as_value = attrs_dict.get("as", "").casefold()
-            if any(token in rel for token in ("stylesheet", "icon")) or as_value in {"image", "style", "font"}:
-                priority = 1 if as_value == "image" else 2 if "stylesheet" in rel or as_value == "style" else 3
-                self._add(attrs_dict.get("href", ""), priority=priority)
-        if tag == "style":
-            self._in_style = True
+                    self._add_image(url, attrs=attrs_dict)
 
     def handle_endtag(self, tag: str) -> None:
-        if tag.casefold() == "style":
-            self._in_style = False
+        if tag.casefold() in {"audio", "video"} and self._embedded_media_depth:
+            self._embedded_media_depth -= 1
 
-    def handle_data(self, data: str) -> None:
-        if not self._in_style:
+    def _add_image(self, url: str, *, attrs: dict[str, str]) -> None:
+        if not should_download_snapshot_image(url, attrs=attrs):
             return
-        for url in css_resource_references(data):
-            self._add(url, priority=2)
+        self._add(url, priority=1)
 
     def _add(self, url: str, *, priority: int) -> None:
         url = str(url or "").strip()
@@ -1273,6 +1263,99 @@ def should_skip_asset_url(url: str) -> bool:
         or lowered.startswith(("data:", "javascript:", "mailto:", "#"))
         or lowered.endswith(".pdf")
     )
+
+
+def should_download_snapshot_image(url: str, *, attrs: dict[str, str]) -> bool:
+    url = str(url or "").strip()
+    if not url or should_skip_asset_url(url):
+        return False
+    parsed = urllib.parse.urlparse(url)
+    structural_probe = " ".join(
+        (
+            urllib.parse.unquote(f"{parsed.path}?{parsed.query}"),
+            attrs.get("id", ""),
+            attrs.get("class", ""),
+            attrs.get("role", ""),
+            attrs.get("data-testid", ""),
+            attrs.get("style", ""),
+        )
+    ).casefold()
+    semantic_probe = " ".join(
+        (
+            structural_probe,
+            attrs.get("alt", ""),
+            attrs.get("title", ""),
+        )
+    ).casefold()
+    structural_tokens = set(re.sub(r"[^a-z0-9]+", " ", structural_probe).split())
+    semantic_tokens = set(re.sub(r"[^a-z0-9]+", " ", semantic_probe).split())
+    ui_tokens = {
+        "analytics",
+        "avatar",
+        "badge",
+        "button",
+        "crossmark",
+        "favicon",
+        "icon",
+        "loader",
+        "loading",
+        "logo",
+        "pixel",
+        "share",
+        "social",
+        "sprite",
+        "spinner",
+        "toolbar",
+        "tracking",
+    }
+    semantic_ui_tokens = {
+        "avatar",
+        "crossmark",
+        "favicon",
+        "icon",
+        "loader",
+        "loading",
+        "logo",
+        "spinner",
+    }
+    if structural_tokens & ui_tokens or semantic_tokens & semantic_ui_tokens:
+        return False
+    scientific_tokens = (
+        "chart",
+        "diagram",
+        "equation",
+        "fig",
+        "figure",
+        "graph",
+        "plot",
+        "scheme",
+    )
+    has_scientific_marker = any(
+        token.startswith(scientific_tokens) for token in semantic_tokens
+    )
+    suffix = Path(parsed.path).suffix.casefold()
+    if suffix == ".svg" and not has_scientific_marker:
+        return False
+    if "hidden" in attrs and not has_scientific_marker:
+        return False
+    if attrs.get("aria-hidden", "").casefold() == "true" and not has_scientific_marker:
+        return False
+    if attrs.get("role", "").casefold() in {"none", "presentation"} and not has_scientific_marker:
+        return False
+    width = _numeric_html_dimension(attrs.get("width", ""))
+    height = _numeric_html_dimension(attrs.get("height", ""))
+    if not has_scientific_marker and (
+        width is not None
+        and height is not None
+        and (width <= 1 or height <= 1 or width * height <= 16)
+    ):
+        return False
+    return True
+
+
+def _numeric_html_dimension(value: str) -> int | None:
+    match = re.fullmatch(r"\s*(\d+)(?:\.0+)?(?:px)?\s*", str(value or ""), flags=re.IGNORECASE)
+    return int(match.group(1)) if match is not None else None
 
 
 def resource_priority(url: str) -> int:

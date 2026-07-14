@@ -160,7 +160,7 @@ def test_fetch_html_source_uses_base_href_for_relative_assets(monkeypatch: Any, 
     assert result.assets["saved"] == 1
 
 
-def test_fetch_html_source_saves_style_import_assets(monkeypatch: Any, tmp_path: Path) -> None:
+def test_fetch_html_source_does_not_download_publisher_style_assets(monkeypatch: Any, tmp_path: Path) -> None:
     requested_urls: list[str] = []
 
     def fake_urlopen(request: Any, timeout: int) -> FakeResponse:
@@ -179,12 +179,6 @@ def test_fetch_html_source_saves_style_import_assets(monkeypatch: Any, tmp_path:
                     "</main></body></html>"
                 ).encode("utf-8"),
             )
-        if request.full_url == "https://arxiv.org/html/2602.09735v1/ar5iv.css":
-            return FakeResponse(
-                url="https://arxiv.org/html/2602.09735v1/ar5iv.css",
-                content_type="text/css; charset=utf-8",
-                body=b".ltx_document { display: block; }",
-            )
         raise AssertionError(request.full_url)
 
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
@@ -193,11 +187,10 @@ def test_fetch_html_source_saves_style_import_assets(monkeypatch: Any, tmp_path:
     result = fetch_html_source(location, output_dir=tmp_path, timeout_seconds=10, expected_title="Article")
 
     assert result.ok
-    assert "https://arxiv.org/html/2602.09735v1/ar5iv.css" in requested_urls
+    assert requested_urls == ["https://arxiv.org/html/2602.09735"]
     saved = Path(result.output_path).read_text(encoding="utf-8")
-    assert "@import \"./ar5iv.css\"" not in saved
-    assert "_assets/" in saved
-    assert result.assets["saved"] == 1
+    assert '@import "./ar5iv.css"' in saved
+    assert result.assets["saved"] == 0
 
 
 def test_fetch_html_source_rejects_declared_oversize_before_read(
@@ -343,7 +336,7 @@ def test_snapshot_asset_enforces_total_budget_before_read(
     assert response.read_sizes == []
 
 
-def test_snapshot_css_reserves_asset_slot_before_recursive_fetch(
+def test_snapshot_does_not_fetch_stylesheet_or_recursive_background_assets(
     monkeypatch: Any,
     tmp_path: Path,
 ) -> None:
@@ -351,12 +344,7 @@ def test_snapshot_css_reserves_asset_slot_before_recursive_fetch(
 
     def fake_urlopen(request: Any, timeout: int) -> FakeResponse:
         requested_urls.append(request.full_url)
-        assert request.full_url == "https://journal.example/style.css"
-        return FakeResponse(
-            url=request.full_url,
-            content_type="text/css",
-            body=b"body { background: url(figure.png); }",
-        )
+        raise AssertionError(request.full_url)
 
     monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
     report = write_html_snapshot(
@@ -368,9 +356,10 @@ def test_snapshot_css_reserves_asset_slot_before_recursive_fetch(
         max_assets=1,
     )
 
-    assert report["saved"] == 1
-    assert report["failures"][0]["reason"] == "asset_limit"
-    assert requested_urls == ["https://journal.example/style.css"]
+    assert report["saved"] == 0
+    assert report["failed"] == 0
+    assert requested_urls == []
+    assert 'href="style.css"' in (tmp_path / "article.html").read_text(encoding="utf-8")
 
 
 def test_fetch_html_source_rejects_title_mismatch(monkeypatch: Any, tmp_path: Path) -> None:
@@ -898,18 +887,77 @@ def test_parse_srcset_keeps_iiif_commas_inside_url() -> None:
     ]
 
 
-def test_resource_parser_prioritizes_article_figures_before_icons() -> None:
+def test_resource_parser_keeps_article_figures_and_drops_ui_or_active_assets() -> None:
     parser = ResourceReferenceParser()
     parser.feed(
         """
-        <html><body>
+        <html>
+        <head>
+          <script src="/runtime.js"></script>
+          <link rel="stylesheet" href="/site.css">
+          <link rel="icon" href="/favicon.ico">
+          <link rel="preload" as="font" href="/font.woff2">
+        </head><body>
+          <img class="site-logo" src="/static/logo.svg">
+          <img alt="Crossmark" src="/crossmark.gif">
+          <img width="1" height="1" src="/analytics.gif">
           <img src="/static/img/launch.svg">
-          <img src="/pmc/blobs/article/Fig1_HTML.jpg">
+          <img role="presentation" src="/decorative.png">
+          <img hidden src="/hidden-ad.png">
+          <img width="1" height="100" src="/tracking-strip.png">
+          <figure><img src="/pmc/blobs/article/Fig1_HTML.jpg"></figure>
+          <picture><source srcset="/pmc/blobs/article/Fig2.webp 1x"></picture>
+          <figure><img src="/figures/method-diagram.svg"></figure>
+          <figure><img src="https://brand.example/figures/brand-effect.png"
+                       alt="Figure showing brand trust"></figure>
+          <video poster="/video-poster.jpg"><source src="/supplement.mp4"></video>
         </body></html>
         """
     )
 
     assert parser.resource_urls == [
         "/pmc/blobs/article/Fig1_HTML.jpg",
-        "/static/img/launch.svg",
+        "/pmc/blobs/article/Fig2.webp",
+        "https://brand.example/figures/brand-effect.png",
+        "/figures/method-diagram.svg",
     ]
+
+
+def test_snapshot_downloads_only_article_image_candidates(monkeypatch: Any, tmp_path: Path) -> None:
+    requested_urls: list[str] = []
+
+    def fake_urlopen(request: Any, timeout: int) -> FakeResponse:
+        requested_urls.append(request.full_url)
+        return FakeResponse(
+            url=request.full_url,
+            content_type="image/jpeg",
+            body=b"figure",
+        )
+
+    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    output = tmp_path / "article.html"
+    report = write_html_snapshot(
+        b"""
+        <html><head>
+          <script src="runtime.js"></script>
+          <link rel="stylesheet" href="site.css">
+          <link rel="icon" href="favicon.ico">
+        </head><body>
+          <img class="site-logo" src="logo.svg">
+          <img src="figures/Figure1.jpg">
+          <video poster="poster.jpg"><source src="supplement.mp4"></video>
+        </body></html>
+        """,
+        base_url="https://journal.example/article/",
+        output_path=output,
+        timeout_seconds=10,
+        user_agent="test",
+    )
+
+    assert requested_urls == ["https://journal.example/article/figures/Figure1.jpg"]
+    assert report["saved"] == 1
+    saved = output.read_text(encoding="utf-8")
+    assert "article_assets/001." in saved
+    assert 'src="runtime.js"' in saved
+    assert 'href="site.css"' in saved
+    assert 'poster="poster.jpg"' in saved
