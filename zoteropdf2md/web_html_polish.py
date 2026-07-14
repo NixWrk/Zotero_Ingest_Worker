@@ -37,7 +37,7 @@ from .html_links import (
     _is_root_relative_url,
     _urlsplit_or_none,
     canonicalize_same_document_links,
-    count_same_document_absolute_fragment_links,
+    count_same_document_absolute_fragment_links as count_same_document_absolute_fragment_links,
     declared_document_urls as _declared_document_urls,
     extract_html_fragment_targets,
     is_plain_local_fragment,
@@ -49,10 +49,8 @@ from .web_polish.core import (
     _HTML_TAG_RE,
     _attr_value,
     _balanced_element_from_match,
-    _extract_fragment_by_attr_tokens,
     _remove_elements_by_attr_tokens,
     _set_attr_value,
-    _strip_non_article_payloads,
     _visible_text,
     _visible_text_length,
     extract_generic_web_article_fragment,
@@ -125,6 +123,23 @@ _ROOT_RELATIVE_URL_ATTR_RE = re.compile(
 )
 _TITLE_RE = re.compile(r"<title\b[^>]*>(?P<title>[\s\S]*?)</title>", re.IGNORECASE)
 _META_TAG_RE = re.compile(r"<meta\b(?P<attrs>[^>]*)>", re.IGNORECASE | re.DOTALL)
+_EVENT_HANDLER_ATTR_RE = re.compile(
+    r"\s+on[A-Za-z][\w:-]*\s*=\s*(?:'[^']*'|\"[^\"]*\"|[^\s>]+)",
+    re.IGNORECASE | re.DOTALL,
+)
+_ACTIVE_URL_ATTR_RE = re.compile(
+    r"\s+(?P<name>href|src|action|formaction|poster|data|xlink:href)\s*=\s*"
+    r"(?:(?P<quote>['\"])(?P<quoted>.*?)(?P=quote)|(?P<bare>[^\s>]+))",
+    re.IGNORECASE | re.DOTALL,
+)
+_SRCDOC_ATTR_RE = re.compile(
+    r"\s+srcdoc\s*=\s*(?:'[^']*'|\"[^\"]*\"|[^\s>]+)",
+    re.IGNORECASE | re.DOTALL,
+)
+_STYLE_ATTR_RE = re.compile(
+    r"\s+style\s*=\s*(?:(?P<quote>['\"])(?P<quoted>.*?)(?P=quote)|(?P<bare>[^\s>]+))",
+    re.IGNORECASE | re.DOTALL,
+)
 _MAX_LOCAL_ASSET_REFERENCE_LENGTH = 4096
 _MAX_WEB_HTML_BYTES = 16 * 1024 * 1024
 _MAX_WEB_IMAGE_BYTES = 8 * 1024 * 1024
@@ -254,6 +269,7 @@ def polish_web_html_document(
     )
     normalized_html = normalize_frontiers_reference_links(normalized_html)
     normalized_html = remove_publisher_ui_fragments(normalized_html)
+    normalized_html = sanitize_web_article_attributes(normalized_html)
     canonicalized = canonicalize_same_document_links(
         normalized_html,
         source_url=source_url,
@@ -280,6 +296,14 @@ def polish_web_html_document(
         article_html = remove_latexml_table_color_artifacts(article_html)
         article_html = remove_latexml_description_error_panels(article_html)
         article_html = remove_latexml_inline_black_text_color(article_html)
+    article_html = replace_active_media_with_provenance(
+        article_html,
+        base_url=_root_relative_url_base(
+            kind=kind,
+            canonical_url=inferred_canonical_url,
+            source_url=source_url,
+        ),
+    )
     article_html = repair_empty_image_sources(article_html)
     article_html = repair_web_article_block_flow(article_html)
     article_html = remove_empty_tables(article_html)
@@ -547,7 +571,7 @@ def inline_local_images_from_web_html_document(
             return match.group(0)
         next_entries: list[str] = []
         changed = False
-        for raw_entry in srcset.split(","):
+        for raw_entry in _split_srcset_entries(srcset):
             entry = raw_entry.strip()
             if not entry:
                 continue
@@ -714,7 +738,7 @@ def inline_remote_images_from_web_html_document(
             return match.group(0)
         next_entries: list[str] = []
         changed = False
-        for raw_entry in srcset.split(","):
+        for raw_entry in _split_srcset_entries(srcset):
             entry = raw_entry.strip()
             if not entry:
                 continue
@@ -967,7 +991,7 @@ def absolutize_root_relative_urls(html: str, *, base_url: str | None) -> str:
     def replace_srcset(match: re.Match[str]) -> str:
         changed = False
         entries: list[str] = []
-        for raw_entry in match.group("srcset").split(","):
+        for raw_entry in _split_srcset_entries(match.group("srcset")):
             entry = raw_entry.strip()
             if not entry:
                 continue
@@ -1017,7 +1041,7 @@ def absolutize_arxiv_extracted_asset_urls(html: str, *, base_url: str | None) ->
     def replace_srcset(match: re.Match[str]) -> str:
         changed = False
         entries: list[str] = []
-        for raw_entry in match.group("srcset").split(","):
+        for raw_entry in _split_srcset_entries(match.group("srcset")):
             entry = raw_entry.strip()
             if not entry:
                 continue
@@ -1092,6 +1116,7 @@ def normalize_web_article_fragment(
 def remove_publisher_ui_fragments(html: str) -> str:
     """Drop article-page chrome that often survives generic extraction."""
 
+    html = _remove_balanced_elements_by_tag(html, tags=frozenset({"form", "nav"}))
     html = _remove_elements_by_attr_tokens(
         html,
         (
@@ -1141,6 +1166,139 @@ def remove_publisher_ui_fragments(html: str) -> str:
         tags=("aside", "div", "section", "nav"),
     )
     return html
+
+
+def sanitize_web_article_attributes(html: str) -> str:
+    """Remove executable attributes while preserving inert article markup."""
+
+    def replace_url_attr(match: re.Match[str]) -> str:
+        value = match.group("quoted") if match.group("quote") else match.group("bare")
+        normalized = re.sub(r"[\x00-\x20]+", "", unescape(value or "")).casefold()
+        if normalized.startswith(("javascript:", "vbscript:", "file:")):
+            return ""
+        if match.group("name").casefold() == "href" and normalized.startswith("data:"):
+            return ""
+        return match.group(0)
+
+    def replace_style_attr(match: re.Match[str]) -> str:
+        raw_value = match.group("quoted") if match.group("quote") else match.group("bare")
+        value = unescape(raw_value or "").casefold()
+        compact = re.sub(r"[\x00-\x20]+", "", value)
+        if any(
+            marker in compact
+            for marker in ("url(", "expression(", "@import", "behavior:", "-moz-binding")
+        ):
+            return ""
+        return match.group(0)
+
+    def sanitize_open_tag(match: re.Match[str]) -> str:
+        open_tag = match.group(0)
+        if open_tag.startswith("</"):
+            return open_tag
+        open_tag = _EVENT_HANDLER_ATTR_RE.sub("", open_tag)
+        open_tag = _SRCDOC_ATTR_RE.sub("", open_tag)
+        open_tag = _ACTIVE_URL_ATTR_RE.sub(replace_url_attr, open_tag)
+        return _STYLE_ATTR_RE.sub(replace_style_attr, open_tag)
+
+    return _HTML_TAG_RE.sub(sanitize_open_tag, html)
+
+
+def _remove_balanced_elements_by_tag(html: str, *, tags: frozenset[str]) -> str:
+    cleaned = html
+    while True:
+        for match in _HTML_TAG_RE.finditer(cleaned):
+            if match.group(0).startswith("</") or match.group("tag").casefold() not in tags:
+                continue
+            fragment = _balanced_element_from_match(cleaned, match)
+            if fragment is None:
+                cleaned = cleaned[: match.start()] + " " + cleaned[match.end() :]
+            else:
+                cleaned = cleaned[: match.start()] + " " + cleaned[match.start() + len(fragment) :]
+            break
+        else:
+            return cleaned
+
+
+def replace_active_media_with_provenance(html: str, *, base_url: str | None) -> str:
+    """Replace active embedded media with inert links to the original resource."""
+
+    active_tags = frozenset({"audio", "video", "iframe", "object", "embed"})
+    cleaned = html
+    while True:
+        for match in _HTML_TAG_RE.finditer(cleaned):
+            tag = match.group("tag").casefold()
+            if match.group(0).startswith("</") or tag not in active_tags:
+                continue
+            fragment = _balanced_element_from_match(cleaned, match)
+            if fragment is None:
+                fragment = match.group(0)
+            replacement = _active_media_provenance_placeholder(
+                fragment,
+                tag=tag,
+                attrs=match.group("attrs") or "",
+                base_url=base_url,
+            )
+            cleaned = cleaned[: match.start()] + replacement + cleaned[match.start() + len(fragment) :]
+            break
+        else:
+            return cleaned
+
+
+def _active_media_provenance_placeholder(
+    fragment: str,
+    *,
+    tag: str,
+    attrs: str,
+    base_url: str | None,
+) -> str:
+    raw_url = (_attr_value(attrs, "data") if tag == "object" else None) or _attr_value(
+        attrs, "src"
+    )
+    if not raw_url and tag in {"audio", "video"}:
+        for source_match in _HTML_TAG_RE.finditer(fragment):
+            if source_match.group(0).startswith("</") or source_match.group("tag").casefold() != "source":
+                continue
+            raw_url = _attr_value(source_match.group("attrs") or "", "src")
+            if raw_url:
+                break
+    provenance_url = _safe_media_provenance_url(raw_url, base_url=base_url)
+    if provenance_url is None:
+        provenance_url = _safe_media_provenance_url(base_url, base_url=None)
+    escaped_tag = html_escape(tag, quote=True)
+    label = {
+        "audio": "Open source audio",
+        "video": "Open source video",
+        "iframe": "Open embedded source",
+        "object": "Open embedded object",
+        "embed": "Open embedded source",
+    }[tag]
+    if provenance_url is None:
+        body = f"<span>{html_escape(label)}</span>"
+    else:
+        escaped_url = html_escape(provenance_url, quote=True)
+        body = (
+            f'<a href="{escaped_url}" rel="noopener noreferrer" '
+            f'data-z2m-original-url="{escaped_url}">{html_escape(label)}</a>'
+        )
+    return (
+        f'<aside class="z2m-external-media" data-z2m-media-kind="{escaped_tag}">'
+        f"{body}</aside>"
+    )
+
+
+def _safe_media_provenance_url(raw_url: str | None, *, base_url: str | None) -> str | None:
+    value = unescape(str(raw_url or "")).strip()
+    if not value:
+        return None
+    absolute = urllib.parse.urljoin(base_url or "", value)
+    parsed = _urlsplit_or_none(absolute)
+    if parsed is None or parsed.scheme.casefold() not in {"http", "https"} or not parsed.netloc:
+        return None
+    return absolute
+
+
+def _split_srcset_entries(value: str) -> list[str]:
+    return [entry for entry in re.split(r",\s+", str(value or "")) if entry.strip()]
 
 
 def remove_unresolved_local_fragment_hrefs(html: str) -> str:

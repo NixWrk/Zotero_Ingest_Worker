@@ -21,6 +21,7 @@ from zoteropdf2md.web_polish.registry import (
 from zoteropdf2md.web_html_polish import (
     WebHtmlKind,
     WebHtmlPolishError,
+    absolutize_root_relative_urls,
     canonicalize_same_document_links,
     count_same_document_absolute_fragment_links,
     detect_web_html_kind,
@@ -1809,3 +1810,69 @@ def test_generic_canonicalizer_infers_repeated_non_arxiv_self_links() -> None:
     assert result.rewritten_count == 2
     assert 'href="#sec1"' in result.html
     assert 'href="#sec2"' in result.html
+
+
+def test_polish_web_html_replaces_navigation_and_active_media_with_provenance() -> None:
+    html = f"""
+    <html><head><title>Media Article</title><script src="runtime.js"></script></head><body>
+      <nav><img src="logo.png"><a href="/home">Home</a></nav>
+      <article>
+        <h1>Media Article</h1>
+        <p>{" ".join([LONG_PARAGRAPH] * 20)}</p>
+        <video controls poster="poster.jpg"><source src="media/demo.mp4"></video>
+        <iframe src="/supplement/interactive"></iframe>
+        <object data="javascript:alert(1)"></object>
+        <a href="java&#10;script:alert(2)" onclick="alert(3)"
+           style="background-image: url(https://tracker.example/pixel)">Unsafe link</a>
+        <img src="figure.png" onerror=alert(4)>
+        <span style=background:url(https://tracker2.example/pixel)>Tracked</span>
+        <pre>Code sample: onclick="example" href="javascript:example"</pre>
+      </article>
+    </body></html>
+    """
+
+    result = polish_web_html_document(
+        html,
+        source_url="https://journal.example/articles/one",
+    )
+
+    assert "<script" not in result.html
+    assert "<nav" not in result.html
+    assert "logo.png" not in result.html
+    assert "<video" not in result.html
+    assert "<iframe" not in result.html
+    assert "<object" not in result.html
+    assert 'href="https://journal.example/articles/media/demo.mp4"' in result.html
+    assert 'href="https://journal.example/supplement/interactive"' in result.html
+    assert "javascript:alert" not in result.html
+    assert 'onclick="alert(3)"' not in result.html
+    assert "onerror=alert(4)" not in result.html
+    assert "tracker.example" not in result.html
+    assert "tracker2.example" not in result.html
+    assert "java&#10;script" not in result.html
+    assert "Unsafe link" in result.html
+    assert 'Code sample: onclick="example" href="javascript:example"' in result.html
+    assert result.html.count('rel="noopener noreferrer"') == 3
+
+
+def test_srcset_rewriters_preserve_iiif_commas_inside_urls(tmp_path: Path) -> None:
+    image = tmp_path / "iiif" / "full" / "1234," / "0" / "default.jpg"
+    image.parent.mkdir(parents=True)
+    image.write_bytes(b"JPEG")
+    html = (
+        '<picture><source srcset="iiif/full/1234,/0/default.jpg 1x, '
+        'iiif/full/5678,/0/default.jpg 2x"></picture>'
+    )
+
+    inlined = inline_local_images_from_web_html_document(html, base_dir=tmp_path)
+    absolute = absolutize_root_relative_urls(
+        '<source srcset="/iiif/full/1234,/0/default.jpg 1x, '
+        '/iiif/full/5678,/0/default.jpg 2x">',
+        base_url="https://iiif.example/article",
+    )
+
+    assert inlined.inlined_images == 1
+    assert "data:image/jpeg;base64,SlBFRw==" in inlined.html
+    assert "iiif/full/5678,/0/default.jpg 2x" in inlined.html
+    assert "https://iiif.example/iiif/full/1234,/0/default.jpg 1x" in absolute
+    assert "https://iiif.example/iiif/full/5678,/0/default.jpg 2x" in absolute

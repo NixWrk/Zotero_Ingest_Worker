@@ -19,6 +19,20 @@ def _article_html() -> dict[str, object]:
     }
 
 
+def _native_article_html() -> str:
+    body = " ".join(
+        [
+            "This complete article paragraph contains methods, results, evidence, and discussion."
+        ]
+        * 80
+    )
+    return (
+        "<html><head><title>Article</title></head><body>"
+        f"<article><h1>Article</h1><p>{body}</p></article>"
+        "</body></html>"
+    )
+
+
 def test_article_verdict_rejects_weak_publisher_landing() -> None:
     verdict = html_download_article_verdict(
         {
@@ -71,7 +85,7 @@ def test_article_verdict_accepts_doi_redirect_to_full_article() -> None:
 
 def test_full_text_attachment_service_attaches_html_without_processor(tmp_path: Path) -> None:
     source = tmp_path / "article.html"
-    source.write_text("<html><body>Article</body></html>", encoding="utf-8")
+    source.write_text(_native_article_html(), encoding="utf-8")
     metadata = SimpleNamespace(
         library_id="LIB1",
         data_dir=tmp_path,
@@ -109,7 +123,9 @@ def test_full_text_attachment_service_attaches_html_without_processor(tmp_path: 
     assert captured["dedupe_prefix"] == "full-text-html"
     local_copy = Path(result["local_copy"]["path"])
     assert local_copy.suffix == ".html"
-    assert local_copy.read_text(encoding="utf-8") == "<html><body>Article</body></html>"
+    attached_html = local_copy.read_text(encoding="utf-8")
+    assert 'id="web-doc"' in attached_html
+    assert "This complete article paragraph" in attached_html
     assert result["article_standard"]["ok"] is True
     assert result["raw_html_fallback"] is False
 
@@ -265,7 +281,7 @@ def test_full_text_attachment_service_skips_html_when_source_html_exists(tmp_pat
 
 def test_full_text_attachment_service_trashes_dangling_source_html_before_attach(tmp_path: Path) -> None:
     source = tmp_path / "article.html"
-    source.write_text("<html><body>Article</body></html>", encoding="utf-8")
+    source.write_text(_native_article_html(), encoding="utf-8")
     metadata = SimpleNamespace(
         library_id="LIB1",
         data_dir=tmp_path,
@@ -387,7 +403,7 @@ def test_full_text_attachment_service_reports_local_metadata_failure(
     tmp_path: Path,
 ) -> None:
     source = tmp_path / "article.html"
-    source.write_text("<html><body>Article</body></html>", encoding="utf-8")
+    source.write_text(_native_article_html(), encoding="utf-8")
     metadata = SimpleNamespace(
         library_id="LIB1",
         data_dir=tmp_path,
@@ -429,7 +445,7 @@ def test_full_text_attachment_service_reports_local_metadata_failure(
 
 def test_full_text_attachment_service_enqueues_attached_html_for_translation(tmp_path: Path) -> None:
     source = tmp_path / "article.html"
-    source.write_text("<html><body>Article</body></html>", encoding="utf-8")
+    source.write_text(_native_article_html(), encoding="utf-8")
     metadata = SimpleNamespace(
         library_id="LIB1",
         data_dir=tmp_path,
@@ -556,7 +572,7 @@ def test_full_text_attachment_service_attaches_pdf_when_parent_only_has_html(tmp
 
 def test_full_text_attachment_service_attaches_html_and_pdf_when_both_found(tmp_path: Path) -> None:
     html = tmp_path / "article.html"
-    html.write_text("<html><body>Article</body></html>", encoding="utf-8")
+    html.write_text(_native_article_html(), encoding="utf-8")
     pdf = tmp_path / "article.pdf"
     pdf.write_bytes(b"%PDF")
     metadata = SimpleNamespace(
@@ -603,7 +619,9 @@ def test_full_text_attachment_service_attaches_html_and_pdf_when_both_found(tmp_
     assert result["attached_kinds"] == ["html", "pdf"]
     assert result["pdf_attachment"]["kind"] == "pdf"
     assert [call["content_type"] for call in create_calls] == ["text/html", "application/pdf"]
-    assert Path(result["local_copy"]["path"]).read_text(encoding="utf-8") == "<html><body>Article</body></html>"
+    attached_html = Path(result["local_copy"]["path"]).read_text(encoding="utf-8")
+    assert 'id="web-doc"' in attached_html
+    assert "This complete article paragraph" in attached_html
     assert Path(result["pdf_local_copy"]["path"]).read_bytes() == b"%PDF"
 
 

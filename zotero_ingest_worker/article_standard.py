@@ -5,13 +5,17 @@ import json
 import os
 import re
 import shutil
+import urllib.parse
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from zoteropdf2md.web_html_polish import polish_web_html_file
+from zoteropdf2md.web_polish.core import WebHtmlPolishError
 
-ARTICLE_HTML_STANDARD_VERSION = "article-html-standard/v1"
-NATIVE_HTML_NORMALIZER_VERSION = "native-html-normalizer/v1"
+
+ARTICLE_HTML_STANDARD_VERSION = "article-html-standard/v2"
+NATIVE_HTML_NORMALIZER_VERSION = "native-html-normalizer/v2"
 ARTICLE_HTML_FILENAME = "article.html"
 ASSETS_DIRNAME = "assets"
 ARTICLE_PACKAGE_MAX_SOURCE_BYTES = 16_000_000
@@ -51,15 +55,32 @@ def standardize_native_html_download(
             "source_path": str(source_path),
             "source_bytes": source_bytes,
         }
+    package_root = package_root.resolve(strict=False)
     package_dir = package_root / _package_dirname(download, source_path)
-    return write_article_package(
-        source_html=source_path,
-        package_dir=package_dir,
-        metadata=metadata,
-        source_download=download,
-        source_context=source_context,
-        article_verdict=verdict_data,
-    )
+    try:
+        package_dir.resolve(strict=False).relative_to(package_root)
+    except ValueError:
+        return {
+            "ok": False,
+            "reason": "article_package_outside_root",
+            "source_path": str(source_path),
+        }
+    try:
+        return write_article_package(
+            source_html=source_path,
+            package_dir=package_dir,
+            metadata=metadata,
+            source_download=download,
+            source_context=source_context,
+            article_verdict=verdict_data,
+        )
+    except OSError as exc:
+        return {
+            "ok": False,
+            "reason": "article_package_write_failed",
+            "source_path": str(source_path),
+            "error": f"{exc.__class__.__name__}: {exc}"[:500],
+        }
 
 
 def write_article_package(
@@ -71,6 +92,24 @@ def write_article_package(
     source_context: str,
     article_verdict: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
+    source_url = str(source_download.get("final_url") or source_download.get("url") or "")
+    try:
+        polished = polish_web_html_file(source_html, source_url=source_url or None)
+    except (OSError, WebHtmlPolishError) as exc:
+        return {
+            "ok": False,
+            "reason": "source_html_polish_failed",
+            "source_path": str(source_html),
+            "error": f"{exc.__class__.__name__}: {exc}"[:500],
+        }
+    if package_dir.is_symlink():
+        return {
+            "ok": False,
+            "reason": "article_package_symlink",
+            "source_path": str(source_html),
+        }
+    if package_dir.exists():
+        shutil.rmtree(package_dir)
     package_dir.mkdir(parents=True, exist_ok=True)
     (package_dir / "source").mkdir(exist_ok=True)
     (package_dir / "logs").mkdir(exist_ok=True)
@@ -80,9 +119,11 @@ def write_article_package(
     html_text, assets = _article_html_with_standard_assets(
         source_html=source_html,
         package_dir=package_dir,
+        html_text=polished.html,
     )
     article_html.write_text(html_text, encoding="utf-8")
     shutil.copy2(source_html, source_copy)
+    polish = _web_polish_manifest(polished)
 
     quality = evaluate_article_html(
         article_html=article_html,
@@ -97,6 +138,7 @@ def write_article_package(
         source_context=source_context,
         quality=quality,
         assets=assets,
+        polish=polish,
     )
     manifest_path = package_dir / "manifest.json"
     quality_path = package_dir / "quality.json"
@@ -112,6 +154,7 @@ def write_article_package(
         "quality_path": str(quality_path),
         "quality_status": quality["status"],
         "quality_failures": quality["failures"],
+        "polish": polish,
     }
 
 
@@ -123,6 +166,7 @@ def build_article_manifest(
     source_context: str,
     quality: dict[str, Any],
     assets: list[dict[str, Any]],
+    polish: dict[str, Any],
 ) -> dict[str, Any]:
     identifiers = _metadata_identifiers(metadata)
     return {
@@ -130,6 +174,7 @@ def build_article_manifest(
         "normalizer": {
             "kind": "native_html",
             "version": NATIVE_HTML_NORMALIZER_VERSION,
+            "polish": polish,
         },
         "created_at": datetime.now(timezone.utc).isoformat(),
         "article": {
@@ -177,7 +222,9 @@ def evaluate_article_html(
     text_chars = max(len(visible_text), article_text_chars)
     title = _html_title(text) or _metadata_value(metadata, "title")
     images = _html_attr_values(text, "img", "src")
-    local_missing = _missing_local_refs(article_html.parent, images)
+    resource_refs = _resource_refs(text)
+    local_missing_images = _missing_local_refs(article_html.parent, images)
+    local_missing_resources = _missing_local_refs(article_html.parent, resource_refs)
     internal_links = _internal_links(text)
     anchors = _anchors(text)
     missing_internal_links = sorted(
@@ -185,9 +232,19 @@ def evaluate_article_html(
     )[:50]
     remote_assets = [
         value
-        for value in _resource_refs(text)
+        for value in resource_refs
         if value.casefold().startswith(("http://", "https://", "//"))
     ]
+    executable_payload_count = len(re.findall(r"<script\b", text, re.IGNORECASE))
+    executable_payload_count += len(
+        re.findall(
+            r"<style\b(?![^>]*\bdata-z2m-style\s*=)", text, re.IGNORECASE
+        )
+    )
+    active_media_count = len(
+        re.findall(r"<(?:audio|video|iframe|object|embed)\b", text, re.IGNORECASE)
+    )
+    unsafe_attribute_count = _unsafe_attribute_count(text)
     math = _math_strategy(text)
 
     failures: list[str] = []
@@ -198,12 +255,18 @@ def evaluate_article_html(
         failures.append(f"article_verdict_{article_verdict.get('reason') or 'failed'}")
     if text_chars < 4_000 and article_verdict.get("ok") is not True:
         failures.append("insufficient_text")
-    if local_missing:
-        failures.append("missing_local_images")
+    if local_missing_resources:
+        failures.append("missing_local_resources")
+    if remote_assets:
+        failures.append("remote_assets_present")
+    if executable_payload_count:
+        failures.append("executable_payload_present")
+    if active_media_count:
+        failures.append("active_media_present")
+    if unsafe_attribute_count:
+        failures.append("unsafe_attributes_present")
     if missing_internal_links:
         warnings.append("missing_internal_link_targets")
-    if remote_assets:
-        warnings.append("remote_assets_present")
     status = "failed" if failures else "warning" if warnings else "passed"
     return {
         "standard": ARTICLE_HTML_STANDARD_VERSION,
@@ -211,9 +274,13 @@ def evaluate_article_html(
         "title": title,
         "text_chars": text_chars,
         "image_count": len(images),
-        "local_image_count": len(images) - len(local_missing),
-        "missing_local_images": local_missing[:50],
+        "local_image_count": len(images) - len(local_missing_images),
+        "missing_local_images": local_missing_images[:50],
+        "missing_local_resources": local_missing_resources[:50],
         "remote_asset_count": len(remote_assets),
+        "executable_payload_count": executable_payload_count,
+        "active_media_count": active_media_count,
+        "unsafe_attribute_count": unsafe_attribute_count,
         "internal_link_count": len(internal_links),
         "missing_internal_links": missing_internal_links,
         "bibliography_anchor_count": _bibliography_anchor_count(anchors),
@@ -228,12 +295,14 @@ def _article_html_with_standard_assets(
     *,
     source_html: Path,
     package_dir: Path,
+    html_text: str | None = None,
     max_asset_bytes: int = ARTICLE_PACKAGE_MAX_ASSET_BYTES,
     max_total_asset_bytes: int = ARTICLE_PACKAGE_MAX_TOTAL_ASSET_BYTES,
     max_assets: int = ARTICLE_PACKAGE_MAX_ASSETS,
     max_scanned_assets: int = ARTICLE_PACKAGE_MAX_SCANNED_ASSETS,
 ) -> tuple[str, list[dict[str, Any]]]:
-    html_text = source_html.read_text(encoding="utf-8", errors="replace")
+    if html_text is None:
+        html_text = source_html.read_text(encoding="utf-8", errors="replace")
     source_assets_dir = source_html.parent / f"{source_html.stem}_assets"
     target_assets_dir = package_dir / ASSETS_DIRNAME
     assets: list[dict[str, Any]] = []
@@ -254,9 +323,9 @@ def _article_html_with_standard_assets(
     source_root = source_assets_dir.resolve()
     candidates, scan_truncated = _source_asset_candidates(
         source_assets_dir,
+        html_text=html_text,
         max_scanned_assets=max_scanned_assets,
     )
-    target_assets_dir.mkdir(exist_ok=True)
     copied_count = 0
     total_bytes = 0
     for source in candidates:
@@ -320,9 +389,16 @@ def _article_html_with_standard_assets(
 def _source_asset_candidates(
     source_assets_dir: Path,
     *,
+    html_text: str | None = None,
     max_scanned_assets: int,
 ) -> tuple[list[Path], bool]:
     limit = max(max_scanned_assets, 0)
+    if html_text is not None:
+        return _referenced_source_asset_candidates(
+            source_assets_dir,
+            html_text=html_text,
+            limit=limit,
+        )
     files: list[Path] = []
     truncated = False
     for path in source_assets_dir.rglob("*"):
@@ -334,6 +410,37 @@ def _source_asset_candidates(
         files.append(path)
     files.sort(key=lambda path: str(path).casefold())
     return files, truncated
+
+
+def _referenced_source_asset_candidates(
+    source_assets_dir: Path,
+    *,
+    html_text: str,
+    limit: int,
+) -> tuple[list[Path], bool]:
+    prefix = f"{source_assets_dir.name}/"
+    candidates: list[Path] = []
+    seen: set[str] = set()
+    truncated = False
+    for raw_ref in _resource_refs(html_text):
+        ref = html.unescape(raw_ref).split("?", 1)[0].split("#", 1)[0]
+        ref = urllib.parse.unquote(ref).replace("\\", "/")
+        if not ref.startswith(prefix):
+            continue
+        relative = ref[len(prefix) :]
+        parts = tuple(part for part in relative.split("/") if part)
+        if not parts or any(part in {".", ".."} for part in parts):
+            continue
+        key = "/".join(parts)
+        if key in seen:
+            continue
+        if len(candidates) >= limit:
+            truncated = True
+            break
+        seen.add(key)
+        candidates.append(source_assets_dir.joinpath(*parts))
+    candidates.sort(key=lambda path: str(path).casefold())
+    return candidates, truncated
 
 
 def _reset_generated_assets_dir(target_assets_dir: Path) -> None:
@@ -439,21 +546,57 @@ def _html_attr_values(text: str, tag: str, attr: str) -> list[str]:
 
 def _resource_refs(text: str) -> list[str]:
     refs: list[str] = []
-    for tag, attr in (("img", "src"), ("source", "src"), ("link", "href"), ("script", "src")):
+    for tag, attr in (
+        ("img", "src"),
+        ("source", "src"),
+        ("link", "href"),
+        ("script", "src"),
+        ("image", "href"),
+        ("image", "xlink:href"),
+        ("use", "href"),
+        ("use", "xlink:href"),
+    ):
         refs.extend(_html_attr_values(text, tag, attr))
+    for tag in ("img", "source"):
+        for srcset in _html_attr_values(text, tag, "srcset"):
+            refs.extend(_srcset_urls(srcset))
     return refs
+
+
+def _srcset_urls(value: str) -> list[str]:
+    urls: list[str] = []
+    for raw_entry in re.split(r",\s+", html.unescape(value).strip()):
+        parts = raw_entry.strip().split()
+        if parts:
+            urls.append(parts[0])
+    return urls
 
 
 def _missing_local_refs(package_dir: Path, refs: list[str]) -> list[str]:
     missing: list[str] = []
+    package_root = package_dir.resolve(strict=False)
     for value in refs:
         lowered = value.casefold()
         if not value or lowered.startswith(("http://", "https://", "//", "data:", "javascript:", "mailto:", "#")):
             continue
-        path = Path(value.split("?", 1)[0].split("#", 1)[0])
-        if not (package_dir / path).is_file():
+        if not _local_resource_exists(package_root, value):
             missing.append(value)
     return missing
+
+
+def _local_resource_exists(package_root: Path, value: str) -> bool:
+    raw_path = html.unescape(value).split("?", 1)[0].split("#", 1)[0]
+    if not raw_path or len(raw_path) > 4096:
+        return False
+    path = Path(urllib.parse.unquote(raw_path))
+    if path.is_absolute():
+        return False
+    try:
+        candidate = (package_root / path).resolve(strict=True)
+        candidate.relative_to(package_root)
+        return candidate.is_file()
+    except (OSError, ValueError):
+        return False
 
 
 def _internal_links(text: str) -> set[str]:
@@ -495,6 +638,37 @@ def _math_strategy(text: str) -> dict[str, Any]:
         "mathjax": "mathjax" in lower,
         "formula_image_count": formula_images,
     }
+
+
+def _web_polish_manifest(polished: Any) -> dict[str, Any]:
+    kind = getattr(polished.kind, "value", str(polished.kind))
+    return {
+        "kind": str(kind),
+        "article_extracted": bool(polished.article_extracted),
+        "article_selector": polished.article_selector,
+        "same_document_links_rewritten": int(polished.same_document_links_rewritten),
+        "unresolved_same_document_links": int(polished.unresolved_same_document_links),
+        "inlined_images": int(polished.inlined_images),
+        "recovered_source_figures": int(polished.recovered_source_figures),
+        "attempted_source_figures": int(polished.attempted_source_figures),
+        "source_recovery_errors": list(polished.source_recovery_errors),
+    }
+
+
+def _unsafe_attribute_count(text: str) -> int:
+    unsafe = re.compile(
+        r"\son[A-Za-z][\w:-]*\s*=|\b(?:href|src|action|formaction|data)\s*=\s*"
+        r"['\"]?\s*(?:javascript|vbscript|file):",
+        re.IGNORECASE,
+    )
+    return sum(
+        len(unsafe.findall(match.group(0)))
+        for match in re.finditer(
+            r"<[A-Za-z][^>]*>",
+            text,
+            re.DOTALL,
+        )
+    )
 
 
 def _int_value(value: object) -> int:

@@ -2049,11 +2049,12 @@ def test_full_text_attach_html_uses_embedded_asset_file(
     assert result is not None
     assert result["kind"] == "html"
     relay_source = Path(captured["source_path"])  # type: ignore[arg-type]
-    assert relay_source.name == "article.z2m_embedded.html"
+    assert relay_source.name == "article.html"
     assert result["raw_source_path"] == str(source)
     assert result["article_standard"]["ok"] is True
+    assert result["article_standard"]["polish"]["inlined_images"] == 1
     assert captured["content_type"] == "text/html"
-    assert result["embedded_assets"]["enabled"] is True
+    assert result["embedded_assets"] == {"enabled": False, "reason": "assets_dir_missing"}
     local_copy = Path(result["local_copy"]["path"])
     assert local_copy.suffix == ".html"
     saved = local_copy.read_text(encoding="utf-8")
@@ -2290,7 +2291,10 @@ def test_full_text_attach_html_without_assets_sends_original_file(
     assert result["raw_source_path"] == str(source)
     assert captured["content_type"] == "text/html"
     assert result["embedded_assets"] == {"enabled": False, "reason": "assets_dir_missing"}
-    assert Path(result["local_copy"]["path"]).read_text(encoding="utf-8") == "<html><body>Article</body></html>"
+    attached_html = Path(result["local_copy"]["path"]).read_text(encoding="utf-8")
+    assert 'id="web-doc"' in attached_html
+    assert "Article" in attached_html
+    assert result["article_standard"]["polish"]["kind"] == "unknown"
 
 
 def test_full_text_attach_attaches_pdf_alongside_html(
