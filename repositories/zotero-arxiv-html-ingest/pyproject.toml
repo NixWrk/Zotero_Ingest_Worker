@@ -12,3 +12,6 @@ zotero-arxiv-html-ingest = "zotero_arxiv_html_ingest.cli:main"
 testpaths = ["tests"]
 pythonpath = ["src", "../zotero-metadata-enrichment/src"]
 
+[tool.mypy]
+mypy_path = "../zotero-metadata-enrichment/src"
+
