@@ -29,6 +29,9 @@ from zotero_metadata_enrichment.providers.crossref import (  # type: ignore[impo
 from zotero_metadata_enrichment.providers.zotero_translation_server import (  # type: ignore[import-not-found]
     zotero_translator_item_to_candidate as package_zotero_translator_item_to_candidate,
 )
+from zotero_metadata_enrichment.safe_http import (  # type: ignore[import-not-found]
+    UnsafeUrlError,
+)
 from zotero_metadata_enrichment.text import (  # type: ignore[import-not-found]
     normalize_space as package_normalize_space,
     title_match_score as package_title_match_score,
@@ -279,6 +282,8 @@ def _metadata_haystack(
 
 
 def _is_nonretryable_worker_error(exc: Exception) -> bool:
+    if isinstance(exc, UnsafeUrlError):
+        return True
     message = str(exc)
     markers = (
         "WEB_API_NOT_CONFIGURED",

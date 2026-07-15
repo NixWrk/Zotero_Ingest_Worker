@@ -22,6 +22,11 @@ import urllib.parse
 import urllib.request
 import zipfile
 
+from zotero_metadata_enrichment.safe_http import (  # type: ignore[import-not-found]
+    host_suffix_redirect,
+    safe_urlopen,
+)
+
 from .html_links import _arxiv_abs_parts, _arxiv_html_parts, _urlsplit_or_none
 from .web_polish.core import HTML_TAG_RE, attr_value, balanced_element_from_match, visible_text
 
@@ -340,7 +345,11 @@ def fetch_arxiv_source_package(arxiv_id: str, *, max_bytes: int = _MAX_SOURCE_PA
         f"https://arxiv.org/e-print/{quoted_id}",
         headers={"User-Agent": "Mozilla/5.0 z2m-arxiv-source-recovery"},
     )
-    with urllib.request.urlopen(request, timeout=timeout) as response:
+    with safe_urlopen(
+        request,
+        timeout=timeout,
+        redirect_validator=host_suffix_redirect("arxiv.org"),
+    ) as response:
         _require_arxiv_response_url(response, fallback=request.full_url)
         byte_limit = max(max_bytes, 0)
         declared = _response_content_length(response)

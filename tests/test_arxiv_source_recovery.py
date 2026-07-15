@@ -28,6 +28,14 @@ from zoteropdf2md.arxiv_source_recovery import (
 PNG_BYTES = b"\x89PNG\r\n\x1a\nz2m-recovered"
 
 
+@pytest.fixture(autouse=True)
+def _stub_safe_http_dns(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "zotero_metadata_enrichment.safe_http._resolve_target",
+        lambda *_args, **_kwargs: (object(),),
+    )
+
+
 class FakeRenderer:
     def __init__(self) -> None:
         self.rendered: list[SourceFigure] = []
@@ -228,7 +236,7 @@ def test_arxiv_source_fetch_rejects_declared_oversize_before_read(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     response = _FetchResponse(b"not-read", content_length=5)
-    monkeypatch.setattr("urllib.request.urlopen", lambda *_args, **_kwargs: response)
+    monkeypatch.setattr("zotero_metadata_enrichment.safe_http._open_pinned_once", lambda *_args, **_kwargs: response)
 
     with pytest.raises(ValueError, match="exceeds 4 bytes"):
         fetch_arxiv_source_package("2507.01903", max_bytes=4)
@@ -240,7 +248,7 @@ def test_arxiv_source_fetch_rejects_streamed_oversize(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     response = _FetchResponse(b"12345")
-    monkeypatch.setattr("urllib.request.urlopen", lambda *_args, **_kwargs: response)
+    monkeypatch.setattr("zotero_metadata_enrichment.safe_http._open_pinned_once", lambda *_args, **_kwargs: response)
 
     with pytest.raises(ValueError, match="exceeds 4 bytes"):
         fetch_arxiv_source_package("2507.01903", max_bytes=4)
@@ -253,11 +261,32 @@ def test_arxiv_source_fetch_rejects_cross_host_redirect_before_read(
 ) -> None:
     response = _FetchResponse(b"not-read")
     response.url = "http://127.0.0.1/private"
-    monkeypatch.setattr("urllib.request.urlopen", lambda *_args, **_kwargs: response)
+    monkeypatch.setattr("zotero_metadata_enrichment.safe_http._open_pinned_once", lambda *_args, **_kwargs: response)
 
     with pytest.raises(ValueError, match="unsafe arXiv source redirect"):
         fetch_arxiv_source_package("2507.01903", max_bytes=100)
 
+    assert response.read_sizes == []
+
+
+def test_arxiv_source_blocks_cross_host_redirect_before_second_open(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    calls: list[str] = []
+    response = _FetchResponse(b"not-read")
+    response.status = 302
+    response.headers["Location"] = "https://other.example/private"
+
+    def fake_open(request: object, **_kwargs: object) -> _FetchResponse:
+        calls.append(request.full_url)  # type: ignore[attr-defined]
+        return response
+
+    monkeypatch.setattr("zotero_metadata_enrichment.safe_http._open_pinned_once", fake_open)
+
+    with pytest.raises(ValueError, match="Redirect policy rejected"):
+        fetch_arxiv_source_package("2507.01903", max_bytes=100)
+
+    assert calls == ["https://arxiv.org/e-print/2507.01903"]
     assert response.read_sizes == []
 
 

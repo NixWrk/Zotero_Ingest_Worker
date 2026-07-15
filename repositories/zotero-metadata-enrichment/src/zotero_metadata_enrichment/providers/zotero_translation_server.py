@@ -8,7 +8,7 @@ from typing import Any
 from ..diff import merge_extra
 from ..identifiers import extract_arxiv_id_from_text, extract_pmcid_from_text, extract_pmid_from_text, normalize_doi
 from ..models import FullTextLocation, MetadataCandidate
-from ..provider_http import throttled_urlopen
+from ..provider_http import read_response_bytes, throttled_urlopen
 from ..text import join_values, normalize_space, strip_html, title_match_score
 
 
@@ -77,11 +77,19 @@ class TranslationServerClient:
             method="POST",
         )
         try:
-            with throttled_urlopen(request, timeout=self.timeout_seconds) as response:
-                return json.loads(response.read().decode("utf-8"))
+            with throttled_urlopen(
+                request,
+                timeout=self.timeout_seconds,
+                max_redirects=0,
+                allow_private_networks=True,
+                allow_loopback=True,
+            ) as response:
+                body = read_response_bytes(response, error_label=url)
+                return json.loads(body.decode("utf-8"))
         except urllib.error.HTTPError as exc:
             if exc.code == 300:
-                return json.loads(exc.read().decode("utf-8"))
+                body = read_response_bytes(exc, error_label=url)
+                return json.loads(body.decode("utf-8"))
             if exc.code in {404, 501}:
                 return []
             raise

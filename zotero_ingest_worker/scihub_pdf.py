@@ -23,6 +23,10 @@ from zotero_metadata_enrichment import (  # type: ignore[import-not-found]
 from zotero_metadata_enrichment.pdf_sources import (  # type: ignore[import-not-found]
     assess_pdf_bytes_identity as package_assess_pdf_bytes_identity,
 )
+from zotero_metadata_enrichment.safe_http import (  # type: ignore[import-not-found]
+    UnsafeUrlError,
+    safe_urlopen,
+)
 from zotero_metadata_enrichment.url_safety import (  # type: ignore[import-not-found]
     validate_fetch_url as package_validate_fetch_url,
 )
@@ -34,6 +38,7 @@ DEFAULT_SCIHUB_USER_AGENT = (
     "Mozilla/5.0 (iPhone; CPU iPhone OS 11_3_1 like Mac OS X) "
     "AppleWebKit/603.1.30 (KHTML, like Gecko) Version/10.0 Mobile/14E304 Safari/602.1"
 )
+RETRYABLE_HTTP_STATUSES = {408, 409, 425, 429, 500, 502, 503, 504}
 PDF_NOT_AVAILABLE_MARKERS = (
     "please try to search again using doi",
     "статья не найдена в базе",
@@ -56,6 +61,14 @@ _PDF_QUOTED_RE = re.compile(r"""["']([^"']+\.pdf(?:[?#][^"']*)?)["']""", re.IGNO
 
 
 class SciHubError(RuntimeError):
+    pass
+
+
+class SciHubUnsafeUrlError(SciHubError):
+    pass
+
+
+class SciHubTransportError(SciHubError):
     pass
 
 
@@ -168,6 +181,8 @@ def resolve_pdf_url(
         mirror_list = [normalize_base_url(DEFAULT_SCIHUB_URL)]
 
     errors: list[str] = []
+    unsafe_failures = 0
+    transport_failures = 0
     for base_url in mirror_list:
         try:
             return _resolve_on_mirror(
@@ -177,10 +192,34 @@ def resolve_pdf_url(
                 timeout_seconds=timeout_seconds,
                 max_bytes=max_bytes,
             )
-        except Exception as exc:  # noqa: BLE001 - try the next mirror on any failure
+        except (SciHubUnsafeUrlError, UnsafeUrlError) as exc:
+            unsafe_failures += 1
             host = urllib.parse.urlparse(base_url).netloc or base_url
             errors.append(f"{host}: {exc}")
             continue
+        except SciHubError as exc:
+            host = urllib.parse.urlparse(base_url).netloc or base_url
+            errors.append(f"{host}: {exc}")
+            continue
+        except urllib.error.HTTPError as exc:
+            if exc.code in RETRYABLE_HTTP_STATUSES:
+                transport_failures += 1
+            host = urllib.parse.urlparse(base_url).netloc or base_url
+            errors.append(f"{host}: HTTP {exc.code}")
+            continue
+        except Exception as exc:  # noqa: BLE001 - try the next mirror on any failure
+            transport_failures += 1
+            host = urllib.parse.urlparse(base_url).netloc or base_url
+            errors.append(f"{host}: {exc}")
+            continue
+    if unsafe_failures == len(mirror_list):
+        raise SciHubUnsafeUrlError(
+            f"All Sci-Hub mirrors were rejected as unsafe ({'; '.join(errors)})."
+        )
+    if transport_failures:
+        raise SciHubTransportError(
+            f"Sci-Hub mirror transport failed for DOI {normalized_doi} ({'; '.join(errors)})."
+        )
     raise SciHubError(
         f"All Sci-Hub mirrors failed for DOI {normalized_doi} ({'; '.join(errors)})."
     )
@@ -198,7 +237,7 @@ def _resolve_on_mirror(
 
     safety = package_validate_fetch_url(scihub_url)
     if not safety.ok:
-        raise SciHubError(f"Unsafe Sci-Hub URL: {safety.reason}")
+        raise SciHubUnsafeUrlError(f"Unsafe Sci-Hub URL: {safety.reason}")
 
     request = urllib.request.Request(
         scihub_url,
@@ -208,7 +247,7 @@ def _resolve_on_mirror(
         },
         method="GET",
     )
-    with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
+    with safe_urlopen(request, timeout=timeout_seconds) as response:
         final_url = getattr(response, "url", scihub_url)
         body = response.read(max_bytes + 1)
     html = body.decode("utf-8", errors="replace")
@@ -244,6 +283,10 @@ def download_scihub_pdf(
             user_agent=user_agent,
             timeout_seconds=timeout_seconds,
         )
+    except SciHubUnsafeUrlError as exc:
+        return {"ok": False, "status": "unsafe_url", "error": str(exc), "doi": doi}
+    except SciHubTransportError as exc:
+        return {"ok": False, "status": "transport_error", "error": str(exc), "doi": doi}
     except SciHubError as exc:
         return {"ok": False, "status": "unresolved", "error": str(exc), "doi": doi}
     except Exception as exc:  # noqa: BLE001 - surface transport errors as a status
@@ -266,10 +309,19 @@ def download_scihub_pdf(
         method="GET",
     )
     try:
-        with urllib.request.urlopen(request, timeout=timeout_seconds) as response:
+        with safe_urlopen(request, timeout=timeout_seconds) as response:
             final_url = getattr(response, "url", resolved.pdf_url)
             content_type = str(response.headers.get("Content-Type") or "")
             body = response.read(max_bytes + 1)
+    except UnsafeUrlError as exc:
+        return {
+            "ok": False,
+            "status": "unsafe_url",
+            "error": str(exc),
+            "scihub_url": resolved.scihub_url,
+            "pdf_url": resolved.pdf_url,
+            "doi": resolved.doi,
+        }
     except urllib.error.HTTPError as exc:
         return {
             "ok": False,

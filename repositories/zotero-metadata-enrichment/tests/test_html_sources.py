@@ -4,6 +4,8 @@ import urllib.error
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from zotero_metadata_enrichment import provider_http
 from zotero_metadata_enrichment.html_sources import (
     ResourceReferenceParser,
@@ -15,6 +17,15 @@ from zotero_metadata_enrichment.html_sources import (
 )
 from zotero_metadata_enrichment.models import FullTextLocation
 from zotero_metadata_enrichment.provider_http import HostThrottle
+from zotero_metadata_enrichment.safe_http import UnsafeUrlError
+
+
+@pytest.fixture(autouse=True)
+def _stub_safe_http_dns(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "zotero_metadata_enrichment.safe_http._resolve_target",
+        lambda *_args, **_kwargs: (object(),),
+    )
 
 
 class FakeResponse:
@@ -65,7 +76,7 @@ def test_fetch_html_source_saves_html(monkeypatch: Any, tmp_path: Path) -> None:
             body=b"PNG",
         )
 
-    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("zotero_metadata_enrichment.safe_http._open_pinned_once", fake_urlopen)
     location = FullTextLocation(source="crossref", url="https://journal.example/article", kind="html")
 
     result = fetch_html_source(
@@ -108,7 +119,7 @@ def test_fetch_html_source_rate_limit_sets_host_cooldown(monkeypatch: Any, tmp_p
             None,
         )
 
-    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("zotero_metadata_enrichment.safe_http._open_pinned_once", fake_urlopen)
 
     result = fetch_html_source(
         FullTextLocation(source="crossref", url="https://journal.example/article", kind="html"),
@@ -146,7 +157,7 @@ def test_fetch_html_source_uses_base_href_for_relative_assets(monkeypatch: Any, 
             body=b"PNG",
         )
 
-    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("zotero_metadata_enrichment.safe_http._open_pinned_once", fake_urlopen)
     location = FullTextLocation(source="arxiv", url="https://arxiv.org/html/2602.09735", kind="html")
 
     result = fetch_html_source(location, output_dir=tmp_path, timeout_seconds=10, expected_title="Article")
@@ -181,7 +192,7 @@ def test_fetch_html_source_does_not_download_publisher_style_assets(monkeypatch:
             )
         raise AssertionError(request.full_url)
 
-    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("zotero_metadata_enrichment.safe_http._open_pinned_once", fake_urlopen)
     location = FullTextLocation(source="arxiv", url="https://arxiv.org/html/2602.09735", kind="html")
 
     result = fetch_html_source(location, output_dir=tmp_path, timeout_seconds=10, expected_title="Article")
@@ -203,7 +214,7 @@ def test_fetch_html_source_rejects_declared_oversize_before_read(
         body=b"not read",
         content_length=101,
     )
-    monkeypatch.setattr("urllib.request.urlopen", lambda *_args, **_kwargs: response)
+    monkeypatch.setattr("zotero_metadata_enrichment.safe_http._open_pinned_once", lambda *_args, **_kwargs: response)
 
     result = fetch_html_source(
         FullTextLocation(source="crossref", url="https://journal.example/article", kind="html"),
@@ -225,7 +236,7 @@ def test_fetch_html_source_rejects_redirect_to_private_host_before_read(
         content_type="text/html",
         body=b"not read",
     )
-    monkeypatch.setattr("urllib.request.urlopen", lambda *_args, **_kwargs: response)
+    monkeypatch.setattr("zotero_metadata_enrichment.safe_http._open_pinned_once", lambda *_args, **_kwargs: response)
 
     result = fetch_html_source(
         FullTextLocation(source="crossref", url="https://journal.example/article", kind="html"),
@@ -234,6 +245,41 @@ def test_fetch_html_source_rejects_redirect_to_private_host_before_read(
 
     assert result.status == "unsafe_redirect"
     assert result.error == "blocked_ip"
+    assert response.read_sizes == []
+
+
+def test_fetch_html_source_blocks_private_redirect_before_second_open(
+    monkeypatch: Any,
+    tmp_path: Path,
+) -> None:
+    calls: list[str] = []
+    response = FakeResponse(
+        url="https://journal.example/article",
+        content_type="text/html",
+        body=b"not read",
+    )
+    response.status = 302
+    response.headers["Location"] = "http://127.0.0.1/private"
+
+    def fake_resolve(url: str, **_kwargs: Any) -> tuple[object, ...]:
+        if "127.0.0.1" in url:
+            raise UnsafeUrlError("blocked private redirect")
+        return (object(),)
+
+    def fake_open(request: Any, **_kwargs: Any) -> FakeResponse:
+        calls.append(request.full_url)
+        return response
+
+    monkeypatch.setattr("zotero_metadata_enrichment.safe_http._resolve_target", fake_resolve)
+    monkeypatch.setattr("zotero_metadata_enrichment.safe_http._open_pinned_once", fake_open)
+
+    result = fetch_html_source(
+        FullTextLocation(source="crossref", url="https://journal.example/article", kind="html"),
+        output_dir=tmp_path,
+    )
+
+    assert result.status == "unsafe_redirect"
+    assert calls == ["https://journal.example/article"]
     assert response.read_sizes == []
 
 
@@ -261,7 +307,7 @@ def test_snapshot_asset_rejects_declared_oversize_before_read(
             )
         return asset_response
 
-    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("zotero_metadata_enrichment.safe_http._open_pinned_once", fake_urlopen)
     result = fetch_html_source(
         FullTextLocation(source="crossref", url="https://journal.example/article", kind="html"),
         output_dir=tmp_path,
@@ -297,7 +343,7 @@ def test_snapshot_asset_rejects_redirect_to_private_host(
             )
         return asset_response
 
-    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("zotero_metadata_enrichment.safe_http._open_pinned_once", fake_urlopen)
     result = fetch_html_source(
         FullTextLocation(source="crossref", url="https://journal.example/article", kind="html"),
         output_dir=tmp_path,
@@ -320,7 +366,7 @@ def test_snapshot_asset_enforces_total_budget_before_read(
         body=b"not read",
         content_length=6,
     )
-    monkeypatch.setattr("urllib.request.urlopen", lambda *_args, **_kwargs: response)
+    monkeypatch.setattr("zotero_metadata_enrichment.safe_http._open_pinned_once", lambda *_args, **_kwargs: response)
 
     report = write_html_snapshot(
         b'<html><body><img src="https://journal.example/figure.png"></body></html>',
@@ -346,7 +392,7 @@ def test_snapshot_does_not_fetch_stylesheet_or_recursive_background_assets(
         requested_urls.append(request.full_url)
         raise AssertionError(request.full_url)
 
-    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("zotero_metadata_enrichment.safe_http._open_pinned_once", fake_urlopen)
     report = write_html_snapshot(
         b'<html><head><link rel="stylesheet" href="style.css"></head></html>',
         base_url="https://journal.example/article",
@@ -370,7 +416,7 @@ def test_fetch_html_source_rejects_title_mismatch(monkeypatch: Any, tmp_path: Pa
             body=b"<!doctype html><html><head><title>Client Challenge</title></head><body>Checking your browser</body></html>",
         )
 
-    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("zotero_metadata_enrichment.safe_http._open_pinned_once", fake_urlopen)
     location = FullTextLocation(source="crossref", url="https://journal.example/article", kind="html")
 
     result = fetch_html_source(
@@ -448,7 +494,7 @@ def test_fetch_html_source_rejects_arxiv_abs_landing(monkeypatch: Any, tmp_path:
             ).encode("utf-8"),
         )
 
-    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("zotero_metadata_enrichment.safe_http._open_pinned_once", fake_urlopen)
     location = FullTextLocation(source="zotero_translation_server", url="https://arxiv.org/abs/2602.09735", kind="landing")
 
     result = fetch_html_source(location, output_dir=tmp_path, timeout_seconds=10, expected_title="Article")
@@ -484,7 +530,7 @@ def test_download_html_sources_falls_back_to_ar5iv_for_arxiv_abs(
             )
         raise AssertionError(request.full_url)
 
-    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("zotero_metadata_enrichment.safe_http._open_pinned_once", fake_urlopen)
 
     results = download_html_sources(
         [
@@ -526,7 +572,7 @@ def test_download_html_sources_reclassifies_ojs_article_view(
             ).encode("utf-8"),
         )
 
-    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("zotero_metadata_enrichment.safe_http._open_pinned_once", fake_urlopen)
 
     results = download_html_sources(
         [
@@ -572,7 +618,7 @@ def test_fetch_html_source_follows_thieme_abstract_html_link(monkeypatch: Any, t
             )
         raise AssertionError(request.full_url)
 
-    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("zotero_metadata_enrichment.safe_http._open_pinned_once", fake_urlopen)
 
     result = fetch_html_source(
         FullTextLocation(source="crossref", url="https://doi.org/10.1055/s-2008-1027636", kind="doi"),
@@ -603,7 +649,7 @@ def test_fetch_html_source_rejects_tandfonline_get_access(monkeypatch: Any, tmp_
             ).encode("utf-8"),
         )
 
-    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("zotero_metadata_enrichment.safe_http._open_pinned_once", fake_urlopen)
 
     result = fetch_html_source(
         FullTextLocation(source="crossref", url="https://doi.org/10.1080/example", kind="landing"),
@@ -631,7 +677,7 @@ def test_fetch_html_source_reclassifies_frontiers_full_article(monkeypatch: Any,
             ).encode("utf-8"),
         )
 
-    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("zotero_metadata_enrichment.safe_http._open_pinned_once", fake_urlopen)
 
     result = fetch_html_source(
         FullTextLocation(source="crossref", url="https://doi.org/10.3389/fpsyg.2017.00882", kind="landing"),
@@ -661,7 +707,7 @@ def test_fetch_html_source_derives_pdf_from_citation_pdf_url(monkeypatch: Any, t
             ).encode("utf-8"),
         )
 
-    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("zotero_metadata_enrichment.safe_http._open_pinned_once", fake_urlopen)
 
     result = fetch_html_source(
         FullTextLocation(
@@ -699,7 +745,7 @@ def test_fetch_html_source_reclassifies_iop_article_and_derives_pdf(
             ).encode("utf-8"),
         )
 
-    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("zotero_metadata_enrichment.safe_http._open_pinned_once", fake_urlopen)
 
     result = fetch_html_source(
         FullTextLocation(
@@ -733,7 +779,7 @@ def test_fetch_html_source_rejects_springer_chapter_landing(monkeypatch: Any, tm
             ).encode("utf-8"),
         )
 
-    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("zotero_metadata_enrichment.safe_http._open_pinned_once", fake_urlopen)
 
     result = fetch_html_source(
         FullTextLocation(source="crossref", url="https://doi.org/10.1007/example", kind="landing"),
@@ -764,7 +810,7 @@ def test_fetch_html_source_does_not_use_pmc_profile_for_non_pmc_europe_pmc_url(
             ).encode("utf-8"),
         )
 
-    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("zotero_metadata_enrichment.safe_http._open_pinned_once", fake_urlopen)
 
     result = fetch_html_source(
         FullTextLocation(
@@ -812,7 +858,7 @@ def test_download_html_sources_prioritizes_direct_arxiv_html(
             ).encode("utf-8"),
         )
 
-    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("zotero_metadata_enrichment.safe_http._open_pinned_once", fake_urlopen)
 
     results = download_html_sources(
         [
@@ -848,7 +894,7 @@ def test_download_html_sources_can_stop_after_first_valid_html(
             ).encode("utf-8"),
         )
 
-    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("zotero_metadata_enrichment.safe_http._open_pinned_once", fake_urlopen)
 
     results = download_html_sources(
         [
@@ -934,7 +980,7 @@ def test_snapshot_downloads_only_article_image_candidates(monkeypatch: Any, tmp_
             body=b"figure",
         )
 
-    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("zotero_metadata_enrichment.safe_http._open_pinned_once", fake_urlopen)
     output = tmp_path / "article.html"
     report = write_html_snapshot(
         b"""

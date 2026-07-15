@@ -25,6 +25,13 @@ from zotero_metadata_enrichment import (  # type: ignore[import-not-found]
 from zotero_metadata_enrichment.providers.arxiv import (  # type: ignore[import-not-found]
     parse_arxiv_atom as package_parse_arxiv_atom,
 )
+from zotero_metadata_enrichment.provider_http import (  # type: ignore[import-not-found]
+    read_response_bytes,
+    throttled_urlopen,
+)
+from zotero_metadata_enrichment.safe_http import (  # type: ignore[import-not-found]
+    host_suffix_redirect,
+)
 from zotero_metadata_enrichment.text import (  # type: ignore[import-not-found]
     normalize_space,
     title_match_score,
@@ -199,12 +206,14 @@ class ArxivHtmlJobService:
             "Accept": "application/json, application/atom+xml, text/html;q=0.9, */*;q=0.8",
         }
         request = urllib.request.Request(url, headers=headers, method="GET")
-        with urllib.request.urlopen(
+        with throttled_urlopen(
             request,
             timeout=timeout or self.config.request_timeout_seconds,
+            redirect_validator=host_suffix_redirect("arxiv.org"),
         ) as response:
             content_type = response.headers.get_content_charset() or "utf-8"
-            return response.read().decode(content_type, errors="replace")
+            body = read_response_bytes(response, error_label=url)
+            return body.decode(content_type, errors="replace")
 
     def _record_provider_event(self, **event: Any) -> None:
         event.setdefault("created_at", datetime.now(UTC).isoformat())

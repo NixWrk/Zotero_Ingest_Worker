@@ -34,6 +34,14 @@ from zoteropdf2md.web_html_polish import (
 )
 
 
+@pytest.fixture(autouse=True)
+def _stub_safe_http_dns(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "zotero_metadata_enrichment.safe_http._resolve_target",
+        lambda *_args, **_kwargs: (object(),),
+    )
+
+
 KOSMOS_LIKE_HTML = """
 <!doctype html>
 <html>
@@ -1743,7 +1751,7 @@ def test_remote_image_fetch_rejects_declared_oversize_before_read(
         body=b"not read",
         content_length=5,
     )
-    monkeypatch.setattr("urllib.request.urlopen", lambda *_args, **_kwargs: response)
+    monkeypatch.setattr("zotero_metadata_enrichment.safe_http._open_pinned_once", lambda *_args, **_kwargs: response)
 
     with pytest.raises(WebHtmlPolishError, match="exceeds 4 bytes"):
         web_polish_module._fetch_remote_image(url, max_bytes=4)
@@ -1761,10 +1769,37 @@ def test_remote_image_fetch_rejects_cross_host_redirect(
         content_type="image/png",
         body=b"not read",
     )
-    monkeypatch.setattr("urllib.request.urlopen", lambda *_args, **_kwargs: response)
+    monkeypatch.setattr("zotero_metadata_enrichment.safe_http._open_pinned_once", lambda *_args, **_kwargs: response)
 
     with pytest.raises(WebHtmlPolishError, match="Cross-host"):
         web_polish_module._fetch_remote_image(source_url)
+    assert response.read_sizes == []
+
+
+def test_remote_image_blocks_cross_host_redirect_before_second_open(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    from zoteropdf2md import web_html_polish as web_polish_module
+
+    calls: list[str] = []
+    response = _BoundedFetchResponse(
+        url="https://content.cld.iop.org/figure.png",
+        content_type="image/png",
+        body=b"not read",
+    )
+    response.status = 302
+    response.headers["Location"] = "https://other.example/figure.png"
+
+    def fake_open(request: object, **_kwargs: object) -> _BoundedFetchResponse:
+        calls.append(request.full_url)  # type: ignore[attr-defined]
+        return response
+
+    monkeypatch.setattr("zotero_metadata_enrichment.safe_http._open_pinned_once", fake_open)
+
+    with pytest.raises(WebHtmlPolishError, match="Redirect policy rejected"):
+        web_polish_module._fetch_remote_image("https://content.cld.iop.org/figure.png")
+
+    assert calls == ["https://content.cld.iop.org/figure.png"]
     assert response.read_sizes == []
 
 
@@ -1780,7 +1815,7 @@ def test_remote_html_fetch_rejects_declared_oversize_before_read(
         body=b"not read",
         content_length=5,
     )
-    monkeypatch.setattr("urllib.request.urlopen", lambda *_args, **_kwargs: response)
+    monkeypatch.setattr("zotero_metadata_enrichment.safe_http._open_pinned_once", lambda *_args, **_kwargs: response)
 
     with pytest.raises(WebHtmlPolishError, match="exceeds 4 bytes"):
         web_polish_module._fetch_remote_html(url, max_bytes=4)

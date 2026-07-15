@@ -11,6 +11,7 @@ from typing import Any
 from .html_sources import is_probable_pdf_url
 from .models import FullTextLocation
 from .provider_http import throttled_urlopen
+from .safe_http import UnsafeUrlError
 from .text import title_match_score
 from .url_safety import validate_fetch_url
 
@@ -110,6 +111,15 @@ def fetch_pdf_source(
             final_url = getattr(response, "url", location.url)
             content_type = str(response.headers.get("Content-Type") or "")
             body = response.read(max_bytes + 1)
+    except UnsafeUrlError as exc:
+        return PdfSourceFetchResult(
+            source=location.source,
+            url=location.url,
+            kind=location.kind,
+            ok=False,
+            status="unsafe_redirect" if exc.is_redirect else "unsafe_url",
+            error=str(exc),
+        )
     except urllib.error.HTTPError as exc:
         return PdfSourceFetchResult(
             source=location.source,

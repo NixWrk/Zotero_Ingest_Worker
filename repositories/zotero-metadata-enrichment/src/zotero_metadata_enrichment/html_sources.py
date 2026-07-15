@@ -12,6 +12,7 @@ from typing import Any
 
 from .models import FullTextLocation
 from .provider_http import throttled_urlopen
+from .safe_http import UnsafeUrlError
 from .text import normalize_space, strip_html, title_match_score
 from .url_safety import validate_fetch_url
 
@@ -284,6 +285,15 @@ def fetch_html_source(
                     size=declared_bytes,
                 )
             body = response.read(byte_limit + 1)
+    except UnsafeUrlError as exc:
+        return HtmlSourceFetchResult(
+            source=location.source,
+            url=location.url,
+            kind=location.kind,
+            ok=False,
+            status="unsafe_redirect" if exc.is_redirect else "unsafe_url",
+            error=str(exc),
+        )
     except urllib.error.HTTPError as exc:
         return HtmlSourceFetchResult(
             source=location.source,
@@ -1146,6 +1156,11 @@ class SnapshotAssetDownloader:
                     self.failures.append({"url": absolute_url, "reason": "asset_total_bytes_limit"})
                     return None
                 payload = response.read(read_limit + 1)
+        except UnsafeUrlError as exc:
+            self.failed_count += 1
+            prefix = "unsafe_redirect" if exc.is_redirect else "unsafe_url"
+            self.failures.append({"url": absolute_url, "reason": f"{prefix}:{exc}"})
+            return None
         except Exception as exc:
             self.failed_count += 1
             self.failures.append({"url": absolute_url, "reason": str(exc)[:200]})

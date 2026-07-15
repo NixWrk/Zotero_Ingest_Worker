@@ -4,6 +4,9 @@ import urllib.parse
 import urllib.request
 import xml.etree.ElementTree as ET
 
+from zotero_metadata_enrichment.provider_http import read_response_bytes, throttled_urlopen
+from zotero_metadata_enrichment.safe_http import host_suffix_redirect
+
 from .identifiers import extract_arxiv_id_from_text, normalize_arxiv_id
 from .models import ArxivCandidate
 from .text import normalize_space, title_match_score
@@ -79,9 +82,14 @@ class ArxivLookupClient:
             },
             method="GET",
         )
-        with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
+        with throttled_urlopen(
+            request,
+            timeout=self.timeout_seconds,
+            redirect_validator=host_suffix_redirect("arxiv.org"),
+        ) as response:
             charset = response.headers.get_content_charset() or "utf-8"
-            return response.read().decode(charset, errors="replace")
+            body = read_response_bytes(response, error_label=url)
+            return body.decode(charset, errors="replace")
 
 
 def parse_arxiv_atom(xml_text: str) -> list[ArxivCandidate]:

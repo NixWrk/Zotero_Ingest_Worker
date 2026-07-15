@@ -19,6 +19,13 @@ import re
 import urllib.parse
 import urllib.request
 
+from zotero_metadata_enrichment.safe_http import (  # type: ignore[import-not-found]
+    UnsafeUrlError,
+    host_suffix_redirect,
+    safe_urlopen,
+    same_host_redirect,
+)
+
 from .arxiv_source_recovery import (
     recover_latexml_figures_from_arxiv_source_html,
 )
@@ -798,14 +805,21 @@ def _fetch_remote_image(
         url,
         headers={"User-Agent": "Mozilla/5.0 z2m-web-polish"},
     )
-    with urllib.request.urlopen(request, timeout=20) as response:
-        content_type = response.headers.get("Content-Type")
-        _require_same_host_redirect(url, _response_url(response, fallback=url))
-        byte_limit = max(max_bytes, 0)
-        declared = _response_content_length(response)
-        if declared is not None and declared > byte_limit:
-            raise WebHtmlPolishError(f"Remote image exceeds {byte_limit} bytes: {url}")
-        blob = response.read(byte_limit + 1)
+    try:
+        with safe_urlopen(
+            request,
+            timeout=20,
+            redirect_validator=same_host_redirect,
+        ) as response:
+            content_type = response.headers.get("Content-Type")
+            _require_same_host_redirect(url, _response_url(response, fallback=url))
+            byte_limit = max(max_bytes, 0)
+            declared = _response_content_length(response)
+            if declared is not None and declared > byte_limit:
+                raise WebHtmlPolishError(f"Remote image exceeds {byte_limit} bytes: {url}")
+            blob = response.read(byte_limit + 1)
+    except UnsafeUrlError as exc:
+        raise WebHtmlPolishError(str(exc)) from exc
     if len(blob) > byte_limit:
         raise WebHtmlPolishError(f"Remote image exceeds {byte_limit} bytes: {url}")
     return blob, content_type
@@ -819,17 +833,24 @@ def _fetch_remote_html(url: str, *, max_bytes: int = _MAX_WEB_HTML_BYTES) -> str
             "User-Agent": "Mozilla/5.0 z2m-web-polish",
         },
     )
-    with urllib.request.urlopen(request, timeout=30) as response:
-        content_type = response.headers.get("Content-Type") or ""
-        charset = response.headers.get_content_charset() or "utf-8"
-        final_url = _response_url(response, fallback=url)
-        if not _is_allowed_sciendo_redirect(url, final_url):
-            raise WebHtmlPolishError(f"Unsafe Sciendo redirect rejected: {url} -> {final_url}")
-        byte_limit = max(max_bytes, 0)
-        declared = _response_content_length(response)
-        if declared is not None and declared > byte_limit:
-            raise WebHtmlPolishError(f"Fetched HTML exceeds {byte_limit} bytes: {url}")
-        body = response.read(byte_limit + 1)
+    try:
+        with safe_urlopen(
+            request,
+            timeout=30,
+            redirect_validator=host_suffix_redirect("sciendo.com", "reference-global.com"),
+        ) as response:
+            content_type = response.headers.get("Content-Type") or ""
+            charset = response.headers.get_content_charset() or "utf-8"
+            final_url = _response_url(response, fallback=url)
+            if not _is_allowed_sciendo_redirect(url, final_url):
+                raise WebHtmlPolishError(f"Unsafe Sciendo redirect rejected: {url} -> {final_url}")
+            byte_limit = max(max_bytes, 0)
+            declared = _response_content_length(response)
+            if declared is not None and declared > byte_limit:
+                raise WebHtmlPolishError(f"Fetched HTML exceeds {byte_limit} bytes: {url}")
+            body = response.read(byte_limit + 1)
+    except UnsafeUrlError as exc:
+        raise WebHtmlPolishError(str(exc)) from exc
     if len(body) > byte_limit:
         raise WebHtmlPolishError(f"Fetched HTML exceeds {byte_limit} bytes: {url}")
     if "text/html" not in content_type.lower() and b"<html" not in body[:4096].lower():

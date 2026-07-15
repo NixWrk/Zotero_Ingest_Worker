@@ -3,6 +3,9 @@ from __future__ import annotations
 import urllib.parse
 import urllib.request
 
+from zotero_metadata_enrichment.provider_http import read_response_bytes, throttled_urlopen
+from zotero_metadata_enrichment.safe_http import host_suffix_redirect
+
 from .identifiers import normalize_arxiv_id
 from .text import strip_html
 
@@ -32,9 +35,14 @@ class ArxivHtmlClient:
             },
             method="GET",
         )
-        with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:
+        with throttled_urlopen(
+            request,
+            timeout=self.timeout_seconds,
+            redirect_validator=host_suffix_redirect("arxiv.org"),
+        ) as response:
             charset = response.headers.get_content_charset() or "utf-8"
-            html_text = response.read().decode(charset, errors="replace")
+            body = read_response_bytes(response, error_label=url)
+            html_text = body.decode(charset, errors="replace")
         validation = validate_arxiv_html(html_text, min_text_chars=self.min_text_chars)
         if not validation["ok"]:
             raise RuntimeError(f"arXiv HTML validation failed: {validation['reason']}")

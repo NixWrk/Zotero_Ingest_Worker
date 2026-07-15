@@ -4,10 +4,20 @@ import urllib.error
 from pathlib import Path
 from typing import Any
 
+import pytest
+
 from zotero_metadata_enrichment import provider_http
 from zotero_metadata_enrichment.models import FullTextLocation
 from zotero_metadata_enrichment.pdf_sources import download_pdf_sources, fetch_pdf_source
 from zotero_metadata_enrichment.provider_http import HostThrottle
+
+
+@pytest.fixture(autouse=True)
+def _stub_safe_http_dns(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "zotero_metadata_enrichment.safe_http._resolve_target",
+        lambda *_args, **_kwargs: (object(),),
+    )
 
 
 class FakeResponse:
@@ -36,7 +46,7 @@ def test_fetch_pdf_source_saves_confirmed_pdf(monkeypatch: Any, tmp_path: Path) 
             body=b"%PDF-1.7 article",
         )
 
-    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("zotero_metadata_enrichment.safe_http._open_pinned_once", fake_urlopen)
 
     result = fetch_pdf_source(
         FullTextLocation(source="unpaywall", url="https://repo.example/paper.pdf", kind="pdf"),
@@ -72,7 +82,7 @@ def test_fetch_pdf_source_rate_limit_sets_host_cooldown(monkeypatch: Any, tmp_pa
             None,
         )
 
-    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("zotero_metadata_enrichment.safe_http._open_pinned_once", fake_urlopen)
 
     result = fetch_pdf_source(
         FullTextLocation(source="unpaywall", url="https://repo.example/paper.pdf", kind="pdf"),
@@ -89,7 +99,7 @@ def test_download_pdf_sources_zero_limit_skips_all(monkeypatch: Any, tmp_path: P
     def fake_urlopen(_request: Any, timeout: int) -> FakeResponse:
         raise AssertionError("limit=0 must not probe PDF URLs")
 
-    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("zotero_metadata_enrichment.safe_http._open_pinned_once", fake_urlopen)
 
     results = download_pdf_sources(
         [
@@ -112,7 +122,7 @@ def test_fetch_pdf_source_rejects_html_response(monkeypatch: Any, tmp_path: Path
             body=b"<html><body>landing</body></html>",
         )
 
-    monkeypatch.setattr("urllib.request.urlopen", fake_urlopen)
+    monkeypatch.setattr("zotero_metadata_enrichment.safe_http._open_pinned_once", fake_urlopen)
 
     result = fetch_pdf_source(
         FullTextLocation(source="crossref", url="https://repo.example/paper", kind="pdf"),
