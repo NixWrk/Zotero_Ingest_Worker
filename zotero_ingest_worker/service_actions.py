@@ -12,6 +12,9 @@ from .worker_roles import (
 )
 
 
+__all__ = ["POST_ACTION_PATHS", "run_post_action"]
+
+
 def run_post_action(
     path: str,
     base_config: WorkerConfig,

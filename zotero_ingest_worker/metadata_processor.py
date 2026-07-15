@@ -107,6 +107,35 @@ from .source_html_maintenance import cleanup_source_html_library
 from .state import FileSignature, PipelineStateStore
 
 
+__all__ = [
+    "MetadataCandidate",
+    "ZoteroMetadataProcessor",
+    "_best_successful_html_download",
+    "_doi_for_scihub",
+    "_full_text_ocr_candidates",
+    "_html_attachment_source_with_embedded_assets",
+    "_merge_extra",
+    "_relay_url_candidates",
+    "_scihub_doi_from_job",
+    "arxiv_html_filename",
+    "build_metadata_diff",
+    "build_metadata_patch",
+    "crossref_work_to_candidate",
+    "extract_arxiv_id_from_text",
+    "extract_doi_from_text",
+    "filter_metadata_diff_for_item_type",
+    "first_full_text_output_path",
+    "full_text_worker_status",
+    "metadata_job_owner",
+    "normalize_arxiv_id",
+    "normalize_doi",
+    "parse_arxiv_atom",
+    "title_match_score",
+    "validate_arxiv_html",
+    "zotero_translator_item_to_candidate",
+]
+
+
 class ZoteroMetadataProcessor:
     def __init__(self, config: WorkerConfig):
         self.config = config

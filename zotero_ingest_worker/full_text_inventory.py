@@ -3,7 +3,6 @@ from __future__ import annotations
 import re
 from dataclasses import asdict, dataclass
 from pathlib import Path
-from typing import Any
 
 from .package_paths import ensure_local_package_paths
 
@@ -13,6 +12,7 @@ from zotero_metadata_enrichment.attachment_types import (  # type: ignore[import
     is_html_attachment,
     is_pdf_attachment,
 )
+
 
 @dataclass(frozen=True)
 class FullTextAttachmentRecord:

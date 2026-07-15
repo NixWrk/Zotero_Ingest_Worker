@@ -35,3 +35,13 @@ zoteropdf2md = ["assets/katex/*"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 norecursedirs = ["data", "pytest-cache-files-*"]
+
+[tool.ruff.lint.per-file-ignores]
+# These modules bootstrap nested sibling-package src paths before importing them.
+"scripts/drains/full_text_compact.py" = ["E402"]
+"zotero_ingest_worker/arxiv_html.py" = ["E402"]
+"zotero_ingest_worker/full_text_discovery.py" = ["E402"]
+"zotero_ingest_worker/full_text_inventory.py" = ["E402"]
+"zotero_ingest_worker/metadata_processor.py" = ["E402"]
+"zotero_ingest_worker/metadata_processor_helpers.py" = ["E402"]
+"zotero_ingest_worker/scihub_pdf.py" = ["E402"]

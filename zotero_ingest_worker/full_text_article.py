@@ -28,8 +28,6 @@ def html_download_article_verdict(item: dict[str, Any]) -> dict[str, Any]:
     sections = _normalized_set(article_data.get("section_markers"))
     text_chars = _int_value(article_data.get("text_chars"))
     kind = str(item.get("kind") or "").casefold()
-    source = str(item.get("source") or "").casefold()
-    urls = _candidate_urls(item)
     title = str(article_data.get("title") or "")
     title_lc = title.casefold()
 
