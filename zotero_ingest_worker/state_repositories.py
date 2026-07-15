@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any
+from typing import TYPE_CHECKING, Any
+
+if TYPE_CHECKING:
+    from .state import PipelineStateStore
 
 
 @dataclass(frozen=True)
 class WatchFileRepository:
-    store: Any
+    store: PipelineStateStore
 
     def count(self) -> int:
         return self.store.watch_count()
@@ -26,7 +29,7 @@ class WatchFileRepository:
 
 @dataclass(frozen=True)
 class ProblemDocumentRepository:
-    store: Any
+    store: PipelineStateStore
 
     def record(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
         return self.store.record_problem_document(*args, **kwargs)
@@ -40,7 +43,7 @@ class ProblemDocumentRepository:
 
 @dataclass(frozen=True)
 class OcrJobRepository:
-    store: Any
+    store: PipelineStateStore
 
     def enqueue(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
         return self.store.enqueue_job(*args, **kwargs)
@@ -84,7 +87,7 @@ class OcrJobRepository:
 
 @dataclass(frozen=True)
 class HtmlJobRepository:
-    store: Any
+    store: PipelineStateStore
 
     def enqueue(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
         return self.store.enqueue_html_job(*args, **kwargs)
@@ -125,7 +128,7 @@ class HtmlJobRepository:
 
 @dataclass(frozen=True)
 class MetadataJobRepository:
-    store: Any
+    store: PipelineStateStore
 
     def enqueue(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
         return self.store.enqueue_metadata_job(*args, **kwargs)
@@ -163,7 +166,7 @@ class MetadataJobRepository:
 
 @dataclass(frozen=True)
 class FullRunRepository:
-    store: Any
+    store: PipelineStateStore
 
     def create(self, *args: Any, **kwargs: Any) -> dict[str, Any]:
         return self.store.create_full_run(*args, **kwargs)
