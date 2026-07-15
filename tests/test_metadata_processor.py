@@ -9,7 +9,7 @@ from types import SimpleNamespace
 from typing import Any
 
 import zotero_ingest_worker.full_text_attachment as full_text_attachment_module
-from zotero_ingest_worker.local_zotero import LocalAttachment, LocalZoteroStore
+from zotero_ingest_worker.local_zotero import LocalAttachment, LocalItemMetadata, LocalZoteroStore
 from zotero_ingest_worker.arxiv_html import ArxivHtmlValidationError
 from zotero_ingest_worker.metadata_jobs import METADATA_JOB_FULL_TEXT
 from zotero_ingest_worker.metadata_processor import (
@@ -317,11 +317,33 @@ def test_metadata_lookup_uses_shared_enricher(monkeypatch) -> None:
     processor = ZoteroMetadataProcessor.__new__(ZoteroMetadataProcessor)
     processor.config = SimpleNamespace()
     processor._provider_events = []
-    metadata = SimpleNamespace(fields={"title": "Example"}, title="Example", tags=[], relations=[])
-    attachment = SimpleNamespace(
-        filename="paper.pdf",
+    metadata = LocalItemMetadata(
+        library_id="1",
+        data_dir=Path("zotero"),
+        key="PARENT1",
+        item_id=1,
+        version=2,
+        item_type="journalArticle",
+        date_modified="2026-07-15",
+        fields={"title": "Example"},
+        creators=[{"lastName": "Example"}],
+        tags=["test"],
+        collections=[{"key": "COLL1"}],
+        relations=[{"dc:relation": "x"}],
+    )
+    attachment = LocalAttachment(
+        library_id="1",
+        data_dir=Path("zotero"),
+        storage_dir=Path("zotero/storage"),
+        key="ATTACH1",
+        item_id=2,
+        parent_item_id=1,
+        date_modified="2026-07-15",
+        link_mode=0,
+        content_type="application/pdf",
         zotero_path="storage:paper.pdf",
         file_path=Path("paper.pdf"),
+        parent_key="PARENT1",
     )
     expected = MetadataCandidate(
         source="arxiv",
@@ -334,7 +356,12 @@ def test_metadata_lookup_uses_shared_enricher(monkeypatch) -> None:
     class FakeEnricher:
         provider_events = [{"provider": "arxiv", "status": "matched"}]
 
-        def lookup_candidate(self, **_kwargs: object) -> MetadataCandidate:
+        def lookup_candidate(self, **kwargs: object) -> MetadataCandidate:
+            converted_metadata = kwargs["metadata"]
+            converted_attachment = kwargs["attachment"]
+            assert converted_metadata.fields == metadata.fields
+            assert converted_metadata.creators == metadata.creators
+            assert converted_attachment.parent_key == attachment.parent_key
             return expected
 
     monkeypatch.setattr(processor, "_metadata_enricher", lambda: FakeEnricher())

@@ -13,26 +13,26 @@ from .package_paths import ensure_local_package_paths
 
 ensure_local_package_paths()
 
-from zotero_arxiv_html_ingest import (  # type: ignore[import-not-found]
+from zotero_arxiv_html_ingest import (
     arxiv_html_filename as package_arxiv_html_filename,
     validate_arxiv_html as package_validate_arxiv_html,
 )
-from zotero_metadata_enrichment import (  # type: ignore[import-not-found]
+from zotero_metadata_enrichment import (
     MetadataCandidate,
     extract_arxiv_id_from_text,
     normalize_arxiv_id,
 )
-from zotero_metadata_enrichment.providers.arxiv import (  # type: ignore[import-not-found]
+from zotero_metadata_enrichment.providers.arxiv import (
     parse_arxiv_atom as package_parse_arxiv_atom,
 )
-from zotero_metadata_enrichment.provider_http import (  # type: ignore[import-not-found]
+from zotero_metadata_enrichment.provider_http import (
     read_response_bytes,
     throttled_urlopen,
 )
-from zotero_metadata_enrichment.safe_http import (  # type: ignore[import-not-found]
+from zotero_metadata_enrichment.safe_http import (
     host_suffix_redirect,
 )
-from zotero_metadata_enrichment.text import (  # type: ignore[import-not-found]
+from zotero_metadata_enrichment.text import (
     normalize_space,
     title_match_score,
 )
@@ -224,11 +224,11 @@ class ArxivHtmlJobService:
 
 
 def parse_arxiv_atom(xml_text: str) -> list[MetadataCandidate]:
-    return cast(list[MetadataCandidate], package_parse_arxiv_atom(xml_text))
+    return package_parse_arxiv_atom(xml_text)
 
 
 def arxiv_html_filename(pdf_filename: str) -> str:
-    return cast(str, package_arxiv_html_filename(pdf_filename))
+    return package_arxiv_html_filename(pdf_filename)
 
 
 def validate_arxiv_html(html_text: str, *, min_text_chars: int = 200) -> dict[str, Any]:
@@ -271,8 +271,8 @@ def title_for_lookup(
     attachment: LocalAttachment,
 ) -> str:
     if metadata is not None and metadata.title:
-        return cast(str, normalize_space(metadata.title))
-    return cast(str, normalize_space(Path(attachment.filename).stem))
+        return normalize_space(metadata.title)
+    return normalize_space(Path(attachment.filename).stem)
 
 
 def safe_filename(value: str) -> str:

@@ -12,11 +12,11 @@ from .package_paths import ensure_local_package_paths
 
 ensure_local_package_paths()
 
-from zotero_metadata_enrichment.html_sources import (  # type: ignore[import-not-found]
+from zotero_metadata_enrichment.html_sources import (
     assess_article_html as package_assess_article_html,
     write_html_snapshot as package_write_html_snapshot,
 )
-from zotero_metadata_enrichment.pdf_sources import (  # type: ignore[import-not-found]
+from zotero_metadata_enrichment.pdf_sources import (
     download_pdf_sources as package_download_pdf_sources,
 )
 

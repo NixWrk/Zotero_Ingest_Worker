@@ -15,8 +15,10 @@ from .package_paths import ensure_local_package_paths
 
 ensure_local_package_paths()
 
-from zotero_metadata_enrichment import (  # type: ignore[import-not-found]
+from zotero_metadata_enrichment import (
     EnricherConfig,
+    LocalAttachment as EnrichmentLocalAttachment,
+    LocalItemMetadata as EnrichmentLocalItemMetadata,
     MetadataCandidate,
     MetadataEnricher,
     discover_and_download_full_text,
@@ -1555,7 +1557,10 @@ class ZoteroMetadataProcessor:
         attachment: LocalAttachment,
     ) -> MetadataCandidate | None:
         enricher = self._metadata_enricher()
-        candidate = enricher.lookup_candidate(metadata=metadata, attachment=attachment)
+        candidate = enricher.lookup_candidate(
+            metadata=_enrichment_metadata(metadata),
+            attachment=_enrichment_attachment(attachment),
+        )
         self._provider_events = list(enricher.provider_events)
         return candidate
 
@@ -2127,6 +2132,40 @@ class ZoteroMetadataProcessor:
 
     def _queue_key(self, job_type: str) -> str:
         return metadata_queue_key(self.config, job_type)
+
+
+def _enrichment_metadata(metadata: LocalItemMetadata) -> EnrichmentLocalItemMetadata:
+    return EnrichmentLocalItemMetadata(
+        library_id=metadata.library_id,
+        data_dir=metadata.data_dir,
+        key=metadata.key,
+        item_id=metadata.item_id,
+        version=metadata.version,
+        item_type=metadata.item_type,
+        date_modified=metadata.date_modified,
+        fields=dict(metadata.fields),
+        creators=[dict(item) for item in metadata.creators],
+        tags=list(metadata.tags),
+        collections=[dict(item) for item in metadata.collections],
+        relations=[dict(item) for item in metadata.relations],
+    )
+
+
+def _enrichment_attachment(attachment: LocalAttachment) -> EnrichmentLocalAttachment:
+    return EnrichmentLocalAttachment(
+        library_id=attachment.library_id,
+        data_dir=attachment.data_dir,
+        storage_dir=attachment.storage_dir,
+        key=attachment.key,
+        item_id=attachment.item_id,
+        parent_item_id=attachment.parent_item_id,
+        parent_key=attachment.parent_key,
+        file_path=attachment.file_path,
+        zotero_path=attachment.zotero_path,
+        date_modified=attachment.date_modified,
+        link_mode=attachment.link_mode,
+        content_type=attachment.content_type,
+    )
 
 
 def _relay_result_with_attachment_key(relay_result: dict[str, Any]) -> dict[str, Any]:

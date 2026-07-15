@@ -14,7 +14,7 @@ from .package_paths import ensure_local_package_paths
 
 ensure_local_package_paths()
 
-from zotero_metadata_enrichment import (  # type: ignore[import-not-found]
+from zotero_metadata_enrichment import (
     MetadataCandidate,
     build_metadata_diff as package_build_metadata_diff,
     build_metadata_patch as package_build_metadata_patch,
@@ -23,16 +23,16 @@ from zotero_metadata_enrichment import (  # type: ignore[import-not-found]
     normalize_arxiv_id as package_normalize_arxiv_id,
     normalize_doi as package_normalize_doi,
 )
-from zotero_metadata_enrichment.providers.crossref import (  # type: ignore[import-not-found]
+from zotero_metadata_enrichment.providers.crossref import (
     crossref_work_to_candidate as package_crossref_work_to_candidate,
 )
-from zotero_metadata_enrichment.providers.zotero_translation_server import (  # type: ignore[import-not-found]
+from zotero_metadata_enrichment.providers.zotero_translation_server import (
     zotero_translator_item_to_candidate as package_zotero_translator_item_to_candidate,
 )
-from zotero_metadata_enrichment.safe_http import (  # type: ignore[import-not-found]
+from zotero_metadata_enrichment.safe_http import (
     UnsafeUrlError,
 )
-from zotero_metadata_enrichment.text import (  # type: ignore[import-not-found]
+from zotero_metadata_enrichment.text import (
     normalize_space as package_normalize_space,
     title_match_score as package_title_match_score,
 )
@@ -51,10 +51,7 @@ def build_metadata_patch(
     current_fields: dict[str, str],
     policy: str,
 ) -> dict[str, str]:
-    return cast(
-        dict[str, str],
-        package_build_metadata_patch(candidate, current_fields=current_fields, policy=policy),
-    )
+    return package_build_metadata_patch(candidate, current_fields=current_fields, policy=policy)
 
 
 def build_metadata_diff(
@@ -232,19 +229,19 @@ def filter_metadata_diff_for_item_type(diff: dict[str, Any], *, item_type: str |
 
 
 def extract_doi_from_text(text: str) -> str | None:
-    return cast(str | None, package_extract_doi_from_text(text))
+    return package_extract_doi_from_text(text)
 
 
 def normalize_doi(value: str) -> str:
-    return cast(str, package_normalize_doi(value))
+    return package_normalize_doi(value)
 
 
 def extract_arxiv_id_from_text(text: str) -> str | None:
-    return cast(str | None, package_extract_arxiv_id_from_text(text))
+    return package_extract_arxiv_id_from_text(text)
 
 
 def normalize_arxiv_id(value: str) -> str:
-    return cast(str, package_normalize_arxiv_id(value))
+    return package_normalize_arxiv_id(value)
 
 
 def crossref_work_to_candidate(work: dict[str, Any], *, score: float) -> MetadataCandidate | None:
@@ -269,7 +266,7 @@ def zotero_translator_item_to_candidate(
 
 
 def title_match_score(left: str, right: str) -> float:
-    return cast(float, package_title_match_score(left, right))
+    return package_title_match_score(left, right)
 
 
 def _metadata_haystack(
@@ -540,7 +537,7 @@ def _full_text_ocr_candidates(payload: dict[str, Any]) -> list[str]:
 
 
 def _normalize_space(value: str) -> str:
-    return cast(str, package_normalize_space(value))
+    return package_normalize_space(value)
 
 
 def _merge_extra(current: str, new_value: str) -> str:

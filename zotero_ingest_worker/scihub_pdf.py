@@ -8,7 +8,7 @@ import urllib.request
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
 from .config import DEFAULT_SCIHUB_MIRRORS, PROJECT_ROOT, WorkerConfig
 from .package_paths import ensure_local_package_paths
@@ -16,18 +16,18 @@ from .provider_scripts import provider_script_path
 
 ensure_local_package_paths()
 
-from zotero_metadata_enrichment import (  # type: ignore[import-not-found]
+from zotero_metadata_enrichment import (
     extract_doi_from_text as package_extract_doi_from_text,
     normalize_doi as package_normalize_doi,
 )
-from zotero_metadata_enrichment.pdf_sources import (  # type: ignore[import-not-found]
+from zotero_metadata_enrichment.pdf_sources import (
     assess_pdf_bytes_identity as package_assess_pdf_bytes_identity,
 )
-from zotero_metadata_enrichment.safe_http import (  # type: ignore[import-not-found]
+from zotero_metadata_enrichment.safe_http import (
     UnsafeUrlError,
     safe_urlopen,
 )
-from zotero_metadata_enrichment.url_safety import (  # type: ignore[import-not-found]
+from zotero_metadata_enrichment.url_safety import (
     validate_fetch_url as package_validate_fetch_url,
 )
 
@@ -474,12 +474,12 @@ def doi_from_metadata(metadata: Any) -> str:
         if explicit:
             normalized = package_normalize_doi(explicit)
             if normalized:
-                return cast(str, normalized)
+                return normalized
     parts: list[str] = [str(getattr(metadata, "title", "") or "")]
     if isinstance(fields, dict):
         parts.extend(str(value) for value in fields.values())
     found = package_extract_doi_from_text(" ".join(part for part in parts if part)) or ""
-    return cast(str, package_normalize_doi(found))
+    return package_normalize_doi(found)
 
 
 def _safe_doi(doi: str) -> str:

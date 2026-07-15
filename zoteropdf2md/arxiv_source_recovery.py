@@ -23,7 +23,7 @@ import urllib.request
 import zipfile
 from typing import Protocol
 
-from zotero_metadata_enrichment.safe_http import (  # type: ignore[import-not-found]
+from zotero_metadata_enrichment.safe_http import (
     host_suffix_redirect,
     safe_urlopen,
 )
@@ -872,7 +872,7 @@ def _pdf_first_page_to_png(
     max_png_bytes: int = _MAX_RENDERED_PNG_BYTES,
 ) -> bytes | None:
     try:
-        import fitz  # type: ignore[import-untyped]
+        import fitz
     except Exception:
         return None
     if not math.isfinite(scale) or scale <= 0:

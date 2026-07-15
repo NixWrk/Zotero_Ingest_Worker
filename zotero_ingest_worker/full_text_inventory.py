@@ -8,7 +8,7 @@ from .package_paths import ensure_local_package_paths
 
 ensure_local_package_paths()
 
-from zotero_metadata_enrichment.attachment_types import (  # type: ignore[import-not-found]
+from zotero_metadata_enrichment.attachment_types import (
     is_html_attachment,
     is_pdf_attachment,
 )

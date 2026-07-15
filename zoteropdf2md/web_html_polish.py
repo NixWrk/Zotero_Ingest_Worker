@@ -19,7 +19,7 @@ import re
 import urllib.parse
 import urllib.request
 
-from zotero_metadata_enrichment.safe_http import (  # type: ignore[import-not-found]
+from zotero_metadata_enrichment.safe_http import (
     UnsafeUrlError,
     host_suffix_redirect,
     safe_urlopen,
