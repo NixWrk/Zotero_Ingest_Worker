@@ -681,6 +681,8 @@ def _unsafe_attribute_count(text: str) -> int:
 
 
 def _int_value(value: object) -> int:
+    if not isinstance(value, (str, bytes, bytearray, int, float)):
+        return 0
     try:
         return int(value or 0)
     except (TypeError, ValueError):

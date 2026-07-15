@@ -191,6 +191,8 @@ def _optional_str(value: object) -> str | None:
 def _optional_int(value: object) -> int | None:
     if value is None or value == "":
         return None
+    if not isinstance(value, (str, bytes, bytearray, int, float)):
+        raise ValueError("Expected an integer value.")
     parsed = int(value)
     return parsed if parsed > 0 else None
 
@@ -198,6 +200,8 @@ def _optional_int(value: object) -> int | None:
 def _int_value(value: object, default: int) -> int:
     if value is None or value == "":
         return default
+    if not isinstance(value, (str, bytes, bytearray, int, float)):
+        raise ValueError("Expected an integer value.")
     return int(value)
 
 

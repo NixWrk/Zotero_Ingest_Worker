@@ -202,6 +202,8 @@ def _normalized_set(value: object) -> set[str]:
 
 
 def _int_value(value: object) -> int:
+    if not isinstance(value, (str, bytes, bytearray, int, float)):
+        return 0
     try:
         return int(value or 0)
     except (TypeError, ValueError):

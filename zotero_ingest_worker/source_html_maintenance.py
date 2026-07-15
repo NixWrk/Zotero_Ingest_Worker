@@ -52,6 +52,7 @@ def cleanup_source_html_records(
     trashed: list[dict[str, Any]] = []
     errors: list[dict[str, str]] = []
     for candidate in candidates:
+        relay: dict[str, Any]
         if dry_run:
             relay = {"ok": True, "dryRun": True, "wouldTrash": True}
         elif trash_attachment is None:

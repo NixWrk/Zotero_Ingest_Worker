@@ -2115,6 +2115,8 @@ def _relay_result_with_attachment_key(relay_result: dict[str, Any]) -> dict[str,
 
 
 def _optional_int(value: object) -> int | None:
+    if not isinstance(value, (str, bytes, bytearray, int, float)):
+        return None
     try:
         return int(value) if value is not None and str(value).strip() else None
     except (TypeError, ValueError):

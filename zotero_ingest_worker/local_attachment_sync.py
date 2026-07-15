@@ -308,7 +308,7 @@ def sync_parent_attachment_local(
                 zotero_version,
             ),
         )
-        item_id = int(cursor.lastrowid)
+        item_id = _required_lastrowid(cursor)
         connection.execute(
             """
             insert into itemAttachments (
@@ -652,7 +652,7 @@ def _item_data_value_id(connection: sqlite3.Connection, value: str) -> int:
         "insert into itemDataValues (value) values (?)",
         (value,),
     )
-    return int(cursor.lastrowid)
+    return _required_lastrowid(cursor)
 
 
 def _upsert_item_data(
@@ -735,7 +735,7 @@ def _insert_parent_item(
         f"insert into items ({', '.join(columns)}) values ({placeholders})",
         tuple(values[column] for column in columns),
     )
-    return int(cursor.lastrowid)
+    return _required_lastrowid(cursor)
 
 
 def _insert_attachment_item(
@@ -779,7 +779,7 @@ def _insert_attachment_item(
         ),
         tuple(item_values[column] for column in item_insert_columns),
     )
-    item_id = int(cursor.lastrowid)
+    item_id = _required_lastrowid(cursor)
 
     attachment_columns = _table_columns(connection, "itemAttachments")
     attachment_values: dict[str, object] = {
@@ -923,7 +923,16 @@ def _table_columns(connection: sqlite3.Connection, table_name: str) -> set[str]:
 def _optional_int(value: object) -> int | None:
     if value is None or value == "":
         return None
+    if not isinstance(value, (str, bytes, bytearray, int, float)):
+        return None
     try:
         return int(value)
     except (TypeError, ValueError):
         return None
+
+
+def _required_lastrowid(cursor: sqlite3.Cursor) -> int:
+    value = cursor.lastrowid
+    if value is None:
+        raise RuntimeError("SQLite insert did not produce a row id.")
+    return value

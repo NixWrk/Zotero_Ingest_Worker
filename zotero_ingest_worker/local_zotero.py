@@ -933,6 +933,8 @@ class LocalZoteroStore:
 def _optional_int(value: object) -> int | None:
     if value is None or value == "":
         return None
+    if not isinstance(value, (str, bytes, bytearray, int, float)):
+        return None
     try:
         return int(value)
     except (TypeError, ValueError):

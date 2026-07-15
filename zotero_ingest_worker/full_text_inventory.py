@@ -25,19 +25,19 @@ class FullTextAttachmentRecord:
 
     @property
     def is_pdf(self) -> bool:
-        return is_pdf_attachment(
+        return bool(is_pdf_attachment(
             content_type=self.content_type,
             path=self.path,
             file_path=self.file_path,
-        )
+        ))
 
     @property
     def is_html(self) -> bool:
-        return is_html_attachment(
+        return bool(is_html_attachment(
             content_type=self.content_type,
             path=self.path,
             file_path=self.file_path,
-        )
+        ))
 
     @property
     def is_source_html(self) -> bool:
@@ -161,15 +161,25 @@ def inventory_fingerprint(inventory: dict[str, object] | FullTextInventory) -> s
     else:
         data = inventory
     return (
-        f"pdf={int(bool(data.get('has_pdf')))}:{int(data.get('pdf_count') or 0)}|"
-        f"source_html={int(bool(data.get('has_source_html')))}:{int(data.get('source_html_count') or 0)}|"
-        f"html={int(bool(data.get('has_html')))}:{int(data.get('html_count') or 0)}"
+        f"pdf={int(bool(data.get('has_pdf')))}:{_int_value(data.get('pdf_count'))}|"
+        f"source_html={int(bool(data.get('has_source_html')))}:"
+        f"{_int_value(data.get('source_html_count'))}|"
+        f"html={int(bool(data.get('has_html')))}:{_int_value(data.get('html_count'))}"
     )
 
 
 def _is_source_html_language_marker(value: str) -> bool:
     marker = re.sub(r"[^a-z0-9]+", "", value.casefold())
     return marker not in {"ru", "source", "arxiv", "ocr", "fulltext", "pdf", "html"}
+
+
+def _int_value(value: object) -> int:
+    if not isinstance(value, (str, bytes, bytearray, int, float)):
+        return 0
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return 0
 
 
 def resolved_attachment_path(

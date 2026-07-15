@@ -5,11 +5,24 @@ from __future__ import annotations
 from collections.abc import Callable
 from dataclasses import dataclass
 from importlib import import_module
-from types import ModuleType
+from typing import Protocol, cast
 
 from .core import WebArticleExtraction, WebHtmlKind
 
 RemoteHtmlFetcher = Callable[[str], str]
+
+
+class _WebPolishModule(Protocol):
+    def extract_article_fragment(self, html: str) -> WebArticleExtraction | None: ...
+
+    def normalize_article_fragment(
+        self,
+        html: str,
+        *,
+        source_url: str | None = None,
+        canonical_url: str | None = None,
+        fetch_text: RemoteHtmlFetcher | None = None,
+    ) -> str: ...
 
 
 @dataclass(frozen=True)
@@ -25,10 +38,10 @@ class WebPolishHandler:
     def rejects_full_text(self) -> bool:
         return self.rejection_message is not None
 
-    def module(self) -> ModuleType:
+    def module(self) -> _WebPolishModule:
         if self.module_name is None:
             raise LookupError(f"{self.kind.value} has no publisher polish module")
-        return import_module(f"{__package__}.{self.module_name}")
+        return cast(_WebPolishModule, import_module(f"{__package__}.{self.module_name}"))
 
     def extract_article_fragment(self, html: str) -> WebArticleExtraction | None:
         if self.module_name is None:
