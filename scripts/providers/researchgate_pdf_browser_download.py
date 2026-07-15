@@ -15,17 +15,28 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from zotero_ingest_worker.config import WorkerConfig, from_env
-from zotero_ingest_worker.full_text_attachment import (
+from zotero_ingest_worker.config import WorkerConfig, from_env  # noqa: E402
+from zotero_ingest_worker.browser_network_policy import (  # noqa: E402
+    BrowserNetworkAudit,
+    ResolveTarget,
+    install_browser_network_policy,
+    validate_researchgate_initial_url,
+)
+from zotero_ingest_worker.full_text_attachment import (  # noqa: E402
     sync_parent_attachment_local,
     write_parent_attachment_local_copy,
 )
-from zotero_ingest_worker.local_zotero import LocalAttachment, LocalItemMetadata, LocalZoteroStore
-from zotero_ingest_worker.relay_client import ZoteroRelayClient
+from zotero_ingest_worker.local_zotero import (  # noqa: E402
+    LocalAttachment,
+    LocalItemMetadata,
+    LocalZoteroStore,
+)
+from zotero_ingest_worker.relay_client import ZoteroRelayClient  # noqa: E402
 
 
 DEFAULT_PROFILE_DIR = PROJECT_ROOT / "data" / "browser" / "researchgate"
 DEFAULT_DOWNLOAD_DIR = PROJECT_ROOT / "data" / "ingest" / "researchgate_browser_downloads"
+DEFAULT_MAX_PDF_BYTES = 120_000_000
 DOWNLOAD_TEXT_RE = re.compile(
     r"(download\s+(full[-\s]?text\s+)?pdf|download\s+pdf|full[-\s]?text\s+pdf)",
     re.IGNORECASE,
@@ -44,6 +55,7 @@ def main() -> int:
     parser.add_argument("--channel", default="msedge", help="Playwright browser channel: msedge, chrome, chromium, etc.")
     parser.add_argument("--headless", action="store_true")
     parser.add_argument("--timeout-seconds", type=int, default=90)
+    parser.add_argument("--max-pdf-bytes", type=int, default=DEFAULT_MAX_PDF_BYTES)
     parser.add_argument(
         "--manual-timeout-seconds",
         type=int,
@@ -91,6 +103,10 @@ async def run(args: argparse.Namespace) -> dict[str, Any]:
             timeout_seconds=max(1, int(args.timeout_seconds)),
             manual_timeout_seconds=max(0, int(args.manual_timeout_seconds)),
             keep_open=bool(args.keep_open),
+            max_pdf_bytes=max(
+                1,
+                int(getattr(args, "max_pdf_bytes", DEFAULT_MAX_PDF_BYTES)),
+            ),
         )
     except ModuleNotFoundError as exc:
         if exc.name == "playwright":
@@ -160,7 +176,25 @@ async def download_researchgate_pdf(
     timeout_seconds: int,
     manual_timeout_seconds: int,
     keep_open: bool,
+    resolve_target: ResolveTarget | None = None,
+    max_pdf_bytes: int = DEFAULT_MAX_PDF_BYTES,
 ) -> dict[str, Any]:
+    network_audit = BrowserNetworkAudit()
+    initial_decision = await asyncio.to_thread(
+        validate_researchgate_initial_url,
+        url,
+        resolve_target=resolve_target,
+    )
+    network_audit.record(initial_decision)
+    if not initial_decision.allowed:
+        return {
+            "ok": False,
+            "status": "unsafe_browser_url",
+            "url": initial_decision.to_audit_dict()["url"],
+            "reason": initial_decision.reason,
+            "network_policy": network_audit.to_dict(),
+        }
+
     from playwright.async_api import Error as PlaywrightError
     from playwright.async_api import TimeoutError as PlaywrightTimeoutError
     from playwright.async_api import async_playwright
@@ -174,12 +208,30 @@ async def download_researchgate_pdf(
             "headless": headless,
             "accept_downloads": True,
             "downloads_path": str(output_dir),
-            "args": ["--disable-blink-features=AutomationControlled"],
+            "service_workers": "block",
+            "args": [
+                "--disable-background-networking",
+                "--disable-blink-features=AutomationControlled",
+                "--disable-component-update",
+                "--disable-default-apps",
+                "--disable-quic",
+                "--disable-sync",
+                "--dns-prefetch-disable",
+                "--force-webrtc-ip-handling-policy=disable_non_proxied_udp",
+                "--no-first-run",
+            ],
         }
         if channel and channel.casefold() != "chromium":
             launch_options["channel"] = channel
         browser = await p.chromium.launch_persistent_context(str(profile_dir), **launch_options)
-        page = browser.pages[0] if browser.pages else await browser.new_page()
+        await install_browser_network_policy(
+            browser,
+            network_audit,
+            resolve_target=resolve_target,
+        )
+        for existing_page in list(browser.pages):
+            await existing_page.close()
+        page = await browser.new_page()
         page.set_default_timeout(timeout_seconds * 1000)
         try:
             await page.goto(url, wait_until="domcontentloaded", timeout=timeout_seconds * 1000)
@@ -212,8 +264,14 @@ async def download_researchgate_pdf(
                     "candidates": candidates,
                     "page_url": page.url,
                     "title": await safe_title(page),
+                    "network_policy": network_audit.to_dict(),
                 }
-            saved = await save_download(download, output_dir=output_dir, target_prefix=target_prefix)
+            saved = await save_download(
+                download,
+                output_dir=output_dir,
+                target_prefix=target_prefix,
+                max_pdf_bytes=max(1, int(max_pdf_bytes)),
+            )
             result = {
                 "ok": saved["ok"],
                 "status": "downloaded" if saved["ok"] else "download_not_pdf",
@@ -222,11 +280,22 @@ async def download_researchgate_pdf(
                 "page_url": page.url,
                 "title": await safe_title(page),
                 "candidates": candidates,
+                "network_policy": network_audit.to_dict(),
                 **saved,
             }
             return result
         except PlaywrightError as exc:
-            return {"ok": False, "status": "browser_error", "url": url, "error": str(exc)}
+            return {
+                "ok": False,
+                "status": (
+                    "network_policy_blocked"
+                    if network_audit.blocked_navigation
+                    else "browser_error"
+                ),
+                "url": initial_decision.to_audit_dict()["url"],
+                "error": str(exc),
+                "network_policy": network_audit.to_dict(),
+            }
         finally:
             if keep_open and not headless:
                 print("Browser left open because --keep-open was passed. Press Ctrl+C in this shell when done.", file=sys.stderr)
@@ -256,17 +325,15 @@ async def click_download_candidate(page: Any, *, timeout_seconds: int) -> Any | 
     locators = [
         page.get_by_role("link", name=DOWNLOAD_TEXT_RE),
         page.get_by_role("button", name=DOWNLOAD_TEXT_RE),
-        page.locator("a[href*='.pdf']").first(),
-        page.locator("a[href*='/publication/'][href*='/links/']").first(),
-        page.get_by_text(DOWNLOAD_TEXT_RE).first(),
+        page.locator("a[href*='.pdf']"),
+        page.locator("a[href*='/publication/'][href*='/links/']"),
+        page.get_by_text(DOWNLOAD_TEXT_RE),
     ]
     for locator in locators:
         try:
             if await locator.count() < 1:
                 continue
             candidate = locator.first
-            if callable(candidate):
-                candidate = candidate()
             if not await candidate.is_visible(timeout=1500):
                 continue
             async with page.expect_download(timeout=timeout_seconds * 1000) as download_info:
@@ -277,25 +344,44 @@ async def click_download_candidate(page: Any, *, timeout_seconds: int) -> Any | 
     return None
 
 
-async def save_download(download: Any, *, output_dir: Path, target_prefix: str) -> dict[str, Any]:
+async def save_download(
+    download: Any,
+    *,
+    output_dir: Path,
+    target_prefix: str,
+    max_pdf_bytes: int = DEFAULT_MAX_PDF_BYTES,
+) -> dict[str, Any]:
     suggested = safe_filename_part(Path(download.suggested_filename or "researchgate.pdf").stem)
     stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
     target = output_dir / f"{target_prefix}_{stamp}_{suggested}.pdf"
     await download.save_as(str(target))
-    is_pdf = target.read_bytes()[:5] == b"%PDF-"
+    size = target.stat().st_size
+    if size > max(1, int(max_pdf_bytes)):
+        target.unlink(missing_ok=True)
+        return {
+            "ok": False,
+            "output_path": str(target),
+            "suggested_filename": download.suggested_filename,
+            "size": size,
+            "reason": "downloaded_pdf_exceeds_size_limit",
+            "max_pdf_bytes": max(1, int(max_pdf_bytes)),
+            "removed": True,
+        }
+    with target.open("rb") as handle:
+        is_pdf = handle.read(5) == b"%PDF-"
     if not is_pdf:
         return {
             "ok": False,
             "output_path": str(target),
             "suggested_filename": download.suggested_filename,
-            "size": target.stat().st_size,
+            "size": size,
             "reason": "downloaded_file_is_not_pdf",
         }
     return {
         "ok": True,
         "output_path": str(target),
         "suggested_filename": download.suggested_filename,
-        "size": target.stat().st_size,
+        "size": size,
     }
 
 

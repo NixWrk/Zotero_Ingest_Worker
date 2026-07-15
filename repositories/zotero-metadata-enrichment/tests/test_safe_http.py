@@ -66,6 +66,16 @@ def test_private_initial_target_is_blocked_before_open(monkeypatch: pytest.Monke
     assert calls == []
 
 
+def test_public_target_resolution_is_exposed_without_opening(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    monkeypatch.setattr(safe_http.socket, "getaddrinfo", _public_dns)
+
+    addresses = safe_http.resolve_safe_http_target("https://example.org/a")
+
+    assert [address.ip for address in addresses] == ["93.184.216.34"]
+
+
 def test_dns_failure_remains_retryable_transport_error(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

@@ -176,6 +176,19 @@ def host_suffix_redirect(*suffixes: str) -> RedirectValidator:
     return validator
 
 
+def resolve_safe_http_target(
+    url: str,
+    *,
+    allow_private_networks: bool = False,
+    allow_loopback: bool = False,
+) -> tuple[ResolvedAddress, ...]:
+    return _resolve_target(
+        url,
+        allow_private_networks=allow_private_networks,
+        allow_loopback=allow_loopback,
+    )
+
+
 def _validate_redirect(
     source_url: str,
     target_url: str,
