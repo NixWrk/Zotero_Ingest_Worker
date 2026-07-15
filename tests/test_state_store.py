@@ -1,3 +1,4 @@
+import json
 import os
 from concurrent.futures import ThreadPoolExecutor
 
@@ -13,6 +14,71 @@ def test_pipeline_state_store_sets_schema_version(tmp_path):
     store = PipelineStateStore(tmp_path / "state.sqlite")
 
     assert store.schema_version() == PIPELINE_STATE_SCHEMA_VERSION
+
+
+def test_pipeline_state_store_enables_wal_and_maintenance_indexes(tmp_path):
+    store = PipelineStateStore(tmp_path / "state.sqlite")
+
+    with store._connect() as connection:
+        journal_mode = str(connection.execute("pragma journal_mode").fetchone()[0])
+        busy_timeout = int(connection.execute("pragma busy_timeout").fetchone()[0])
+        indexes = {
+            str(row["name"])
+            for row in connection.execute(
+                "select name from sqlite_master where type = 'index'"
+            ).fetchall()
+        }
+
+    assert journal_mode == "wal"
+    assert busy_timeout == 30_000
+    assert {
+        "idx_ocr_job_events_entity",
+        "idx_ocr_job_events_created",
+        "idx_html_job_events_entity",
+        "idx_html_job_events_created",
+        "idx_metadata_job_events_entity",
+        "idx_metadata_job_events_created",
+        "idx_full_run_events_entity",
+        "idx_full_run_events_created",
+    } <= indexes
+
+
+def test_pipeline_state_v2_upgrade_preserves_jobs_and_adds_maintenance(tmp_path):
+    path = tmp_path / "state.sqlite"
+    source = tmp_path / "zotero.sqlite"
+    source.write_bytes(b"state")
+    store = PipelineStateStore(path)
+    created = store.enqueue_metadata_job(
+        job_type="full_text",
+        library_id="LIB1",
+        attachment_key="PARENT-UPGRADE",
+        data_dir=tmp_path,
+        source_path=source,
+        signature=FileSignature.from_path(source),
+        status="queued",
+        reason="test",
+        parent_item_key="PARENT-UPGRADE",
+        queue_key="full-text-v1",
+    )
+    with store._connect() as connection:
+        connection.execute("drop table state_maintenance")
+        connection.execute("drop index idx_metadata_job_events_entity")
+        connection.execute("pragma user_version = 2")
+
+    upgraded = PipelineStateStore(path)
+
+    assert upgraded.schema_version() == PIPELINE_STATE_SCHEMA_VERSION
+    assert upgraded.get_metadata_job(str(created["job_id"])) is not None
+    with upgraded._connect() as connection:
+        maintenance_table = connection.execute(
+            "select 1 from sqlite_master where type = 'table' and name = 'state_maintenance'"
+        ).fetchone()
+        event_index = connection.execute(
+            "select 1 from sqlite_master where type = 'index' "
+            "and name = 'idx_metadata_job_events_entity'"
+        ).fetchone()
+    assert maintenance_table is not None
+    assert event_index is not None
 
 
 def test_pipeline_state_connect_closes_connection(tmp_path):
@@ -740,3 +806,149 @@ def test_metadata_queue_summary_and_listing_are_scoped_by_library(tmp_path):
     assert global_summary["queued"] == 2
     assert global_summary["failed_final"] == 1
     assert global_summary["failed_transient"] == 1
+
+
+def test_large_terminal_metadata_result_is_compacted_without_changing_return_value(tmp_path):
+    source = tmp_path / "zotero.sqlite"
+    source.write_bytes(b"state")
+    store = PipelineStateStore(tmp_path / "state.sqlite")
+    created = store.enqueue_metadata_job(
+        job_type="full_text",
+        library_id="LIB1",
+        attachment_key="PARENT-LARGE",
+        data_dir=tmp_path,
+        source_path=source,
+        signature=FileSignature.from_path(source),
+        status="queued",
+        reason="test",
+        parent_item_key="PARENT-LARGE",
+        queue_key="full-text-v1",
+    )
+    downstream_ref = {
+        "ok": True,
+        "classification": "downstream_orchestrator",
+        "stage": "pdf_html",
+        "reason": "full_text_pdf_found",
+        "attachment": {
+            "library_id": "LIB1",
+            "data_dir": str(tmp_path),
+            "storage_dir": str(tmp_path / "storage"),
+            "key": "PDF-LARGE",
+            "item_id": 1,
+            "parent_item_id": 2,
+            "date_modified": None,
+            "link_mode": 0,
+            "content_type": "application/pdf",
+            "zotero_path": "storage:paper.pdf",
+            "file_path": str(tmp_path / "storage" / "PDF-LARGE" / "paper.pdf"),
+            "parent_key": "PARENT-LARGE",
+        },
+    }
+    payload = {
+        "worker_status": "pdf_found",
+        "provider_events": [{"raw": "Ж" * 100_000}],
+        "existing_pdf_enqueue": downstream_ref,
+        "repeated_downstream_reference": downstream_ref,
+    }
+    expected_json = json.dumps(payload, ensure_ascii=False)
+
+    completed = store.mark_metadata_job_succeeded(
+        job_id=str(created["job_id"]),
+        message="done",
+        result=payload,
+    )
+    stored = store.get_metadata_job(str(created["job_id"]))
+
+    assert completed["result_json"] == expected_json
+    assert stored is not None
+    assert stored["result_json"] != expected_json
+    assert len(str(stored["result_json"]).encode("utf-8")) <= 64 * 1024
+    compacted = json.loads(str(stored["result_json"]))
+    assert compacted["_compacted"]["original_bytes"] == len(expected_json.encode("utf-8"))
+    assert compacted["summary"]["worker_status"] == "pdf_found"
+    assert compacted["downstream_refs"] == [downstream_ref, downstream_ref]
+    assert (
+        compacted["summary"]["existing_pdf_enqueue"]["_type"]
+        == "downstream_orchestrator_ref"
+    )
+
+
+def test_metadata_result_history_compaction_is_bounded_and_reports_backlog(tmp_path):
+    source = tmp_path / "zotero.sqlite"
+    source.write_bytes(b"state")
+    store = PipelineStateStore(tmp_path / "state.sqlite")
+    job_ids = []
+    raw = json.dumps({"candidate": {"raw": "x" * 50_000}})
+    for index in range(2):
+        created = store.enqueue_metadata_job(
+            job_type="enrich",
+            library_id="LIB1",
+            attachment_key=f"PARENT-{index}",
+            data_dir=tmp_path,
+            source_path=source,
+            signature=FileSignature.from_path(source),
+            status="queued",
+            reason="test",
+            parent_item_key=f"PARENT-{index}",
+            queue_key="enrich-v1",
+        )
+        job_ids.append(str(created["job_id"]))
+    with store._connect() as connection:
+        connection.executemany(
+            "update metadata_jobs set status = 'succeeded', result_json = ? where job_id = ?",
+            [(raw, job_id) for job_id in job_ids],
+        )
+
+    first = store.compact_metadata_result_history(
+        max_result_bytes=4_096,
+        batch_size=1,
+        max_batches=1,
+    )
+    second = store.compact_metadata_result_history(
+        max_result_bytes=4_096,
+        batch_size=10,
+        max_batches=1,
+    )
+
+    assert first["compacted_rows"] == 1
+    assert first["backlog_remaining"] is True
+    assert first["logical_bytes_reclaimed"] > 0
+    assert second["compacted_rows"] == 1
+    assert second["backlog_remaining"] is False
+    assert second["after"]["compacted_rows"] == 2
+
+
+def test_event_history_pruning_is_bounded_per_entity(tmp_path):
+    store = PipelineStateStore(tmp_path / "state.sqlite")
+    run = store.create_full_run(options={"mode": "retention-test"})
+    old = "2000-01-01T00:00:00+00:00"
+    recent = "2999-01-01T00:00:00+00:00"
+    with store._connect() as connection:
+        for created_at in [old] * 7 + [recent]:
+            connection.execute(
+                """
+                insert into full_run_events (run_id, event, message, metadata, created_at)
+                values (?, 'event', '', null, ?)
+                """,
+                (run["run_id"], created_at),
+            )
+
+    first = store.prune_event_history(
+        retention_days=1,
+        keep_per_entity=1,
+        batch_size=2,
+        max_batches=1,
+    )
+    second = store.prune_event_history(
+        retention_days=1,
+        keep_per_entity=1,
+        batch_size=10,
+        max_batches=1,
+    )
+
+    assert first["deleted"]["full_run_events"] == 2
+    assert first["has_more"]["full_run_events"] is True
+    assert first["backlog_remaining"] is True
+    assert second["deleted"]["full_run_events"] == 5
+    assert second["has_more"]["full_run_events"] is False
+    assert second["counts_after"]["full_run_events"] == 2

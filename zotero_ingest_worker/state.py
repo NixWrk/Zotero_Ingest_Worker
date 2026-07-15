@@ -3,14 +3,41 @@ from __future__ import annotations
 import json
 import os
 import sqlite3
+import time
 from collections.abc import Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from datetime import UTC, datetime, timedelta
+from hashlib import sha256
+from itertools import islice
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
 
-from .state_schema import PIPELINE_STATE_SCHEMA_VERSION, initialize_pipeline_state_schema
+from .state_schema import (
+    PIPELINE_STATE_SCHEMA_VERSION as PIPELINE_STATE_SCHEMA_VERSION,
+    initialize_pipeline_state_schema,
+)
+
+_EVENT_HISTORY_TABLES = {
+    "ocr_job_events": "job_id",
+    "html_job_events": "job_id",
+    "metadata_job_events": "job_id",
+    "full_run_events": "run_id",
+}
+_EVENT_MAINTENANCE_KEY = "event_history"
+_METADATA_RESULT_MAINTENANCE_KEY = "metadata_result_history"
+_EVENT_RETENTION_DAYS = 14
+_EVENT_KEEP_PER_ENTITY = 20
+_EVENT_PRUNE_BATCH_SIZE = 5_000
+_METADATA_RESULT_MAX_BYTES = 64 * 1024
+_METADATA_RESULT_COMPACT_BATCH_SIZE = 100
+_MAINTENANCE_INTERVAL_SECONDS = 3_600
+_MAINTENANCE_BACKLOG_INTERVAL_SECONDS = 60
+_COMPACT_PREVIEW_MAX_DEPTH = 3
+_COMPACT_PREVIEW_MAX_ITEMS = 8
+_COMPACT_PREVIEW_MAX_STRING_CHARS = 1_024
+_MAX_DOWNSTREAM_REFS = 64
+_MAX_COMPACT_SCAN_NODES = 200_000
 
 if TYPE_CHECKING:
     from .state_repositories import (
@@ -93,7 +120,10 @@ class PipelineStateStore:
         row = self.get(key)
         if row is None:
             return False
-        return row["source_size"] == signature.size and row["source_mtime_ns"] == signature.mtime_ns
+        return bool(
+            row["source_size"] == signature.size
+            and row["source_mtime_ns"] == signature.mtime_ns
+        )
 
     def mark(
         self,
@@ -172,7 +202,10 @@ class PipelineStateStore:
         row = self.get_watched_file(source_path)
         if row is None:
             return False
-        return row["source_size"] == signature.size and row["source_mtime_ns"] == signature.mtime_ns
+        return bool(
+            row["source_size"] == signature.size
+            and row["source_mtime_ns"] == signature.mtime_ns
+        )
 
     def mark_watched_file(
         self,
@@ -1552,6 +1585,9 @@ class PipelineStateStore:
     ) -> dict[str, Any]:
         now = _utc_now().isoformat()
         owner_clause, owner_params = _terminal_owner_clause(owner)
+        result_json = _json_or_none(result)
+        stored_result_json = _compact_metadata_result_json(result_json)
+        completed = False
         with self._connect() as connection:
             cursor = connection.execute(
                 f"""
@@ -1570,7 +1606,7 @@ class PipelineStateStore:
                   {owner_clause}
                 """,
                 (
-                    _json_or_none(result),
+                    stored_result_json,
                     output_path,
                     _metadata_relay_status(relay_result),
                     _json_or_none(relay_result),
@@ -1587,10 +1623,14 @@ class PipelineStateStore:
                     message=_stale_job_update_message("metadata", owner),
                 )
             else:
+                completed = True
                 self._add_metadata_job_event(
                     connection, job_id=job_id, event="succeeded", message=message
                 )
-        return self.get_metadata_job(job_id) or {}
+        job = self.get_metadata_job(job_id) or {}
+        if completed and result_json != stored_result_json:
+            job["result_json"] = result_json
+        return job
 
     def mark_metadata_job_skipped(
         self,
@@ -1602,6 +1642,9 @@ class PipelineStateStore:
     ) -> dict[str, Any]:
         now = _utc_now().isoformat()
         owner_clause, owner_params = _terminal_owner_clause(owner)
+        result_json = _json_or_none(result)
+        stored_result_json = _compact_metadata_result_json(result_json)
+        completed = False
         with self._connect() as connection:
             cursor = connection.execute(
                 f"""
@@ -1617,7 +1660,7 @@ class PipelineStateStore:
                 where job_id = ?
                   {owner_clause}
                 """,
-                (message, _json_or_none(result), now, job_id, *owner_params),
+                (message, stored_result_json, now, job_id, *owner_params),
             )
             if cursor.rowcount != 1:
                 self._add_metadata_job_event(
@@ -1627,10 +1670,14 @@ class PipelineStateStore:
                     message=_stale_job_update_message("metadata", owner),
                 )
             else:
+                completed = True
                 self._add_metadata_job_event(
                     connection, job_id=job_id, event="skipped", message=message
                 )
-        return self.get_metadata_job(job_id) or {}
+        job = self.get_metadata_job(job_id) or {}
+        if completed and result_json != stored_result_json:
+            job["result_json"] = result_json
+        return job
 
     def mark_metadata_job_failed(
         self,
@@ -2391,23 +2438,141 @@ class PipelineStateStore:
             ).fetchall()
         return [dict(row) for row in rows]
 
+    def prune_event_history(
+        self,
+        *,
+        retention_days: int = _EVENT_RETENTION_DAYS,
+        keep_per_entity: int = _EVENT_KEEP_PER_ENTITY,
+        batch_size: int = _EVENT_PRUNE_BATCH_SIZE,
+        max_batches: int = 20,
+    ) -> dict[str, Any]:
+        retention_days = max(1, int(retention_days))
+        keep_per_entity = max(0, int(keep_per_entity))
+        batch_size = min(10_000, max(1, int(batch_size)))
+        max_batches = min(100, max(1, int(max_batches)))
+        cutoff = (_utc_now() - timedelta(days=retention_days)).isoformat()
+        result: dict[str, Any] = {
+            "ok": True,
+            "mode": "prune_event_history",
+            "retention_days": retention_days,
+            "keep_per_entity": keep_per_entity,
+            "batch_size": batch_size,
+            "max_batches": max_batches,
+            "cutoff": cutoff,
+        }
+
+        with self._connect() as connection:
+            tables = _existing_event_tables(connection)
+            result["counts_before"] = _event_table_counts(connection, tables)
+            deleted, has_more = _prune_event_tables(
+                connection,
+                tables=tables,
+                cutoff=cutoff,
+                keep_per_entity=keep_per_entity,
+                batch_size=batch_size,
+                max_batches=max_batches,
+            )
+            result["deleted"] = deleted
+            result["has_more"] = has_more
+            result["deleted_total"] = sum(int(value) for value in deleted.values())
+            result["backlog_remaining"] = any(has_more.values())
+            result["counts_after"] = _event_table_counts(connection, tables)
+            result["database"] = _database_page_metrics(connection)
+            _record_maintenance(
+                connection,
+                maintenance_key=_EVENT_MAINTENANCE_KEY,
+                payload=result,
+                has_more=result["backlog_remaining"],
+            )
+        return result
+
+    def compact_metadata_result_history(
+        self,
+        *,
+        max_result_bytes: int = _METADATA_RESULT_MAX_BYTES,
+        batch_size: int = _METADATA_RESULT_COMPACT_BATCH_SIZE,
+        max_batches: int = 20,
+    ) -> dict[str, Any]:
+        max_result_bytes = min(4 * 1024 * 1024, max(4_096, int(max_result_bytes)))
+        batch_size = min(1_000, max(1, int(batch_size)))
+        max_batches = min(100, max(1, int(max_batches)))
+        result: dict[str, Any] = {
+            "ok": True,
+            "mode": "compact_metadata_result_history",
+            "max_result_bytes": max_result_bytes,
+            "batch_size": batch_size,
+            "max_batches": max_batches,
+        }
+
+        with self._connect() as connection:
+            result["before"] = _metadata_result_metrics(connection)
+            compacted = _compact_metadata_result_rows(
+                connection,
+                max_result_bytes=max_result_bytes,
+                batch_size=batch_size,
+                max_batches=max_batches,
+            )
+            result.update(compacted)
+            result["after"] = _metadata_result_metrics(connection)
+            result["database"] = _database_page_metrics(connection)
+            _record_maintenance(
+                connection,
+                maintenance_key=_METADATA_RESULT_MAINTENANCE_KEY,
+                payload=result,
+                has_more=bool(result["backlog_remaining"]),
+            )
+        return result
+
     @contextmanager
     def _connect(self) -> Iterator[sqlite3.Connection]:
-        connection = sqlite3.connect(self.path, timeout=30.0)
+        connection = self._open_connection_with_retry()
+        connection.row_factory = sqlite3.Row
+        connection.execute("pragma busy_timeout = 30000")
+        connection.execute("pragma synchronous = normal")
+        connection.execute("pragma wal_autocheckpoint = 1000")
+        connection.execute("pragma journal_size_limit = 67108864")
+        try:
+            yield connection
+            connection.commit()
+        except Exception:
+            try:
+                connection.rollback()
+            except sqlite3.Error:
+                pass
+            raise
+        finally:
+            connection.close()
+
+    def _open_connection_with_retry(self) -> sqlite3.Connection:
+        last_error: sqlite3.Error | None = None
+        for attempt in range(1, 7):
+            try:
+                return sqlite3.connect(self.path, timeout=30.0)
+            except sqlite3.Error as exc:
+                last_error = exc
+                if not _is_transient_sqlite_error(exc) or attempt >= 6:
+                    raise
+                time.sleep(min(0.25 * attempt, 2.0))
+        if last_error is not None:
+            raise last_error
+        raise sqlite3.OperationalError("sqlite connection failed without an exception")
+
+    def _init_db(self) -> None:
+        connection = self._open_connection_with_retry()
         connection.row_factory = sqlite3.Row
         connection.execute("pragma busy_timeout = 30000")
         try:
-            yield connection
+            connection.execute("pragma journal_mode = wal")
+            connection.execute("pragma synchronous = normal")
+            connection.execute("pragma wal_autocheckpoint = 1000")
+            connection.execute("pragma journal_size_limit = 67108864")
+            initialize_pipeline_state_schema(connection)
             connection.commit()
         except Exception:
             connection.rollback()
             raise
         finally:
             connection.close()
-
-    def _init_db(self) -> None:
-        with self._connect() as connection:
-            initialize_pipeline_state_schema(connection)
 
     @staticmethod
     def _add_job_event(
@@ -2424,6 +2589,7 @@ class PipelineStateStore:
             """,
             (job_id, event, message, _utc_now().isoformat()),
         )
+        _maybe_maintain_state_history(connection)
 
     @staticmethod
     def _add_html_job_event(
@@ -2440,6 +2606,7 @@ class PipelineStateStore:
             """,
             (job_id, event, message, _utc_now().isoformat()),
         )
+        _maybe_maintain_state_history(connection)
 
     @staticmethod
     def _add_metadata_job_event(
@@ -2456,6 +2623,7 @@ class PipelineStateStore:
             """,
             (job_id, event, message, _utc_now().isoformat()),
         )
+        _maybe_maintain_state_history(connection)
 
     @staticmethod
     def _add_full_run_event(
@@ -2473,9 +2641,543 @@ class PipelineStateStore:
             """,
             (run_id, event, message, _json_or_none(metadata), _utc_now().isoformat()),
         )
+        _maybe_maintain_state_history(connection)
 
 
 OcrStateStore = PipelineStateStore
+
+
+def _existing_event_tables(connection: sqlite3.Connection) -> dict[str, str]:
+    existing = {
+        str(row[0])
+        for row in connection.execute(
+            "select name from sqlite_master where type = 'table'"
+        ).fetchall()
+    }
+    return {
+        table: entity_column
+        for table, entity_column in _EVENT_HISTORY_TABLES.items()
+        if table in existing
+    }
+
+
+def _event_table_counts(
+    connection: sqlite3.Connection,
+    tables: dict[str, str],
+) -> dict[str, int]:
+    return {
+        table: int(connection.execute(f"select count(*) from {table}").fetchone()[0])
+        for table in tables
+    }
+
+
+def _prune_event_tables(
+    connection: sqlite3.Connection,
+    *,
+    tables: dict[str, str],
+    cutoff: str,
+    keep_per_entity: int,
+    batch_size: int,
+    max_batches: int,
+) -> tuple[dict[str, int], dict[str, bool]]:
+    deleted: dict[str, int] = {}
+    has_more: dict[str, bool] = {}
+    for table, entity_column in tables.items():
+        table_deleted = 0
+        for _batch in range(max_batches):
+            deleted_now = _prune_event_table_batch(
+                connection,
+                table=table,
+                entity_column=entity_column,
+                cutoff=cutoff,
+                keep_per_entity=keep_per_entity,
+                batch_size=batch_size,
+            )
+            table_deleted += deleted_now
+            if deleted_now < batch_size:
+                break
+        deleted[table] = table_deleted
+        has_more[table] = _event_table_has_prunable_rows(
+            connection,
+            table=table,
+            entity_column=entity_column,
+            cutoff=cutoff,
+            keep_per_entity=keep_per_entity,
+        )
+    return deleted, has_more
+
+
+def _prune_event_table_batch(
+    connection: sqlite3.Connection,
+    *,
+    table: str,
+    entity_column: str,
+    cutoff: str,
+    keep_per_entity: int,
+    batch_size: int,
+) -> int:
+    keep_clause, keep_params = _event_keep_clause(
+        table=table,
+        entity_column=entity_column,
+        keep_per_entity=keep_per_entity,
+    )
+    cursor = connection.execute(
+        f"""
+        delete from {table}
+        where event_id in (
+          select old.event_id
+          from {table} as old
+          where old.created_at < ?
+            {keep_clause}
+          order by old.event_id
+          limit ?
+        )
+        """,
+        (cutoff, *keep_params, batch_size),
+    )
+    return max(0, int(cursor.rowcount or 0))
+
+
+def _event_table_has_prunable_rows(
+    connection: sqlite3.Connection,
+    *,
+    table: str,
+    entity_column: str,
+    cutoff: str,
+    keep_per_entity: int,
+) -> bool:
+    keep_clause, keep_params = _event_keep_clause(
+        table=table,
+        entity_column=entity_column,
+        keep_per_entity=keep_per_entity,
+    )
+    row = connection.execute(
+        f"""
+        select 1
+        from {table} as old
+        where old.created_at < ?
+          {keep_clause}
+        limit 1
+        """,
+        (cutoff, *keep_params),
+    ).fetchone()
+    return row is not None
+
+
+def _event_keep_clause(
+    *,
+    table: str,
+    entity_column: str,
+    keep_per_entity: int,
+) -> tuple[str, tuple[int, ...]]:
+    if keep_per_entity <= 0:
+        return "", ()
+    return (
+        f"""
+        and exists (
+          select 1
+          from {table} as newer
+          where newer.{entity_column} = old.{entity_column}
+            and newer.event_id > old.event_id
+          order by newer.event_id
+          limit 1 offset ?
+        )
+        """,
+        (keep_per_entity - 1,),
+    )
+
+
+def _metadata_result_metrics(connection: sqlite3.Connection) -> dict[str, int]:
+    row = connection.execute(
+        """
+        select count(*) as rows,
+               coalesce(sum(length(cast(result_json as blob))), 0) as bytes,
+               coalesce(max(length(cast(result_json as blob))), 0) as max_bytes,
+               coalesce(sum(case when result_json like '{"_compacted":%' then 1 else 0 end), 0)
+                 as compacted_rows
+        from metadata_jobs
+        where result_json is not null
+        """
+    ).fetchone()
+    return {
+        "rows": int(row["rows"] or 0),
+        "bytes": int(row["bytes"] or 0),
+        "max_bytes": int(row["max_bytes"] or 0),
+        "compacted_rows": int(row["compacted_rows"] or 0),
+    }
+
+
+def _compact_metadata_result_rows(
+    connection: sqlite3.Connection,
+    *,
+    max_result_bytes: int,
+    batch_size: int,
+    max_batches: int,
+) -> dict[str, Any]:
+    compacted_rows = 0
+    original_bytes = 0
+    stored_bytes = 0
+    blocked_rows = 0
+    for _batch in range(max_batches):
+        rows = connection.execute(
+            """
+            select job_id, result_json
+            from metadata_jobs
+            where status in ('succeeded', 'skipped', 'failed_final')
+              and result_json is not null
+              and result_json not like '{"_compacted":%'
+              and length(cast(result_json as blob)) > ?
+            order by updated_at, job_id
+            limit ?
+            """,
+            (max_result_bytes, batch_size),
+        ).fetchall()
+        if not rows:
+            break
+        changed_this_batch = 0
+        for row in rows:
+            raw = str(row["result_json"])
+            compacted = _compact_metadata_result_json(
+                raw,
+                max_result_bytes=max_result_bytes,
+            )
+            raw_bytes = _json_bytes(raw)
+            if compacted is None:
+                blocked_rows += 1
+                continue
+            compacted_bytes = _json_bytes(compacted)
+            if compacted == raw or compacted_bytes >= raw_bytes:
+                blocked_rows += 1
+                continue
+            cursor = connection.execute(
+                """
+                update metadata_jobs
+                set result_json = ?
+                where job_id = ? and result_json = ?
+                """,
+                (compacted, str(row["job_id"]), raw),
+            )
+            if cursor.rowcount != 1:
+                continue
+            compacted_rows += 1
+            changed_this_batch += 1
+            original_bytes += raw_bytes
+            stored_bytes += compacted_bytes
+        if len(rows) < batch_size or changed_this_batch == 0:
+            break
+
+    backlog_remaining = _metadata_result_has_compaction_candidates(
+        connection,
+        max_result_bytes=max_result_bytes,
+    )
+    return {
+        "compacted_rows": compacted_rows,
+        "blocked_rows": blocked_rows,
+        "original_bytes": original_bytes,
+        "stored_bytes": stored_bytes,
+        "logical_bytes_reclaimed": max(0, original_bytes - stored_bytes),
+        "backlog_remaining": backlog_remaining,
+    }
+
+
+def _metadata_result_has_compaction_candidates(
+    connection: sqlite3.Connection,
+    *,
+    max_result_bytes: int,
+) -> bool:
+    row = connection.execute(
+        """
+        select 1
+        from metadata_jobs
+        where status in ('succeeded', 'skipped', 'failed_final')
+          and result_json is not null
+          and result_json not like '{"_compacted":%'
+          and length(cast(result_json as blob)) > ?
+        limit 1
+        """,
+        (max_result_bytes,),
+    ).fetchone()
+    return row is not None
+
+
+def _compact_metadata_result_json(
+    raw: str | None,
+    *,
+    max_result_bytes: int = _METADATA_RESULT_MAX_BYTES,
+) -> str | None:
+    if raw is None or _json_bytes(raw) <= max_result_bytes:
+        return raw
+    try:
+        payload = json.loads(raw)
+    except json.JSONDecodeError:
+        payload = None
+    if isinstance(payload, dict) and isinstance(payload.get("_compacted"), dict):
+        return raw
+
+    refs, refs_overflow = _collect_downstream_refs(payload)
+    if refs_overflow:
+        return raw
+    top_level_keys = (
+        [str(key)[:256] for key in islice(payload, 128)]
+        if isinstance(payload, dict)
+        else []
+    )
+    compact: dict[str, Any] = {
+        "_compacted": {
+            "schema": 1,
+            "reason": "terminal_metadata_result_limit",
+            "original_bytes": _json_bytes(raw),
+            "original_sha256": sha256(raw.encode("utf-8")).hexdigest(),
+            "original_type": type(payload).__name__ if payload is not None else "invalid_json",
+            "top_level_keys": top_level_keys,
+            "omitted_top_level_key_count": (
+                max(0, len(payload) - len(top_level_keys))
+                if isinstance(payload, dict)
+                else 0
+            ),
+        },
+        "downstream_refs": refs,
+    }
+    summary: dict[str, Any] = {}
+    omitted: list[str] = []
+    items = (
+        islice(payload.items(), 128)
+        if isinstance(payload, dict)
+        else iter((("value", payload),))
+    )
+    for key, value in items:
+        normalized_key = str(key)[:256]
+        candidate = _compact_preview(value)
+        trial = {**compact, "summary": {**summary, normalized_key: candidate}}
+        if _json_bytes(_json_or_none(trial) or "") <= max_result_bytes:
+            summary[normalized_key] = candidate
+        else:
+            omitted.append(normalized_key)
+    compact["summary"] = summary
+    if omitted:
+        compact["_compacted"]["omitted_top_level_keys"] = omitted[:128]
+
+    serialized = _json_or_none(compact) or ""
+    if _json_bytes(serialized) <= max_result_bytes:
+        return serialized
+    compact["_compacted"].pop("omitted_top_level_keys", None)
+    compact["_compacted"].pop("top_level_keys", None)
+    compact.pop("summary", None)
+    serialized = _json_or_none(compact) or ""
+    return serialized if _json_bytes(serialized) < _json_bytes(raw) else raw
+
+
+def _collect_downstream_refs(value: Any) -> tuple[list[dict[str, Any]], bool]:
+    refs: list[dict[str, Any]] = []
+    stack = [value]
+    scanned = 0
+    while stack:
+        current = stack.pop()
+        scanned += 1
+        if scanned > _MAX_COMPACT_SCAN_NODES:
+            return refs, True
+        if isinstance(current, dict):
+            if current.get("classification") == "downstream_orchestrator":
+                normalized = _normalize_downstream_ref(current)
+                if len(refs) >= _MAX_DOWNSTREAM_REFS:
+                    return refs, True
+                refs.append(normalized)
+                continue
+            stack.extend(reversed(current.values()))
+        elif isinstance(current, list):
+            stack.extend(reversed(current))
+    return refs, False
+
+
+def _normalize_downstream_ref(value: dict[str, Any]) -> dict[str, Any]:
+    result = {
+        key: value[key]
+        for key in (
+            "ok",
+            "skipped",
+            "delegated",
+            "classification",
+            "stage",
+            "reason",
+            "source_path",
+        )
+        if key in value
+    }
+    attachment = value.get("attachment")
+    if isinstance(attachment, dict):
+        result["attachment"] = {
+            key: attachment[key]
+            for key in (
+                "library_id",
+                "data_dir",
+                "storage_dir",
+                "key",
+                "item_id",
+                "parent_item_id",
+                "date_modified",
+                "link_mode",
+                "content_type",
+                "zotero_path",
+                "file_path",
+                "parent_key",
+            )
+            if key in attachment
+        }
+    return result
+
+
+def _compact_preview(value: Any, *, depth: int = 0) -> Any:
+    if value is None or isinstance(value, (bool, int, float)):
+        return value
+    if isinstance(value, str):
+        if len(value) <= _COMPACT_PREVIEW_MAX_STRING_CHARS:
+            return value
+        return {
+            "_type": "string",
+            "chars": len(value),
+            "preview": value[:_COMPACT_PREVIEW_MAX_STRING_CHARS],
+        }
+    if depth >= _COMPACT_PREVIEW_MAX_DEPTH:
+        size = len(value) if isinstance(value, (dict, list)) else None
+        return {"_type": type(value).__name__, "items": size}
+    if isinstance(value, dict):
+        if value.get("classification") == "downstream_orchestrator":
+            return {
+                "_type": "downstream_orchestrator_ref",
+                "stage": value.get("stage"),
+            }
+        preview = {
+            str(key)[:256]: _compact_preview(child, depth=depth + 1)
+            for key, child in islice(value.items(), _COMPACT_PREVIEW_MAX_ITEMS)
+        }
+        if len(value) > _COMPACT_PREVIEW_MAX_ITEMS:
+            preview["_omitted_items"] = len(value) - _COMPACT_PREVIEW_MAX_ITEMS
+        return preview
+    if isinstance(value, list):
+        preview_list = [
+            _compact_preview(child, depth=depth + 1)
+            for child in value[:_COMPACT_PREVIEW_MAX_ITEMS]
+        ]
+        if len(value) > _COMPACT_PREVIEW_MAX_ITEMS:
+            preview_list.append(
+                {"_omitted_items": len(value) - _COMPACT_PREVIEW_MAX_ITEMS}
+            )
+        return preview_list
+    return str(value)[:_COMPACT_PREVIEW_MAX_STRING_CHARS]
+
+
+def _json_bytes(value: str) -> int:
+    return len(value.encode("utf-8"))
+
+
+def _database_page_metrics(connection: sqlite3.Connection) -> dict[str, int]:
+    page_count = int(connection.execute("pragma page_count").fetchone()[0])
+    page_size = int(connection.execute("pragma page_size").fetchone()[0])
+    freelist_count = int(connection.execute("pragma freelist_count").fetchone()[0])
+    return {
+        "page_count": page_count,
+        "page_size": page_size,
+        "freelist_count": freelist_count,
+        "allocated_bytes": page_count * page_size,
+        "reusable_bytes": freelist_count * page_size,
+    }
+
+
+def _maybe_maintain_state_history(connection: sqlite3.Connection) -> None:
+    try:
+        now = _utc_now()
+        if _maintenance_due(connection, _EVENT_MAINTENANCE_KEY, now=now):
+            tables = _existing_event_tables(connection)
+            deleted, has_more = _prune_event_tables(
+                connection,
+                tables=tables,
+                cutoff=(now - timedelta(days=_EVENT_RETENTION_DAYS)).isoformat(),
+                keep_per_entity=_EVENT_KEEP_PER_ENTITY,
+                batch_size=_EVENT_PRUNE_BATCH_SIZE,
+                max_batches=1,
+            )
+            _record_maintenance(
+                connection,
+                maintenance_key=_EVENT_MAINTENANCE_KEY,
+                payload={"deleted": deleted, "has_more": has_more},
+                has_more=any(has_more.values()),
+                now=now,
+            )
+        if _maintenance_due(connection, _METADATA_RESULT_MAINTENANCE_KEY, now=now):
+            compacted = _compact_metadata_result_rows(
+                connection,
+                max_result_bytes=_METADATA_RESULT_MAX_BYTES,
+                batch_size=_METADATA_RESULT_COMPACT_BATCH_SIZE,
+                max_batches=1,
+            )
+            _record_maintenance(
+                connection,
+                maintenance_key=_METADATA_RESULT_MAINTENANCE_KEY,
+                payload=compacted,
+                has_more=bool(compacted["backlog_remaining"]),
+                now=now,
+            )
+    except (sqlite3.Error, TypeError, ValueError, UnicodeError, RecursionError):
+        return
+
+
+def _maintenance_due(
+    connection: sqlite3.Connection,
+    maintenance_key: str,
+    *,
+    now: datetime,
+) -> bool:
+    row = connection.execute(
+        "select next_run_at from state_maintenance where maintenance_key = ?",
+        (maintenance_key,),
+    ).fetchone()
+    return row is None or str(row["next_run_at"] or "") <= now.isoformat()
+
+
+def _record_maintenance(
+    connection: sqlite3.Connection,
+    *,
+    maintenance_key: str,
+    payload: dict[str, Any],
+    has_more: bool,
+    now: datetime | None = None,
+) -> None:
+    current = now or _utc_now()
+    interval = (
+        _MAINTENANCE_BACKLOG_INTERVAL_SECONDS
+        if has_more
+        else _MAINTENANCE_INTERVAL_SECONDS
+    )
+    next_run_at = (current + timedelta(seconds=interval)).isoformat()
+    connection.execute(
+        """
+        insert into state_maintenance (maintenance_key, next_run_at, payload, updated_at)
+        values (?, ?, ?, ?)
+        on conflict(maintenance_key) do update set
+          next_run_at = excluded.next_run_at,
+          payload = excluded.payload,
+          updated_at = excluded.updated_at
+        """,
+        (
+            maintenance_key,
+            next_run_at,
+            _json_or_none(payload),
+            current.isoformat(),
+        ),
+    )
+
+
+def _is_transient_sqlite_error(exc: sqlite3.Error) -> bool:
+    message = str(exc).lower()
+    return any(
+        fragment in message
+        for fragment in (
+            "database is locked",
+            "database is busy",
+            "disk i/o error",
+            "unable to open database file",
+        )
+    )
 
 
 def _terminal_owner_clause(owner: str | None) -> tuple[str, tuple[str, ...]]:

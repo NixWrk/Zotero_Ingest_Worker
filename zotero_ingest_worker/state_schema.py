@@ -3,7 +3,7 @@ from __future__ import annotations
 import sqlite3
 
 
-PIPELINE_STATE_SCHEMA_VERSION = 2
+PIPELINE_STATE_SCHEMA_VERSION = 3
 
 
 def initialize_pipeline_state_schema(connection: sqlite3.Connection) -> None:
@@ -258,7 +258,43 @@ def initialize_pipeline_state_schema(connection: sqlite3.Connection) -> None:
         )
         """
     )
+    connection.execute(
+        """
+        create table if not exists state_maintenance (
+          maintenance_key text primary key,
+          next_run_at text not null,
+          payload text,
+          updated_at text not null
+        )
+        """
+    )
     connection.execute("create index if not exists idx_full_runs_status on full_runs(status)")
+    connection.execute(
+        "create index if not exists idx_ocr_job_events_entity on ocr_job_events(job_id, event_id)"
+    )
+    connection.execute(
+        "create index if not exists idx_ocr_job_events_created on ocr_job_events(created_at, event_id)"
+    )
+    connection.execute(
+        "create index if not exists idx_html_job_events_entity on html_job_events(job_id, event_id)"
+    )
+    connection.execute(
+        "create index if not exists idx_html_job_events_created on html_job_events(created_at, event_id)"
+    )
+    connection.execute(
+        "create index if not exists idx_metadata_job_events_entity "
+        "on metadata_job_events(job_id, event_id)"
+    )
+    connection.execute(
+        "create index if not exists idx_metadata_job_events_created "
+        "on metadata_job_events(created_at, event_id)"
+    )
+    connection.execute(
+        "create index if not exists idx_full_run_events_entity on full_run_events(run_id, event_id)"
+    )
+    connection.execute(
+        "create index if not exists idx_full_run_events_created on full_run_events(created_at, event_id)"
+    )
 
     current_version = int(connection.execute("pragma user_version").fetchone()[0])
     if current_version < PIPELINE_STATE_SCHEMA_VERSION:
