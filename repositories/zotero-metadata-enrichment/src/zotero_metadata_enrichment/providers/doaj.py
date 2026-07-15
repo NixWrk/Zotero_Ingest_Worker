@@ -8,7 +8,7 @@ from ..identifiers import normalize_doi
 from ..models import FullTextLocation, MetadataCandidate
 from ..provider_http import read_json_object
 from ..text import title_match_score
-from .common import candidate_with_locations, first_text
+from .common import as_dict, as_list, candidate_with_locations, first_text
 
 
 class DoajClient:
@@ -59,14 +59,14 @@ def doaj_bibjson_to_candidate(bibjson: dict[str, Any], *, identifier: str, score
     doi = normalize_doi(doaj_identifier(bibjson, "doi"))
     if not title and not doi:
         return None
-    journal = bibjson.get("journal") if isinstance(bibjson.get("journal"), dict) else {}
+    journal = as_dict(bibjson.get("journal"))
     fields = {
         "title": title,
         "abstractNote": first_text(bibjson.get("abstract")),
         "DOI": doi,
         "date": first_text(bibjson.get("year") or bibjson.get("month")),
         "publicationTitle": first_text(journal.get("title")),
-        "ISSN": ", ".join(str(value) for value in journal.get("issns") or [] if value),
+        "ISSN": ", ".join(str(value) for value in as_list(journal.get("issns")) if value),
         "publisher": first_text(journal.get("publisher")),
         "url": doaj_best_url(bibjson),
         "libraryCatalog": "DOAJ",
@@ -83,7 +83,7 @@ def doaj_bibjson_to_candidate(bibjson: dict[str, Any], *, identifier: str, score
 
 
 def doaj_identifier(bibjson: dict[str, Any], kind: str) -> str:
-    for identifier in bibjson.get("identifier") or []:
+    for identifier in as_list(bibjson.get("identifier")):
         if isinstance(identifier, dict) and str(identifier.get("type") or "").casefold() == kind.casefold():
             return first_text(identifier.get("id"))
     return ""
@@ -95,7 +95,7 @@ def doaj_best_url(bibjson: dict[str, Any]) -> str:
 
 
 def doaj_locations(bibjson: dict[str, Any]) -> list[FullTextLocation]:
-    links = bibjson.get("link") if isinstance(bibjson.get("link"), list) else []
+    links = as_list(bibjson.get("link"))
     locations: list[FullTextLocation] = []
     for link in links:
         if not isinstance(link, dict):

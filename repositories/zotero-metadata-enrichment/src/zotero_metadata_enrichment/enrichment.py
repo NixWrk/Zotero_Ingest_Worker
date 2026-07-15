@@ -3,7 +3,7 @@ from __future__ import annotations
 import urllib.error
 from dataclasses import dataclass
 from datetime import UTC, datetime
-from typing import Any
+from typing import Any, Callable
 
 from .diff import build_metadata_diff, merge_extra
 from .identifiers import (
@@ -33,6 +33,7 @@ from .providers import (
     TranslationServerClient,
     UnpaywallClient,
 )
+from .providers.common import CandidateLookup, bind_candidate_lookup
 from .text import normalize_space
 
 
@@ -191,24 +192,40 @@ class MetadataEnricher:
 
         if doi:
             normalized_doi = normalize_doi(doi)
-            candidate = self.safe_lookup(provider="crossref", identifier=normalized_doi, lookup=lambda doi=normalized_doi: self.crossref.by_doi(doi))
+            candidate = self.safe_lookup(
+                provider="crossref",
+                identifier=normalized_doi,
+                lookup=bind_candidate_lookup(self.crossref.by_doi, normalized_doi),
+            )
             if candidate is not None:
                 candidates.append(candidate)
 
         if pmid:
             normalized_pmid = normalize_pmid(pmid)
-            candidate = self.safe_lookup(provider="pubmed", identifier=normalized_pmid, lookup=lambda pmid=normalized_pmid: self.pubmed.by_pmid(pmid))
+            candidate = self.safe_lookup(
+                provider="pubmed",
+                identifier=normalized_pmid,
+                lookup=bind_candidate_lookup(self.pubmed.by_pmid, normalized_pmid),
+            )
             if candidate is not None:
                 candidates.append(candidate)
 
         if pmcid:
             normalized_pmcid = normalize_pmcid(pmcid)
-            candidate = self.safe_lookup(provider="pubmed", identifier=normalized_pmcid, lookup=lambda pmcid=normalized_pmcid: self.pubmed.by_pmcid(pmcid))
+            candidate = self.safe_lookup(
+                provider="pubmed",
+                identifier=normalized_pmcid,
+                lookup=bind_candidate_lookup(self.pubmed.by_pmcid, normalized_pmcid),
+            )
             if candidate is not None:
                 candidates.append(candidate)
 
         if arxiv_id:
-            candidate = self.safe_lookup(provider="arxiv", identifier=arxiv_id, lookup=lambda arxiv_id=arxiv_id: self.arxiv.by_id(arxiv_id))
+            candidate = self.safe_lookup(
+                provider="arxiv",
+                identifier=arxiv_id,
+                lookup=bind_candidate_lookup(self.arxiv.by_id, arxiv_id),
+            )
             if candidate is not None:
                 candidates.append(candidate)
 
@@ -227,7 +244,11 @@ class MetadataEnricher:
             self.record_provider_event(provider="lookup", status="no_title")
             return merge_metadata_candidates(candidates)
 
-        candidate = self.safe_lookup(provider="crossref", identifier=title, lookup=lambda title=title: self.crossref.by_title(title))
+        candidate = self.safe_lookup(
+            provider="crossref",
+            identifier=title,
+            lookup=bind_candidate_lookup(self.crossref.by_title, title),
+        )
         if candidate is not None:
             if candidate.score >= self.config.metadata_title_min_score:
                 candidates.append(candidate)
@@ -236,10 +257,10 @@ class MetadataEnricher:
 
         if self.config.extended_providers_enabled:
             for provider, lookup in (
-                ("openalex", lambda: self.openalex.by_title(title)),
-                ("semantic_scholar", lambda: self.semantic_scholar.by_title(title)),
-                ("core", lambda: self.core.by_title(title)),
-                ("doaj", lambda: self.doaj.by_title(title)),
+                ("openalex", bind_candidate_lookup(self.openalex.by_title, title)),
+                ("semantic_scholar", bind_candidate_lookup(self.semantic_scholar.by_title, title)),
+                ("core", bind_candidate_lookup(self.core.by_title, title)),
+                ("doaj", bind_candidate_lookup(self.doaj.by_title, title)),
             ):
                 candidate = self.safe_lookup(provider=provider, identifier=title, lookup=lookup)
                 if candidate is not None and candidate.score >= self.config.metadata_title_min_score:
@@ -247,7 +268,11 @@ class MetadataEnricher:
                 elif candidate is not None:
                     self.record_provider_event(provider=provider, status="low_confidence", identifier=title, score=candidate.score, min_score=self.config.metadata_title_min_score)
 
-        candidate = self.safe_lookup(provider="arxiv", identifier=title, lookup=lambda title=title: self.arxiv.by_title(title))
+        candidate = self.safe_lookup(
+            provider="arxiv",
+            identifier=title,
+            lookup=bind_candidate_lookup(self.arxiv.by_title, title),
+        )
         if candidate is not None and candidate.score >= self.config.arxiv_search_min_score:
             candidates.append(candidate)
         elif candidate is not None:
@@ -263,36 +288,36 @@ class MetadataEnricher:
         pmid: str | None,
         pmcid: str | None,
     ) -> list[MetadataCandidate]:
-        lookups: list[tuple[str, str, Any]] = []
+        lookups: list[tuple[str, str, CandidateLookup]] = []
         if doi:
             normalized_doi = normalize_doi(doi)
             lookups.extend(
                 [
-                    ("datacite", normalized_doi, lambda doi=normalized_doi: self.datacite.by_doi(doi)),
-                    ("europe_pmc", normalized_doi, lambda doi=normalized_doi: self.europe_pmc.by_doi(doi)),
-                    ("openalex", normalized_doi, lambda doi=normalized_doi: self.openalex.by_doi(doi)),
-                    ("semantic_scholar", normalized_doi, lambda doi=normalized_doi: self.semantic_scholar.by_doi(doi)),
-                    ("unpaywall", normalized_doi, lambda doi=normalized_doi: self.unpaywall.by_doi(doi)),
-                    ("biorxiv_medrxiv", normalized_doi, lambda doi=normalized_doi: self.biorxiv.by_doi(doi)),
-                    ("core", normalized_doi, lambda doi=normalized_doi: self.core.by_doi(doi)),
-                    ("openaire", normalized_doi, lambda doi=normalized_doi: self.openaire.by_doi(doi)),
-                    ("doaj", normalized_doi, lambda doi=normalized_doi: self.doaj.by_doi(doi)),
+                    ("datacite", normalized_doi, bind_candidate_lookup(self.datacite.by_doi, normalized_doi)),
+                    ("europe_pmc", normalized_doi, bind_candidate_lookup(self.europe_pmc.by_doi, normalized_doi)),
+                    ("openalex", normalized_doi, bind_candidate_lookup(self.openalex.by_doi, normalized_doi)),
+                    ("semantic_scholar", normalized_doi, bind_candidate_lookup(self.semantic_scholar.by_doi, normalized_doi)),
+                    ("unpaywall", normalized_doi, bind_candidate_lookup(self.unpaywall.by_doi, normalized_doi)),
+                    ("biorxiv_medrxiv", normalized_doi, bind_candidate_lookup(self.biorxiv.by_doi, normalized_doi)),
+                    ("core", normalized_doi, bind_candidate_lookup(self.core.by_doi, normalized_doi)),
+                    ("openaire", normalized_doi, bind_candidate_lookup(self.openaire.by_doi, normalized_doi)),
+                    ("doaj", normalized_doi, bind_candidate_lookup(self.doaj.by_doi, normalized_doi)),
                 ]
             )
         if pmid:
             normalized_pmid = normalize_pmid(pmid)
             lookups.extend(
                 [
-                    ("europe_pmc", normalized_pmid, lambda pmid=normalized_pmid: self.europe_pmc.by_pmid(pmid)),
-                    ("openalex", normalized_pmid, lambda pmid=normalized_pmid: self.openalex.by_pmid(pmid)),
-                    ("semantic_scholar", normalized_pmid, lambda pmid=normalized_pmid: self.semantic_scholar.by_pmid(pmid)),
+                    ("europe_pmc", normalized_pmid, bind_candidate_lookup(self.europe_pmc.by_pmid, normalized_pmid)),
+                    ("openalex", normalized_pmid, bind_candidate_lookup(self.openalex.by_pmid, normalized_pmid)),
+                    ("semantic_scholar", normalized_pmid, bind_candidate_lookup(self.semantic_scholar.by_pmid, normalized_pmid)),
                 ]
             )
         if pmcid:
             normalized_pmcid = normalize_pmcid(pmcid)
-            lookups.append(("europe_pmc", normalized_pmcid, lambda pmcid=normalized_pmcid: self.europe_pmc.by_pmcid(pmcid)))
+            lookups.append(("europe_pmc", normalized_pmcid, bind_candidate_lookup(self.europe_pmc.by_pmcid, normalized_pmcid)))
         if arxiv_id:
-            lookups.append(("semantic_scholar", arxiv_id, lambda arxiv_id=arxiv_id: self.semantic_scholar.by_arxiv_id(arxiv_id)))
+            lookups.append(("semantic_scholar", arxiv_id, bind_candidate_lookup(self.semantic_scholar.by_arxiv_id, arxiv_id)))
 
         candidates: list[MetadataCandidate] = []
         for provider, identifier, lookup in lookups:
@@ -302,7 +327,13 @@ class MetadataEnricher:
             candidates.append(candidate)
         return candidates
 
-    def safe_lookup(self, *, provider: str, identifier: str, lookup: Any) -> MetadataCandidate | None:
+    def safe_lookup(
+        self,
+        *,
+        provider: str,
+        identifier: str,
+        lookup: Callable[[], MetadataCandidate | None],
+    ) -> MetadataCandidate | None:
         try:
             candidate = lookup()
         except ValueError as exc:

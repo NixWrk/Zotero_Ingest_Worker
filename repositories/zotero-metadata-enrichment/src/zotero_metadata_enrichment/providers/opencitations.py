@@ -29,6 +29,8 @@ class OpenCitationsClient:
         if not rows:
             return None
         value = rows[0].get("count") if isinstance(rows[0], dict) else None
+        if not isinstance(value, (str, bytes, bytearray, int, float)):
+            return None
         try:
             return int(value)
         except (TypeError, ValueError):

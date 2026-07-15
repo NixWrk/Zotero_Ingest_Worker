@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import urllib.error
 from dataclasses import dataclass, field
-from typing import Any, Callable
+from typing import Any
 
 from .enrichment import (
     EnricherConfig,
@@ -38,6 +38,7 @@ from .providers import (
     TranslationServerClient,
     UnpaywallClient,
 )
+from .providers.common import CandidateLookup, bind_candidate_lookup
 
 
 @dataclass(frozen=True)
@@ -120,7 +121,7 @@ class SourceDiscovery:
         events: list[dict[str, Any]] = []
         candidates: list[MetadataCandidate] = []
         auxiliary_metadata: dict[str, Any] = {}
-        calls: list[tuple[str, str, Callable[[], MetadataCandidate | None], float]] = []
+        calls: list[tuple[str, str, CandidateLookup, float]] = []
         extended_enabled = self.config.extended_providers_enabled
         candidates.extend(
             self.translation_server_candidates(
@@ -160,47 +161,47 @@ class SourceDiscovery:
                 citation_count = self.opencitations_citation_count(doi=doi, events=events)
                 if citation_count is not None:
                     auxiliary_metadata["opencitations"] = {"citation_count": citation_count}
-            calls.append(("crossref", doi, lambda doi=doi: self.crossref.by_doi(doi), 0.0))
+            calls.append(("crossref", doi, bind_candidate_lookup(self.crossref.by_doi, doi), 0.0))
             if extended_enabled:
                 calls.extend(
                     [
-                        ("unpaywall", doi, lambda doi=doi: self.unpaywall.by_doi(doi), 0.0),
-                        ("openalex", doi, lambda doi=doi: self.openalex.by_doi(doi), 0.0),
-                        ("europe_pmc", doi, lambda doi=doi: self.europe_pmc.by_doi(doi), 0.0),
-                        ("semantic_scholar", doi, lambda doi=doi: self.semantic_scholar.by_doi(doi), 0.0),
-                        ("datacite", doi, lambda doi=doi: self.datacite.by_doi(doi), 0.0),
-                        ("biorxiv_medrxiv", doi, lambda doi=doi: self.biorxiv.by_doi(doi), 0.0),
-                        ("core", doi, lambda doi=doi: self.core.by_doi(doi), 0.0),
-                        ("openaire", doi, lambda doi=doi: self.openaire.by_doi(doi), 0.0),
-                        ("doaj", doi, lambda doi=doi: self.doaj.by_doi(doi), 0.0),
+                        ("unpaywall", doi, bind_candidate_lookup(self.unpaywall.by_doi, doi), 0.0),
+                        ("openalex", doi, bind_candidate_lookup(self.openalex.by_doi, doi), 0.0),
+                        ("europe_pmc", doi, bind_candidate_lookup(self.europe_pmc.by_doi, doi), 0.0),
+                        ("semantic_scholar", doi, bind_candidate_lookup(self.semantic_scholar.by_doi, doi), 0.0),
+                        ("datacite", doi, bind_candidate_lookup(self.datacite.by_doi, doi), 0.0),
+                        ("biorxiv_medrxiv", doi, bind_candidate_lookup(self.biorxiv.by_doi, doi), 0.0),
+                        ("core", doi, bind_candidate_lookup(self.core.by_doi, doi), 0.0),
+                        ("openaire", doi, bind_candidate_lookup(self.openaire.by_doi, doi), 0.0),
+                        ("doaj", doi, bind_candidate_lookup(self.doaj.by_doi, doi), 0.0),
                     ]
                 )
         if extended_enabled and pmid:
             calls.extend(
                 [
-                    ("europe_pmc", pmid, lambda pmid=pmid: self.europe_pmc.by_pmid(pmid), 0.0),
-                    ("openalex", pmid, lambda pmid=pmid: self.openalex.by_pmid(pmid), 0.0),
-                    ("semantic_scholar", pmid, lambda pmid=pmid: self.semantic_scholar.by_pmid(pmid), 0.0),
+                    ("europe_pmc", pmid, bind_candidate_lookup(self.europe_pmc.by_pmid, pmid), 0.0),
+                    ("openalex", pmid, bind_candidate_lookup(self.openalex.by_pmid, pmid), 0.0),
+                    ("semantic_scholar", pmid, bind_candidate_lookup(self.semantic_scholar.by_pmid, pmid), 0.0),
                 ]
             )
         if extended_enabled and pmcid:
-            calls.append(("europe_pmc", pmcid, lambda pmcid=pmcid: self.europe_pmc.by_pmcid(pmcid), 0.0))
+            calls.append(("europe_pmc", pmcid, bind_candidate_lookup(self.europe_pmc.by_pmcid, pmcid), 0.0))
         if arxiv_id:
-            calls.append(("arxiv", arxiv_id, lambda arxiv_id=arxiv_id: self.arxiv.by_id(arxiv_id), 0.0))
+            calls.append(("arxiv", arxiv_id, bind_candidate_lookup(self.arxiv.by_id, arxiv_id), 0.0))
             if extended_enabled:
-                calls.append(("semantic_scholar", arxiv_id, lambda arxiv_id=arxiv_id: self.semantic_scholar.by_arxiv_id(arxiv_id), 0.0))
+                calls.append(("semantic_scholar", arxiv_id, bind_candidate_lookup(self.semantic_scholar.by_arxiv_id, arxiv_id), 0.0))
         if title:
-            calls.append(("crossref", title, lambda title=title: self.crossref.by_title(title), self.config.metadata_title_min_score))
+            calls.append(("crossref", title, bind_candidate_lookup(self.crossref.by_title, title), self.config.metadata_title_min_score))
             if extended_enabled:
                 calls.extend(
                     [
-                        ("openalex", title, lambda title=title: self.openalex.by_title(title), self.config.metadata_title_min_score),
-                        ("semantic_scholar", title, lambda title=title: self.semantic_scholar.by_title(title), self.config.metadata_title_min_score),
-                        ("core", title, lambda title=title: self.core.by_title(title), self.config.metadata_title_min_score),
-                        ("doaj", title, lambda title=title: self.doaj.by_title(title), self.config.metadata_title_min_score),
+                        ("openalex", title, bind_candidate_lookup(self.openalex.by_title, title), self.config.metadata_title_min_score),
+                        ("semantic_scholar", title, bind_candidate_lookup(self.semantic_scholar.by_title, title), self.config.metadata_title_min_score),
+                        ("core", title, bind_candidate_lookup(self.core.by_title, title), self.config.metadata_title_min_score),
+                        ("doaj", title, bind_candidate_lookup(self.doaj.by_title, title), self.config.metadata_title_min_score),
                     ]
                 )
-            calls.append(("arxiv", title, lambda title=title: self.arxiv.by_title(title), self.config.arxiv_search_min_score))
+            calls.append(("arxiv", title, bind_candidate_lookup(self.arxiv.by_title, title), self.config.arxiv_search_min_score))
 
         for provider, identifier, call, min_score in calls:
             try:
@@ -334,11 +335,11 @@ class SourceDiscovery:
         pmcid: str,
         events: list[dict[str, Any]],
     ) -> list[MetadataCandidate]:
-        calls: list[tuple[str, Callable[[], MetadataCandidate | None]]] = []
+        calls: list[tuple[str, CandidateLookup]] = []
         if pmid:
-            calls.append((pmid, lambda pmid=pmid: self.pubmed.by_pmid(pmid)))
+            calls.append((pmid, bind_candidate_lookup(self.pubmed.by_pmid, pmid)))
         if pmcid:
-            calls.append((pmcid, lambda pmcid=pmcid: self.pubmed.by_pmcid(pmcid)))
+            calls.append((pmcid, bind_candidate_lookup(self.pubmed.by_pmcid, pmcid)))
 
         candidates: list[MetadataCandidate] = []
         for identifier, call in calls:
@@ -370,6 +371,7 @@ def dedupe_locations(candidates: list[MetadataCandidate]) -> list[FullTextLocati
             if not url or url in seen:
                 continue
             seen.add(url)
+            raw_value = item.get("raw")
             locations.append(
                 FullTextLocation(
                     source=str(item.get("source") or candidate.source),
@@ -380,7 +382,7 @@ def dedupe_locations(candidates: list[MetadataCandidate]) -> list[FullTextLocati
                     version=str(item.get("version") or ""),
                     content_type=str(item.get("content_type") or ""),
                     repository=str(item.get("repository") or ""),
-                    raw=item.get("raw") if isinstance(item.get("raw"), dict) else {},
+                    raw=raw_value if isinstance(raw_value, dict) else {},
                 )
             )
     return locations

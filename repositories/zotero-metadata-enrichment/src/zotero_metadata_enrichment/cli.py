@@ -6,7 +6,7 @@ import sys
 from pathlib import Path
 
 from .diff import build_metadata_diff
-from .discovery import SourceDiscovery
+from .discovery import SourceDiscovery, SourceDiscoveryResult
 from .enrichment import EnricherConfig
 from .fulltext import discover_and_download_full_text
 from .html_sources import download_html_sources
@@ -135,13 +135,13 @@ def main(argv: list[str] | None = None) -> int:
             core_api_key=args.core_api_key,
             request_timeout_seconds=args.timeout_seconds,
         )
-        result = SourceDiscovery(config).discover(metadata=metadata, attachment=attachment)
-        print(json.dumps(result.to_dict(), ensure_ascii=False, indent=2))
+        discovery_result = SourceDiscovery(config).discover(metadata=metadata, attachment=attachment)
+        print(json.dumps(discovery_result.to_dict(), ensure_ascii=False, indent=2))
         return 0
 
     if args.command == "download-html-sources":
         attachment, metadata, config, discovery = _discover_for_args(args)
-        downloads = download_html_sources(
+        html_downloads = download_html_sources(
             discovery.locations,
             output_dir=args.output_dir,
             limit=args.max_downloads,
@@ -159,7 +159,7 @@ def main(argv: list[str] | None = None) -> int:
                     "candidate_count": len(discovery.candidates),
                     "location_count": len(discovery.locations),
                     "provider_events": discovery.provider_events,
-                    "downloads": [result.to_dict() for result in downloads],
+                    "downloads": [result.to_dict() for result in html_downloads],
                 },
                 ensure_ascii=False,
                 indent=2,
@@ -169,7 +169,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "download-pdf-sources":
         attachment, metadata, _config, discovery = _discover_for_args(args)
-        downloads = download_pdf_sources(
+        pdf_downloads = download_pdf_sources(
             discovery.locations,
             output_dir=args.output_dir,
             limit=args.max_downloads,
@@ -185,7 +185,7 @@ def main(argv: list[str] | None = None) -> int:
                     "candidate_count": len(discovery.candidates),
                     "location_count": len(discovery.locations),
                     "provider_events": discovery.provider_events,
-                    "downloads": [result.to_dict() for result in downloads],
+                    "downloads": [result.to_dict() for result in pdf_downloads],
                 },
                 ensure_ascii=False,
                 indent=2,
@@ -195,7 +195,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "download-full-text-sources":
         attachment, metadata, config, discovery = _discover_for_args(args)
-        result = discover_and_download_full_text(
+        full_text_result = discover_and_download_full_text(
             metadata=metadata,
             attachment=attachment,
             output_dir=args.output_dir,
@@ -208,7 +208,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         print(
             json.dumps(
-                result.to_dict(),
+                full_text_result.to_dict(),
                 ensure_ascii=False,
                 indent=2,
             )
@@ -219,7 +219,9 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
-def _discover_for_args(args: argparse.Namespace):
+def _discover_for_args(
+    args: argparse.Namespace,
+) -> tuple[LocalAttachment, LocalItemMetadata, EnricherConfig, SourceDiscoveryResult]:
     reader = LocalZoteroReader(args.data_dir)
     attachment, metadata = _attachment_and_metadata_for_args(reader, args)
     if metadata is None:

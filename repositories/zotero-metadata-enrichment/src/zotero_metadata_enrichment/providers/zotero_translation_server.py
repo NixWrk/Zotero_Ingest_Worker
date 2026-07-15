@@ -103,7 +103,8 @@ def zotero_translator_item_to_candidate(
     default_score: float,
     expected_title: str = "",
 ) -> MetadataCandidate | None:
-    data = item.get("data") if isinstance(item.get("data"), dict) else item
+    raw_data = item.get("data")
+    data: dict[str, Any] = raw_data if isinstance(raw_data, dict) else item
     title = normalize_space(str(data.get("title") or ""))
     doi = normalize_doi(str(data.get("DOI") or ""))
     if not title and not doi:

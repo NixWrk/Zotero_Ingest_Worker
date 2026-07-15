@@ -244,8 +244,8 @@ def month_number(value: str) -> str:
         "nov": 11,
         "dec": 12,
     }
-    number = months.get(value[:4].casefold()) or months.get(value[:3].casefold())
-    return f"{number:02d}" if number else ""
+    named_month = months.get(value[:4].casefold()) or months.get(value[:3].casefold())
+    return f"{named_month:02d}" if named_month else ""
 
 
 def text(node: ET.Element | None) -> str:

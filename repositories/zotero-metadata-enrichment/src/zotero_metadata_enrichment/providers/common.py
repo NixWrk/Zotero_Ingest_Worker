@@ -1,9 +1,29 @@
 from __future__ import annotations
 
+from collections.abc import Callable
 from typing import Any
 
 from ..models import FullTextLocation, MetadataCandidate
 from ..text import normalize_space, strip_html
+
+
+CandidateLookup = Callable[[], MetadataCandidate | None]
+CandidateLookupByIdentifier = Callable[[str], MetadataCandidate | None]
+
+
+def bind_candidate_lookup(
+    lookup: CandidateLookupByIdentifier,
+    identifier: str,
+) -> CandidateLookup:
+    return lambda: lookup(identifier)
+
+
+def as_dict(value: object) -> dict[str, Any]:
+    return value if isinstance(value, dict) else {}
+
+
+def as_list(value: object) -> list[Any]:
+    return value if isinstance(value, list) else []
 
 
 def first_value(value: Any) -> str:

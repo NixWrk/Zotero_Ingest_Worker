@@ -77,7 +77,7 @@ def assert_fetch_url_safe(
     return result
 
 
-def _parse_ip(host: str) -> ipaddress._BaseAddress | None:
+def _parse_ip(host: str) -> ipaddress.IPv4Address | ipaddress.IPv6Address | None:
     try:
         return ipaddress.ip_address(host.strip("[]"))
     except ValueError:
@@ -92,7 +92,11 @@ def _resolve_host_addresses(host: str) -> set[str]:
     return addresses
 
 
-def _is_blocked_ip(ip: ipaddress._BaseAddress, *, allow_private_networks: bool) -> bool:
+def _is_blocked_ip(
+    ip: ipaddress.IPv4Address | ipaddress.IPv6Address,
+    *,
+    allow_private_networks: bool,
+) -> bool:
     if ip.is_loopback or ip.is_link_local or ip.is_multicast or ip.is_unspecified:
         return True
     if ip.is_private and not allow_private_networks:

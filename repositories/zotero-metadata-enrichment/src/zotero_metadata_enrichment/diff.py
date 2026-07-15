@@ -1,9 +1,7 @@
 from __future__ import annotations
 
 import re
-from typing import Any
-
-from .models import MetadataCandidate
+from .models import MetadataCandidate, MetadataDiff
 from .text import normalize_space
 
 
@@ -65,7 +63,7 @@ def build_metadata_diff(
     *,
     current_fields: dict[str, str],
     policy: str,
-) -> dict[str, Any]:
+) -> MetadataDiff:
     patch: dict[str, str] = {}
     current: dict[str, str] = {}
     candidate_fields: dict[str, str] = {}

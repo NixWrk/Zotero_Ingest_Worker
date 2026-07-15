@@ -8,7 +8,7 @@ from ..identifiers import normalize_arxiv_id, normalize_doi, normalize_pmid
 from ..models import FullTextLocation, MetadataCandidate
 from ..provider_http import read_json_object
 from ..text import title_match_score
-from .common import candidate_with_locations, first_text
+from .common import as_dict, candidate_with_locations, first_text
 
 
 SEMANTIC_SCHOLAR_FIELDS = (
@@ -81,12 +81,12 @@ class SemanticScholarClient:
 
 def semantic_scholar_paper_to_candidate(paper: dict[str, Any], *, identifier: str, score: float) -> MetadataCandidate | None:
     title = first_text(paper.get("title"))
-    external = paper.get("externalIds") if isinstance(paper.get("externalIds"), dict) else {}
+    external = as_dict(paper.get("externalIds"))
     doi = normalize_doi(str(external.get("DOI") or ""))
     pmid = normalize_pmid(str(external.get("PubMed") or ""))
     if not title and not doi:
         return None
-    journal = paper.get("journal") if isinstance(paper.get("journal"), dict) else {}
+    journal = as_dict(paper.get("journal"))
     fields = {
         "title": title,
         "abstractNote": first_text(paper.get("abstract")),
@@ -100,7 +100,7 @@ def semantic_scholar_paper_to_candidate(paper: dict[str, Any], *, identifier: st
         "libraryCatalog": "Semantic Scholar",
     }
     locations: list[FullTextLocation] = []
-    oa_pdf = paper.get("openAccessPdf") if isinstance(paper.get("openAccessPdf"), dict) else {}
+    oa_pdf = as_dict(paper.get("openAccessPdf"))
     if oa_pdf.get("url"):
         locations.append(
             FullTextLocation(

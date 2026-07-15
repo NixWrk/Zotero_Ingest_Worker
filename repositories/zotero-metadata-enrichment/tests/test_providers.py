@@ -248,6 +248,62 @@ def test_openalex_client_adds_mailto_and_api_key_params() -> None:
     }
 
 
+def test_provider_parsers_tolerate_malformed_nested_json() -> None:
+    assert datacite_record_to_candidate({"attributes": None}) is None
+
+    doaj_candidate = doaj_bibjson_to_candidate(
+        {"title": "DOAJ partial", "journal": None, "identifier": None, "link": None},
+        identifier="DOAJ partial",
+        score=0.8,
+    )
+    assert doaj_candidate is not None
+    assert doaj_candidate.fields["title"] == "DOAJ partial"
+
+    openalex_candidate = openalex_work_to_candidate(
+        {
+            "display_name": "OpenAlex partial",
+            "ids": None,
+            "biblio": None,
+            "open_access": None,
+            "primary_location": None,
+            "locations": None,
+        },
+        identifier="OpenAlex partial",
+        score=0.8,
+    )
+    assert openalex_candidate is not None
+    assert openalex_candidate.fields["title"] == "OpenAlex partial"
+
+    semantic_candidate = semantic_scholar_paper_to_candidate(
+        {
+            "title": "Semantic partial",
+            "externalIds": None,
+            "journal": None,
+            "openAccessPdf": None,
+        },
+        identifier="Semantic partial",
+        score=0.8,
+    )
+    assert semantic_candidate is not None
+
+    unpaywall_candidate = unpaywall_item_to_candidate(
+        {
+            "title": "Unpaywall partial",
+            "best_oa_location": None,
+            "oa_locations": None,
+        }
+    )
+    assert unpaywall_candidate is not None
+
+    translator_candidate = zotero_translator_item_to_candidate(
+        {"data": None, "title": "Translator partial"},
+        source="zotero_translation_server_search",
+        identifier="Translator partial",
+        default_score=0.8,
+    )
+    assert translator_candidate is not None
+
+
 def test_europe_pmc_candidate_adds_pmc_xml_location() -> None:
     candidate = europe_pmc_result_to_candidate(
         {

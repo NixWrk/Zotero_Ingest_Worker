@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
-from typing import Any
+from typing import Any, TypedDict
 
 
 @dataclass(frozen=True)
@@ -73,6 +73,15 @@ class MetadataCandidate:
         return asdict(self)
 
 
+class MetadataDiff(TypedDict):
+    policy: str
+    current: dict[str, str]
+    candidate: dict[str, str]
+    patch: dict[str, str]
+    skipped_fields: dict[str, str]
+    applied_fields: list[str]
+
+
 @dataclass(frozen=True)
 class FullTextLocation:
     source: str
@@ -92,7 +101,7 @@ class FullTextLocation:
 @dataclass(frozen=True)
 class EnrichmentResult:
     candidate: MetadataCandidate | None
-    diff: dict[str, Any] | None
+    diff: MetadataDiff | None
     provider_events: list[dict[str, Any]]
     reason: str = ""
 
@@ -100,8 +109,7 @@ class EnrichmentResult:
     def patch(self) -> dict[str, str]:
         if not self.diff:
             return {}
-        value = self.diff.get("patch")
-        return value if isinstance(value, dict) else {}
+        return self.diff["patch"]
 
     def to_dict(self) -> dict[str, Any]:
         return {

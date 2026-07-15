@@ -7,7 +7,7 @@ from typing import Any
 from ..identifiers import normalize_doi
 from ..models import FullTextLocation, MetadataCandidate
 from ..provider_http import read_json_object
-from .common import candidate_with_locations, first_text
+from .common import as_dict, as_list, candidate_with_locations, first_text
 
 
 class UnpaywallClient:
@@ -50,7 +50,7 @@ def unpaywall_item_to_candidate(item: dict[str, Any]) -> MetadataCandidate | Non
     title = first_text(item.get("title"))
     if not doi and not title:
         return None
-    best = item.get("best_oa_location") if isinstance(item.get("best_oa_location"), dict) else {}
+    best = as_dict(item.get("best_oa_location"))
     locations = unpaywall_locations(item)
     fields = {
         "title": title,
@@ -78,7 +78,7 @@ def unpaywall_item_to_candidate(item: dict[str, Any]) -> MetadataCandidate | Non
 
 
 def unpaywall_locations(item: dict[str, Any]) -> list[FullTextLocation]:
-    raw_locations = item.get("oa_locations") if isinstance(item.get("oa_locations"), list) else []
+    raw_locations = as_list(item.get("oa_locations"))
     best = item.get("best_oa_location")
     if isinstance(best, dict):
         raw_locations = [best, *[loc for loc in raw_locations if loc is not best]]

@@ -7,7 +7,7 @@ from typing import Any
 from ..identifiers import normalize_doi
 from ..models import FullTextLocation, MetadataCandidate
 from ..provider_http import read_json_object
-from .common import candidate_with_locations, first_text
+from .common import as_dict, as_list, candidate_with_locations, first_text
 
 
 class DataCiteClient:
@@ -38,12 +38,12 @@ class DataCiteClient:
 
 
 def datacite_record_to_candidate(data: dict[str, Any]) -> MetadataCandidate | None:
-    attrs = data.get("attributes") if isinstance(data.get("attributes"), dict) else {}
+    attrs = as_dict(data.get("attributes"))
     doi = normalize_doi(str(attrs.get("doi") or data.get("id") or ""))
     title = first_text(attrs.get("titles"))
     if not doi and not title:
         return None
-    descriptions = attrs.get("descriptions") if isinstance(attrs.get("descriptions"), list) else []
+    descriptions = as_list(attrs.get("descriptions"))
     abstract = ""
     for description in descriptions:
         if isinstance(description, dict) and str(description.get("descriptionType") or "").casefold() in {"abstract", "description"}:
@@ -72,7 +72,7 @@ def datacite_record_to_candidate(data: dict[str, Any]) -> MetadataCandidate | No
 
 def datacite_locations(attrs: dict[str, Any]) -> list[FullTextLocation]:
     locations: list[FullTextLocation] = []
-    for url in attrs.get("contentUrl") or []:
+    for url in as_list(attrs.get("contentUrl")):
         text = first_text(url)
         if text:
             locations.append(FullTextLocation(source="datacite", url=text, kind=guess_kind(text), is_oa=None, repository="DataCite", raw={"contentUrl": url}))

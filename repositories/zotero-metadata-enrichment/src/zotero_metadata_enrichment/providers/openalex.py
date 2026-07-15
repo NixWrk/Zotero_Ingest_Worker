@@ -8,7 +8,7 @@ from ..identifiers import normalize_doi, normalize_pmid
 from ..models import FullTextLocation, MetadataCandidate
 from ..provider_http import read_json_object
 from ..text import title_match_score
-from .common import candidate_with_locations, compact_pages, first_text
+from .common import as_dict, as_list, candidate_with_locations, compact_pages, first_text
 
 
 class OpenAlexClient:
@@ -41,7 +41,12 @@ class OpenAlexClient:
         results = payload.get("results") if isinstance(payload, dict) else None
         if not isinstance(results, list) or not results:
             return None
-        return openalex_work_to_candidate(results[0], identifier=pmid, score=1.0)
+        work = results[0]
+        return (
+            openalex_work_to_candidate(work, identifier=pmid, score=1.0)
+            if isinstance(work, dict)
+            else None
+        )
 
     def by_title(self, title: str, *, rows: int = 5) -> MetadataCandidate | None:
         payload = self._get_json(
@@ -81,20 +86,20 @@ class OpenAlexClient:
 
 def openalex_work_to_candidate(work: dict[str, Any], *, identifier: str, score: float) -> MetadataCandidate | None:
     title = first_text(work.get("display_name"))
-    ids = work.get("ids") if isinstance(work.get("ids"), dict) else {}
+    ids = as_dict(work.get("ids"))
     doi = normalize_doi(str(ids.get("doi") or work.get("doi") or ""))
     if not title and not doi:
         return None
-    biblio = work.get("biblio") if isinstance(work.get("biblio"), dict) else {}
+    biblio = as_dict(work.get("biblio"))
     source = openalex_source(work)
-    open_access = work.get("open_access") if isinstance(work.get("open_access"), dict) else {}
+    open_access = as_dict(work.get("open_access"))
     fields = {
         "title": title,
         "abstractNote": openalex_abstract(work.get("abstract_inverted_index")),
         "DOI": doi,
         "date": first_text(work.get("publication_date") or work.get("publication_year")),
         "publicationTitle": first_text(source.get("display_name")),
-        "ISSN": ", ".join(str(value) for value in source.get("issn") or [] if value),
+        "ISSN": ", ".join(str(value) for value in as_list(source.get("issn")) if value),
         "volume": first_text(biblio.get("volume")),
         "issue": first_text(biblio.get("issue")),
         "pages": compact_pages(first_text(biblio.get("first_page")), first_text(biblio.get("last_page"))),
@@ -120,13 +125,15 @@ def openalex_work_to_candidate(work: dict[str, Any], *, identifier: str, score: 
 
 
 def openalex_source(work: dict[str, Any]) -> dict[str, Any]:
-    primary = work.get("primary_location") if isinstance(work.get("primary_location"), dict) else {}
-    source = primary.get("source") if isinstance(primary.get("source"), dict) else {}
+    primary = as_dict(work.get("primary_location"))
+    source = as_dict(primary.get("source"))
     if source:
         return source
-    for location in work.get("locations") or []:
-        if isinstance(location, dict) and isinstance(location.get("source"), dict):
-            return location["source"]
+    for location in as_list(work.get("locations")):
+        if isinstance(location, dict):
+            source = as_dict(location.get("source"))
+            if source:
+                return source
     return {}
 
 
@@ -135,7 +142,7 @@ def openalex_locations(work: dict[str, Any]) -> list[FullTextLocation]:
     primary = work.get("primary_location")
     if isinstance(primary, dict):
         raw_locations.append(primary)
-    raw_locations.extend(loc for loc in work.get("locations") or [] if isinstance(loc, dict))
+    raw_locations.extend(loc for loc in as_list(work.get("locations")) if isinstance(loc, dict))
     locations: list[FullTextLocation] = []
     seen: set[str] = set()
     for raw in raw_locations:
@@ -144,7 +151,7 @@ def openalex_locations(work: dict[str, Any]) -> list[FullTextLocation]:
             if not url or url in seen:
                 continue
             seen.add(url)
-            source = raw.get("source") if isinstance(raw.get("source"), dict) else {}
+            source = as_dict(raw.get("source"))
             locations.append(
                 FullTextLocation(
                     source="openalex",

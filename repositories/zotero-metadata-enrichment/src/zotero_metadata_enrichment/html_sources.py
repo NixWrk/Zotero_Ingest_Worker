@@ -8,7 +8,7 @@ import urllib.request
 from dataclasses import asdict, dataclass, field, replace
 from html.parser import HTMLParser
 from pathlib import Path
-from typing import Any
+from typing import Any, TypedDict
 
 from .models import FullTextLocation
 from .provider_http import throttled_urlopen
@@ -39,6 +39,16 @@ class ArticleHtmlAssessment:
 
     def to_dict(self) -> dict[str, Any]:
         return asdict(self)
+
+
+class _ArticleHtmlAssessmentFields(TypedDict):
+    title: str
+    title_score: float
+    text_chars: int
+    image_count: int
+    link_count: int
+    markers: list[str]
+    section_markers: list[str]
 
 
 @dataclass(frozen=True)
@@ -634,7 +644,7 @@ def canonical_article_html_url(location: FullTextLocation, *, final_url: str, bo
         raw = body.decode("utf-8", errors="replace")
         match = re.search(r"href=[\"']([^\"']*/products/ejournals/html/[^\"']+)[\"']", raw, flags=re.IGNORECASE)
         if match:
-            return urllib.parse.urljoin(final_url or location.url, match.group(1)).strip()
+            return str(urllib.parse.urljoin(final_url or location.url, match.group(1))).strip()
     return ""
 
 
@@ -726,7 +736,7 @@ def assess_article_html(
     section_markers = article_section_markers(text)
     image_count = len(re.findall(r"<img\b", lower))
     link_count = len(re.findall(r"\bhref\s*=", lower))
-    base = {
+    base: _ArticleHtmlAssessmentFields = {
         "title": title,
         "title_score": title_score,
         "text_chars": len(text),
