@@ -8,7 +8,7 @@ import urllib.request
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from .config import DEFAULT_SCIHUB_MIRRORS, PROJECT_ROOT, WorkerConfig
 from .package_paths import ensure_local_package_paths
@@ -474,12 +474,12 @@ def doi_from_metadata(metadata: Any) -> str:
         if explicit:
             normalized = package_normalize_doi(explicit)
             if normalized:
-                return normalized
+                return cast(str, normalized)
     parts: list[str] = [str(getattr(metadata, "title", "") or "")]
     if isinstance(fields, dict):
         parts.extend(str(value) for value in fields.values())
     found = package_extract_doi_from_text(" ".join(part for part in parts if part)) or ""
-    return package_normalize_doi(found)
+    return cast(str, package_normalize_doi(found))
 
 
 def _safe_doi(doi: str) -> str:

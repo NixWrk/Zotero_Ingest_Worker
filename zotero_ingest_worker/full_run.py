@@ -4,7 +4,7 @@ import concurrent.futures
 import threading
 import time
 from dataclasses import asdict
-from typing import Any
+from typing import Any, Callable
 
 from .config import WorkerConfig
 from .full_run_options import FullRunOptions
@@ -325,7 +325,7 @@ class FullRunManager:
         options: FullRunOptions,
         metadata: ZoteroMetadataProcessor,
     ) -> dict[str, Any]:
-        actions = {
+        actions: dict[str, tuple[str, str, str, Callable[[], dict[str, Any]]]] = {
             "metadata": (
                 "draining_metadata",
                 "metadata",

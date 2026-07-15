@@ -9,7 +9,7 @@ import urllib.parse
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import replace as dataclass_replace
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, cast
 
 from .package_paths import ensure_local_package_paths
 
@@ -108,6 +108,11 @@ from .state import FileSignature, PipelineStateStore
 
 
 __all__ = [
+    "METADATA_JOB_ARXIV_HTML",
+    "METADATA_JOB_ENRICH",
+    "METADATA_JOB_FULL_TEXT",
+    "METADATA_JOB_RESEARCHGATE_PDF",
+    "METADATA_JOB_SCIHUB_PDF",
     "MetadataCandidate",
     "ZoteroMetadataProcessor",
     "_best_successful_html_download",
@@ -921,7 +926,10 @@ class ZoteroMetadataProcessor:
         policy: str | None,
     ) -> dict[str, Any]:
         handler_name = metadata_job_drain_handler(job_type)
-        handler = getattr(self, handler_name, None) if handler_name else None
+        handler = cast(
+            Callable[..., dict[str, Any]] | None,
+            getattr(self, handler_name, None) if handler_name else None,
+        )
         if handler is not None:
             return handler(
                 job,
@@ -1404,6 +1412,23 @@ class ZoteroMetadataProcessor:
             attachment = self._attachment_for_job(job)
             zotero = LocalZoteroStore(self._config_for_job(job))
             metadata = zotero.get_parent_metadata_for_attachment(attachment)
+            parent_preflight: dict[str, Any] | None = None
+            if metadata is None and self.config.arxiv_html_attach:
+                attachment, metadata, parent_preflight = self._ensure_parent_metadata_context(
+                    zotero=zotero,
+                    attachment=attachment,
+                )
+            if metadata is None and self.config.arxiv_html_attach:
+                return self._mark_metadata_job_skipped(
+                    job,
+                    job_id=job_id,
+                    message="PDF attachment has no parent item for arXiv HTML attach.",
+                    result={
+                        "reason": "no_parent_item",
+                        "attachment": attachment.to_dict(),
+                        "parent_preflight": parent_preflight,
+                    },
+                )
             arxiv_service = ArxivHtmlJobService(self.config)
             candidate = arxiv_service.lookup_candidate(metadata=metadata, attachment=attachment)
             if candidate is None:
@@ -1440,6 +1465,8 @@ class ZoteroMetadataProcessor:
             )
             relay_result: dict[str, Any] | None = None
             if self.config.arxiv_html_attach:
+                if metadata is None:
+                    raise RuntimeError("Parent metadata disappeared before arXiv HTML attach.")
                 if self.config.zotero_relay_url:
                     filename = arxiv_html_filename(attachment.filename)
                     existing = self._existing_html_sibling_by_filename(
@@ -1590,20 +1617,20 @@ class ZoteroMetadataProcessor:
             )
 
         attachment = self._attachment_for_job(job)
-        attachment, metadata, _parent_preflight = self._ensure_parent_metadata_context(
+        attachment, parent_metadata, _parent_preflight = self._ensure_parent_metadata_context(
             zotero=zotero,
             attachment=attachment,
         )
-        if metadata is None:
+        if parent_metadata is None:
             return None
         inventory = (
-            zotero.item_full_text_inventory(metadata)
-            if metadata.item_id > 0
+            zotero.item_full_text_inventory(parent_metadata)
+            if parent_metadata.item_id > 0
             else self._synthetic_pdf_inventory_for_attachment(attachment)
         )
         return (
             attachment,
-            metadata,
+            parent_metadata,
             inventory,
             source_path if source_path.exists() else attachment.file_path,
             "attachment",

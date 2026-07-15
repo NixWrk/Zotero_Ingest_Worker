@@ -975,6 +975,47 @@ def test_arxiv_validation_failure_is_skipped_not_failed(monkeypatch: Any, tmp_pa
     assert stored["validation_reason"] == "too_little_text"
 
 
+def test_arxiv_attach_without_parent_is_skipped_before_local_sync(tmp_path: Path) -> None:
+    data_dir = _write_full_text_fixture(tmp_path, with_pdf=True)
+    connection = sqlite3.connect(data_dir / "zotero.sqlite")
+    try:
+        connection.execute(
+            "update itemAttachments set parentItemID = null where itemID = 20",
+        )
+        connection.commit()
+    finally:
+        connection.close()
+
+    config = _metadata_processor_test_config(tmp_path, data_dir)
+    config.arxiv_html_attach = True
+    config.zotero_relay_url = ""
+    processor = ZoteroMetadataProcessor(config)
+    processor._library_configs = lambda **_kwargs: [config]  # type: ignore[method-assign]
+    pdf_path = data_dir / "storage" / "PDF1234" / "paper.pdf"
+    pdf_path.parent.mkdir(parents=True, exist_ok=True)
+    pdf_path.write_bytes(b"%PDF")
+    processor.state.enqueue_metadata_job(
+        job_type="arxiv_html",
+        queue_key="arxiv_html|PDF1234",
+        library_id="LOCAL",
+        attachment_key="PDF1234",
+        data_dir=data_dir,
+        source_path=pdf_path,
+        signature=FileSignature.from_path(pdf_path),
+        status="queued",
+        reason="test",
+    )
+
+    result = processor.drain_arxiv_html_queue(limit=1, require_relay=False)
+
+    assert result["ok"] is True
+    assert result["failed"] == 0
+    assert result["results"][0]["status"] == "skipped"
+    stored = json.loads(result["results"][0]["result_json"])
+    assert stored["reason"] == "no_parent_item"
+    assert stored["parent_preflight"]["reason"] == "relay_not_configured"
+
+
 def test_local_zotero_reads_extended_parent_metadata(tmp_path: Path) -> None:
     data_dir = tmp_path / "Zotero_Test_Data"
     storage_dir = data_dir / "storage" / "PDF1234"

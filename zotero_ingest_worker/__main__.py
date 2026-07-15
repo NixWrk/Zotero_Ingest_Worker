@@ -236,7 +236,7 @@ def main(argv: list[str] | None = None, *, default_role: str = ROLE_METADATA) ->
 
 
 def _add_backlog_parser(
-    subparsers: argparse._SubParsersAction,
+    subparsers: argparse._SubParsersAction[argparse.ArgumentParser],
     name: str,
     help_text: str,
 ) -> argparse.ArgumentParser:

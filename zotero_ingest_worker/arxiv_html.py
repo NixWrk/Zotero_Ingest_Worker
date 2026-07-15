@@ -7,7 +7,7 @@ import urllib.request
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any, Callable
+from typing import Any, Callable, cast
 
 from .package_paths import ensure_local_package_paths
 
@@ -38,6 +38,7 @@ from zotero_metadata_enrichment.text import (  # type: ignore[import-not-found]
 )
 
 from .local_zotero import LocalAttachment, LocalItemMetadata
+from .config import WorkerConfig
 from .metadata_jobs import METADATA_JOB_ARXIV_HTML
 from .state import FileSignature
 
@@ -54,7 +55,7 @@ class ArxivHtmlValidationError(RuntimeError):
 
 @dataclass
 class ArxivHtmlJobService:
-    config: Any
+    config: WorkerConfig
     http_text: HttpText | None = None
     provider_events: list[dict[str, Any]] = field(default_factory=list)
 
@@ -213,6 +214,8 @@ class ArxivHtmlJobService:
         ) as response:
             content_type = response.headers.get_content_charset() or "utf-8"
             body = read_response_bytes(response, error_label=url)
+            if not isinstance(body, bytes):
+                raise TypeError("arXiv HTTP helper did not return bytes.")
             return body.decode(content_type, errors="replace")
 
     def _record_provider_event(self, **event: Any) -> None:
@@ -221,15 +224,18 @@ class ArxivHtmlJobService:
 
 
 def parse_arxiv_atom(xml_text: str) -> list[MetadataCandidate]:
-    return package_parse_arxiv_atom(xml_text)
+    return cast(list[MetadataCandidate], package_parse_arxiv_atom(xml_text))
 
 
 def arxiv_html_filename(pdf_filename: str) -> str:
-    return package_arxiv_html_filename(pdf_filename)
+    return cast(str, package_arxiv_html_filename(pdf_filename))
 
 
 def validate_arxiv_html(html_text: str, *, min_text_chars: int = 200) -> dict[str, Any]:
-    return package_validate_arxiv_html(html_text, min_text_chars=min_text_chars)
+    return cast(
+        dict[str, Any],
+        package_validate_arxiv_html(html_text, min_text_chars=min_text_chars),
+    )
 
 
 def metadata_haystack(
@@ -265,8 +271,8 @@ def title_for_lookup(
     attachment: LocalAttachment,
 ) -> str:
     if metadata is not None and metadata.title:
-        return normalize_space(metadata.title)
-    return normalize_space(Path(attachment.filename).stem)
+        return cast(str, normalize_space(metadata.title))
+    return cast(str, normalize_space(Path(attachment.filename).stem))
 
 
 def safe_filename(value: str) -> str:

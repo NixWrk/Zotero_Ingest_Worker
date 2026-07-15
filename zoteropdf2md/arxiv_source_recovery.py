@@ -21,6 +21,7 @@ import tempfile
 import urllib.parse
 import urllib.request
 import zipfile
+from typing import Protocol
 
 from zotero_metadata_enrichment.safe_http import (  # type: ignore[import-not-found]
     host_suffix_redirect,
@@ -32,6 +33,17 @@ from .web_polish.core import HTML_TAG_RE, attr_value, balanced_element_from_matc
 
 
 SourceFetcher = Callable[[str], bytes]
+
+
+class FigureRenderer(Protocol):
+    def render(
+        self,
+        *,
+        source_dir: Path,
+        figure: SourceFigure,
+        arxiv_id: str,
+        index: int,
+    ) -> bytes | None: ...
 
 _FIGURE_ENV_RE = re.compile(r"\\begin\{figure\*?\}[\s\S]*?\\end\{figure\*?\}", re.IGNORECASE)
 _FIGURE_ENV_WITH_BODY_RE = re.compile(r"\\begin\{figure\*?\}(?:\s*\[[^\]]*\])?(?P<body>[\s\S]*?)\\end\{figure\*?\}", re.IGNORECASE)
@@ -229,7 +241,7 @@ def recover_latexml_figures_from_arxiv_source_html(
     *,
     source_url: str | None,
     fetch_source: SourceFetcher | None = None,
-    renderer: LatexSourceFigureRenderer | object | None = None,
+    renderer: FigureRenderer | None = None,
     enabled: bool | None = None,
     max_figures: int | None = None,
 ) -> ArxivSourceRecoveryResult:
@@ -355,7 +367,10 @@ def fetch_arxiv_source_package(arxiv_id: str, *, max_bytes: int = _MAX_SOURCE_PA
         declared = _response_content_length(response)
         if declared is not None and declared > byte_limit:
             raise ValueError(f"arXiv source package exceeds {byte_limit} bytes")
-        blob = response.read(byte_limit + 1)
+        raw_blob = response.read(byte_limit + 1)
+        if not isinstance(raw_blob, bytes):
+            raise TypeError("arXiv source response did not return bytes.")
+        blob = raw_blob
     if len(blob) > byte_limit:
         raise ValueError(f"arXiv source package exceeds {byte_limit} bytes")
     return blob
@@ -380,20 +395,20 @@ def extract_arxiv_source_package(
     )
     buffer = io.BytesIO(blob)
     try:
-        archive = tarfile.open(fileobj=buffer, mode="r:*")
+        tar_archive = tarfile.open(fileobj=buffer, mode="r:*")
     except tarfile.TarError:
-        archive = None
-    if archive is not None:
-        with archive:
-            for member in archive:
-                _safe_extract_tar_member(archive, member, destination, budget=budget)
+        tar_archive = None
+    if tar_archive is not None:
+        with tar_archive:
+            for tar_member in tar_archive:
+                _safe_extract_tar_member(tar_archive, tar_member, destination, budget=budget)
         return
 
     buffer = io.BytesIO(blob)
     if zipfile.is_zipfile(buffer):
-        with zipfile.ZipFile(buffer) as archive:
-            for member in archive.infolist():
-                _safe_extract_zip_member(archive, member, destination, budget=budget)
+        with zipfile.ZipFile(buffer) as zip_archive:
+            for zip_member in zip_archive.infolist():
+                _safe_extract_zip_member(zip_archive, zip_member, destination, budget=budget)
         return
 
     target = destination / "main.tex"
@@ -857,7 +872,7 @@ def _pdf_first_page_to_png(
     max_png_bytes: int = _MAX_RENDERED_PNG_BYTES,
 ) -> bytes | None:
     try:
-        import fitz  # type: ignore[import-not-found]
+        import fitz  # type: ignore[import-untyped]
     except Exception:
         return None
     if not math.isfinite(scale) or scale <= 0:
@@ -934,7 +949,7 @@ def _safe_extract_zip_member(
 
 
 def _copy_stream_bounded(
-    source: object,
+    source: FigureBinaryReader,
     target: Path,
     *,
     budget: _ExtractionBudget,
@@ -958,6 +973,10 @@ def _copy_stream_bounded(
     except Exception:
         target.unlink(missing_ok=True)
         raise
+
+
+class FigureBinaryReader(Protocol):
+    def read(self, size: int = -1) -> bytes: ...
 
 
 def _read_file_bounded(path: Path, *, max_bytes: int) -> bytes | None:

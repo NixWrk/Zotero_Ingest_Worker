@@ -8,7 +8,7 @@ import socket
 import urllib.error
 import urllib.parse
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from .package_paths import ensure_local_package_paths
 
@@ -51,7 +51,10 @@ def build_metadata_patch(
     current_fields: dict[str, str],
     policy: str,
 ) -> dict[str, str]:
-    return package_build_metadata_patch(candidate, current_fields=current_fields, policy=policy)
+    return cast(
+        dict[str, str],
+        package_build_metadata_patch(candidate, current_fields=current_fields, policy=policy),
+    )
 
 
 def build_metadata_diff(
@@ -60,7 +63,10 @@ def build_metadata_diff(
     current_fields: dict[str, str],
     policy: str,
 ) -> dict[str, Any]:
-    return package_build_metadata_diff(candidate, current_fields=current_fields, policy=policy)
+    return cast(
+        dict[str, Any],
+        package_build_metadata_diff(candidate, current_fields=current_fields, policy=policy),
+    )
 
 
 ITEM_TYPE_UNSUPPORTED_PATCH_FIELDS: dict[str, frozenset[str]] = {
@@ -226,19 +232,19 @@ def filter_metadata_diff_for_item_type(diff: dict[str, Any], *, item_type: str |
 
 
 def extract_doi_from_text(text: str) -> str | None:
-    return package_extract_doi_from_text(text)
+    return cast(str | None, package_extract_doi_from_text(text))
 
 
 def normalize_doi(value: str) -> str:
-    return package_normalize_doi(value)
+    return cast(str, package_normalize_doi(value))
 
 
 def extract_arxiv_id_from_text(text: str) -> str | None:
-    return package_extract_arxiv_id_from_text(text)
+    return cast(str | None, package_extract_arxiv_id_from_text(text))
 
 
 def normalize_arxiv_id(value: str) -> str:
-    return package_normalize_arxiv_id(value)
+    return cast(str, package_normalize_arxiv_id(value))
 
 
 def crossref_work_to_candidate(work: dict[str, Any], *, score: float) -> MetadataCandidate | None:
@@ -263,7 +269,7 @@ def zotero_translator_item_to_candidate(
 
 
 def title_match_score(left: str, right: str) -> float:
-    return package_title_match_score(left, right)
+    return cast(float, package_title_match_score(left, right))
 
 
 def _metadata_haystack(
@@ -534,7 +540,7 @@ def _full_text_ocr_candidates(payload: dict[str, Any]) -> list[str]:
 
 
 def _normalize_space(value: str) -> str:
-    return package_normalize_space(value)
+    return cast(str, package_normalize_space(value))
 
 
 def _merge_extra(current: str, new_value: str) -> str:

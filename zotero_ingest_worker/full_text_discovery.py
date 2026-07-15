@@ -73,7 +73,10 @@ class FullTextDiscoveryOrchestrator:
             require_pdf_text_identity=True,
             stop_after_first_html=False,
         )
-        payload = result.to_dict()
+        raw_payload = result.to_dict()
+        if not isinstance(raw_payload, dict):
+            raise TypeError("Full-text discovery result must serialize to a dictionary.")
+        payload: dict[str, Any] = raw_payload
         self._append_arxiv_html_candidates_from_abs_landings(
             payload=payload,
             output_dir=output_dir,

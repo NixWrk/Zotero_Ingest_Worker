@@ -49,7 +49,12 @@ def run_server(config: WorkerConfig | None = None, *, role: str | None = None) -
         server.server_close()
 
 
-def _build_handler(base_config: WorkerConfig, full_run_manager: FullRunManager, *, role: str):
+def _build_handler(
+    base_config: WorkerConfig,
+    full_run_manager: FullRunManager,
+    *,
+    role: str,
+) -> type[BaseHTTPRequestHandler]:
     post_action_paths = post_action_paths_for_role(role)
 
     class ZoteroIngestHandler(BaseHTTPRequestHandler):

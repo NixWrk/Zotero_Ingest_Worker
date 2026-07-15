@@ -848,7 +848,10 @@ def _fetch_remote_html(url: str, *, max_bytes: int = _MAX_WEB_HTML_BYTES) -> str
             declared = _response_content_length(response)
             if declared is not None and declared > byte_limit:
                 raise WebHtmlPolishError(f"Fetched HTML exceeds {byte_limit} bytes: {url}")
-            body = response.read(byte_limit + 1)
+            raw_body = response.read(byte_limit + 1)
+            if not isinstance(raw_body, bytes):
+                raise WebHtmlPolishError(f"Fetched HTML did not return bytes: {url}")
+            body = raw_body
     except UnsafeUrlError as exc:
         raise WebHtmlPolishError(str(exc)) from exc
     if len(body) > byte_limit:
@@ -2354,10 +2357,10 @@ def _document_title(html: str) -> str:
         if content:
             return _visible_text(content) or content
 
-    match = _TITLE_RE.search(html)
-    if match is None:
+    title_match = _TITLE_RE.search(html)
+    if title_match is None:
         return "Web Article"
-    title = _visible_text(match.group("title"))
+    title = _visible_text(title_match.group("title"))
     return title or "Web Article"
 
 
