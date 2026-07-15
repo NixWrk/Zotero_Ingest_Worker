@@ -11,6 +11,7 @@ import base64
 from collections.abc import Callable
 from dataclasses import dataclass
 from html import escape as html_escape
+from html.parser import HTMLParser
 from html import unescape
 import mimetypes
 from pathlib import Path
@@ -124,23 +125,6 @@ _ROOT_RELATIVE_URL_ATTR_RE = re.compile(
 )
 _TITLE_RE = re.compile(r"<title\b[^>]*>(?P<title>[\s\S]*?)</title>", re.IGNORECASE)
 _META_TAG_RE = re.compile(r"<meta\b(?P<attrs>[^>]*)>", re.IGNORECASE | re.DOTALL)
-_EVENT_HANDLER_ATTR_RE = re.compile(
-    r"\s+on[A-Za-z][\w:-]*\s*=\s*(?:'[^']*'|\"[^\"]*\"|[^\s>]+)",
-    re.IGNORECASE | re.DOTALL,
-)
-_ACTIVE_URL_ATTR_RE = re.compile(
-    r"\s+(?P<name>href|src|action|formaction|poster|data|xlink:href)\s*=\s*"
-    r"(?:(?P<quote>['\"])(?P<quoted>.*?)(?P=quote)|(?P<bare>[^\s>]+))",
-    re.IGNORECASE | re.DOTALL,
-)
-_SRCDOC_ATTR_RE = re.compile(
-    r"\s+srcdoc\s*=\s*(?:'[^']*'|\"[^\"]*\"|[^\s>]+)",
-    re.IGNORECASE | re.DOTALL,
-)
-_STYLE_ATTR_RE = re.compile(
-    r"\s+style\s*=\s*(?:(?P<quote>['\"])(?P<quoted>.*?)(?P=quote)|(?P<bare>[^\s>]+))",
-    re.IGNORECASE | re.DOTALL,
-)
 _MAX_LOCAL_ASSET_REFERENCE_LENGTH = 4096
 _MAX_WEB_HTML_BYTES = 16 * 1024 * 1024
 _MAX_WEB_IMAGE_BYTES = 8 * 1024 * 1024
@@ -1197,39 +1181,566 @@ def remove_publisher_ui_fragments(html: str) -> str:
     return html
 
 
+_ALLOWED_ARTICLE_TAGS = frozenset(
+    {
+        "a",
+        "abbr",
+        "address",
+        "article",
+        "aside",
+        "audio",
+        "b",
+        "bdi",
+        "bdo",
+        "blockquote",
+        "body",
+        "br",
+        "caption",
+        "cite",
+        "code",
+        "col",
+        "colgroup",
+        "data",
+        "dd",
+        "del",
+        "details",
+        "dfn",
+        "div",
+        "dl",
+        "dt",
+        "em",
+        "embed",
+        "figcaption",
+        "figure",
+        "footer",
+        "h1",
+        "h2",
+        "h3",
+        "h4",
+        "h5",
+        "h6",
+        "header",
+        "hgroup",
+        "hr",
+        "html",
+        "i",
+        "iframe",
+        "img",
+        "ins",
+        "kbd",
+        "li",
+        "main",
+        "mark",
+        "menu",
+        "meter",
+        "nav",
+        "object",
+        "ol",
+        "p",
+        "picture",
+        "pre",
+        "q",
+        "rp",
+        "rt",
+        "ruby",
+        "s",
+        "samp",
+        "section",
+        "small",
+        "source",
+        "span",
+        "strong",
+        "sub",
+        "summary",
+        "sup",
+        "table",
+        "tbody",
+        "td",
+        "tfoot",
+        "th",
+        "thead",
+        "time",
+        "tr",
+        "u",
+        "ul",
+        "var",
+        "video",
+        "wbr",
+        # SVG presentation subset used by scientific figures and equations.
+        "svg",
+        "g",
+        "path",
+        "rect",
+        "circle",
+        "ellipse",
+        "line",
+        "polyline",
+        "polygon",
+        "text",
+        "tspan",
+        "defs",
+        "symbol",
+        "use",
+        "image",
+        "lineargradient",
+        "radialgradient",
+        "stop",
+        "clippath",
+        "mask",
+        "pattern",
+        "marker",
+        "desc",
+        # MathML presentation subset.
+        "math",
+        "semantics",
+        "annotation",
+        "annotation-xml",
+        "mi",
+        "mn",
+        "mo",
+        "ms",
+        "mtext",
+        "mspace",
+        "mrow",
+        "mfrac",
+        "msqrt",
+        "mroot",
+        "mstyle",
+        "merror",
+        "mpadded",
+        "mphantom",
+        "mfenced",
+        "menclose",
+        "msub",
+        "msup",
+        "msubsup",
+        "munder",
+        "mover",
+        "munderover",
+        "mmultiscripts",
+        "mtable",
+        "mtr",
+        "mtd",
+        "maligngroup",
+        "malignmark",
+        "mlongdiv",
+        "mscarries",
+        "mscarry",
+        "msgroup",
+        "msline",
+        "msrow",
+        "mstack",
+        "maction",
+    }
+)
+_DROP_ARTICLE_CONTENT_TAGS = frozenset(
+    {
+        "applet",
+        "fencedframe",
+        "form",
+        "frameset",
+        "noscript",
+        "portal",
+        "script",
+        "select",
+        "style",
+        "template",
+        "textarea",
+        # SVG SMIL can mutate URL-bearing attributes after sanitization.
+        "animate",
+        "animatemotion",
+        "animatetransform",
+        "discard",
+        "handler",
+        "set",
+    }
+)
+_DROP_ARTICLE_TAGS = frozenset({"base", "frame", "input", "keygen", "link", "meta"})
+_UNWRAP_ARTICLE_TAGS = frozenset({"button", "datalist", "fieldset", "legend", "option", "output"})
+_ALLOWED_ARTICLE_ATTRIBUTES = frozenset(
+    {
+        "abbr",
+        "about",
+        "accent",
+        "accentunder",
+        "actiontype",
+        "align",
+        "alt",
+        "aria-label",
+        "axis",
+        "border",
+        "cellpadding",
+        "cellspacing",
+        "char",
+        "charoff",
+        "cite",
+        "class",
+        "clip-path",
+        "clip-rule",
+        "color",
+        "colspan",
+        "columnalign",
+        "columnlines",
+        "columnspacing",
+        "columnspan",
+        "content",
+        "crossorigin",
+        "cx",
+        "cy",
+        "d",
+        "data",
+        "datatype",
+        "datetime",
+        "decoding",
+        "depth",
+        "dir",
+        "display",
+        "displaystyle",
+        "download",
+        "encoding",
+        "equalcolumns",
+        "equalrows",
+        "fence",
+        "fill",
+        "fill-opacity",
+        "fill-rule",
+        "filter",
+        "focusable",
+        "frame",
+        "framespacing",
+        "gradienttransform",
+        "gradientunits",
+        "headers",
+        "height",
+        "hidden",
+        "high",
+        "href",
+        "hreflang",
+        "id",
+        "ismap",
+        "itemid",
+        "itemprop",
+        "itemref",
+        "itemscope",
+        "itemtype",
+        "label",
+        "lang",
+        "linethickness",
+        "loading",
+        "longdesc",
+        "low",
+        "lspace",
+        "marker-end",
+        "marker-height",
+        "marker-mid",
+        "marker-start",
+        "marker-width",
+        "markerheight",
+        "markerunits",
+        "markerwidth",
+        "mask",
+        "mathbackground",
+        "mathcolor",
+        "mathsize",
+        "mathvariant",
+        "max",
+        "maxsize",
+        "media",
+        "min",
+        "minsize",
+        "movablelimits",
+        "name",
+        "notation",
+        "offset",
+        "open",
+        "opacity",
+        "optimum",
+        "orient",
+        "part",
+        "pathlength",
+        "patterncontentunits",
+        "patterntransform",
+        "patternunits",
+        "points",
+        "poster",
+        "prefix",
+        "preload",
+        "preserveaspectratio",
+        "property",
+        "r",
+        "referrerpolicy",
+        "refx",
+        "refy",
+        "rel",
+        "resource",
+        "rev",
+        "reversed",
+        "role",
+        "rowalign",
+        "rowlines",
+        "rowspacing",
+        "rowspan",
+        "rspace",
+        "rx",
+        "ry",
+        "scope",
+        "scriptlevel",
+        "separator",
+        "shape",
+        "size",
+        "sizes",
+        "slot",
+        "span",
+        "src",
+        "srcset",
+        "start",
+        "step",
+        "stop-color",
+        "stop-opacity",
+        "stretchy",
+        "stroke",
+        "stroke-dasharray",
+        "stroke-dashoffset",
+        "stroke-linecap",
+        "stroke-linejoin",
+        "stroke-opacity",
+        "stroke-width",
+        "style",
+        "subscriptshift",
+        "superscriptshift",
+        "symmetric",
+        "tabindex",
+        "title",
+        "transform",
+        "type",
+        "typeof",
+        "usemap",
+        "value",
+        "viewbox",
+        "voffset",
+        "vocab",
+        "width",
+        "wrap",
+        "x",
+        "x1",
+        "x2",
+        "xlink:href",
+        "xml:lang",
+        "xml:space",
+        "xmlns",
+        "xmlns:xlink",
+        "y",
+        "y1",
+        "y2",
+    }
+)
+_URL_ARTICLE_ATTRIBUTES = frozenset(
+    {"cite", "data", "href", "longdesc", "poster", "src", "usemap", "xlink:href"}
+)
+_CSS_RESOURCE_ATTRIBUTES = frozenset(
+    {"clip-path", "fill", "filter", "marker-end", "marker-mid", "marker-start", "mask", "stroke"}
+)
+_IMAGE_RESOURCE_TAGS = frozenset({"image", "img", "source"})
+_SAFE_DATA_IMAGE_MIME_TYPES = frozenset(
+    {"image/avif", "image/bmp", "image/gif", "image/jpeg", "image/png", "image/tiff", "image/webp"}
+)
+
+
+def _safe_article_style(value: str) -> bool:
+    decoded = unescape(value)
+    without_comments = re.sub(r"/\*[^*]*\*+(?:[^/*][^*]*\*+)*/", "", decoded)
+    compact = re.sub(r"[\x00-\x20]+", "", without_comments).casefold()
+    if "\\" in without_comments:
+        return False
+    if any(
+        marker in compact
+        for marker in (
+            "@import",
+            "behavior:",
+            "cross-fade(",
+            "expression(",
+            "image-set(",
+            "-moz-binding",
+            "progid:",
+        )
+    ):
+        return False
+
+    def local_resource(match: re.Match[str]) -> str:
+        target = match.group("target").strip().strip("'\"")
+        return "" if re.fullmatch(r"#[A-Za-z_][\w:.-]*", target) else "unsafe"
+
+    remaining = re.sub(
+        r"url\(\s*(?P<target>[^)]*?)\s*\)",
+        local_resource,
+        compact,
+        flags=re.IGNORECASE,
+    )
+    return "unsafe" not in remaining and "url(" not in remaining
+
+
+def _safe_data_image_url(value: str) -> bool:
+    header = value.split(",", 1)[0]
+    mime = header.removeprefix("data:").split(";", 1)[0].strip().casefold()
+    if mime in _SAFE_DATA_IMAGE_MIME_TYPES:
+        return True
+    return _normalize_inline_data_image_src(value) is not None
+
+
+def _safe_article_url(tag: str, name: str, value: str) -> bool:
+    normalized = re.sub(r"[\x00-\x20]+", "", unescape(value)).strip()
+    lowered = normalized.casefold()
+    if not normalized:
+        return True
+    if name == "usemap":
+        return lowered.startswith("#")
+    if lowered.startswith("data:"):
+        return (
+            tag in _IMAGE_RESOURCE_TAGS
+            and name in {"href", "src", "xlink:href"}
+            and _safe_data_image_url(normalized)
+        )
+    try:
+        scheme = urllib.parse.urlsplit(normalized).scheme.casefold()
+    except ValueError:
+        return False
+    if not scheme:
+        if tag == "use" and name in {"href", "xlink:href"}:
+            return lowered.startswith("#")
+        return True
+    if scheme in {"http", "https"}:
+        return not (tag == "use" and name in {"href", "xlink:href"})
+    return scheme == "mailto" and tag == "a" and name in {"href", "xlink:href"}
+
+
+def _safe_article_srcset(value: str) -> bool:
+    compact = re.sub(r"[\x00-\x20]+", "", unescape(value))
+    lowered = compact.casefold()
+    schemes = re.findall(r"(?<![\w+.-])([a-z][a-z0-9+.-]*):", lowered)
+    if any(scheme not in {"data", "http", "https"} for scheme in schemes):
+        return False
+    return all(
+        _safe_data_image_url(compact[index:])
+        for index in (match.start() for match in re.finditer(r"data:", lowered))
+    )
+
+
+def _allowed_article_attribute(tag: str, name: str, value: str | None) -> str | None:
+    lowered_name = name.casefold()
+    if lowered_name.startswith("on") or lowered_name in {
+        "action",
+        "form",
+        "formaction",
+        "http-equiv",
+        "nonce",
+        "ping",
+        "srcdoc",
+        "target",
+    }:
+        return None
+    if not (
+        lowered_name in _ALLOWED_ARTICLE_ATTRIBUTES
+        or lowered_name.startswith("aria-")
+        or lowered_name.startswith("data-")
+    ):
+        return None
+    if value is None:
+        return ""
+    if lowered_name == "style" and not _safe_article_style(value):
+        return None
+    if lowered_name in _CSS_RESOURCE_ATTRIBUTES and not _safe_article_style(value):
+        return None
+    if lowered_name in _URL_ARTICLE_ATTRIBUTES and not _safe_article_url(tag, lowered_name, value):
+        return None
+    if lowered_name == "srcset" and not _safe_article_srcset(value):
+        return None
+    return value
+
+
+class _WebArticleSanitizer(HTMLParser):
+    def __init__(self) -> None:
+        super().__init__(convert_charrefs=False)
+        self.parts: list[str] = []
+        self.suppressed_tags: list[str] = []
+
+    def handle_starttag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        self._handle_start(tag, attrs, self_closing=False)
+
+    def handle_startendtag(self, tag: str, attrs: list[tuple[str, str | None]]) -> None:
+        self._handle_start(tag, attrs, self_closing=True)
+
+    def _handle_start(
+        self,
+        tag: str,
+        attrs: list[tuple[str, str | None]],
+        *,
+        self_closing: bool,
+    ) -> None:
+        lowered_tag = tag.casefold()
+        if self.suppressed_tags:
+            if lowered_tag in _DROP_ARTICLE_CONTENT_TAGS and not self_closing:
+                self.suppressed_tags.append(lowered_tag)
+            return
+        if lowered_tag in _DROP_ARTICLE_CONTENT_TAGS:
+            if not self_closing:
+                self.suppressed_tags.append(lowered_tag)
+            return
+        if lowered_tag in _DROP_ARTICLE_TAGS or lowered_tag in _UNWRAP_ARTICLE_TAGS:
+            return
+        if lowered_tag not in _ALLOWED_ARTICLE_TAGS:
+            return
+
+        safe_attrs: list[str] = []
+        seen_attrs: set[str] = set()
+        for name, value in attrs:
+            lowered_name = name.casefold()
+            if lowered_name in seen_attrs:
+                continue
+            seen_attrs.add(lowered_name)
+            safe_value = _allowed_article_attribute(lowered_tag, lowered_name, value)
+            if safe_value is None:
+                continue
+            if value is None:
+                safe_attrs.append(lowered_name)
+            else:
+                safe_attrs.append(f'{lowered_name}="{html_escape(safe_value, quote=True)}"')
+        suffix = f" {' '.join(safe_attrs)}" if safe_attrs else ""
+        closing = " /" if self_closing else ""
+        self.parts.append(f"<{lowered_tag}{suffix}{closing}>")
+
+    def handle_endtag(self, tag: str) -> None:
+        lowered_tag = tag.casefold()
+        if self.suppressed_tags:
+            if lowered_tag == self.suppressed_tags[-1]:
+                self.suppressed_tags.pop()
+            return
+        if lowered_tag in _DROP_ARTICLE_CONTENT_TAGS:
+            return
+        if lowered_tag in _DROP_ARTICLE_TAGS or lowered_tag in _UNWRAP_ARTICLE_TAGS:
+            return
+        if lowered_tag in _ALLOWED_ARTICLE_TAGS:
+            self.parts.append(f"</{lowered_tag}>")
+
+    def handle_data(self, data: str) -> None:
+        if not self.suppressed_tags:
+            self.parts.append(html_escape(data, quote=False))
+
+    def handle_entityref(self, name: str) -> None:
+        if not self.suppressed_tags:
+            self.parts.append(f"&{name};")
+
+    def handle_charref(self, name: str) -> None:
+        if not self.suppressed_tags:
+            self.parts.append(f"&#{name};")
+
+
 def sanitize_web_article_attributes(html: str) -> str:
-    """Remove executable attributes while preserving inert article markup."""
+    """Serialize inert scientific article markup through a strict HTML policy."""
 
-    def replace_url_attr(match: re.Match[str]) -> str:
-        value = match.group("quoted") if match.group("quote") else match.group("bare")
-        normalized = re.sub(r"[\x00-\x20]+", "", unescape(value or "")).casefold()
-        if normalized.startswith(("javascript:", "vbscript:", "file:")):
-            return ""
-        if match.group("name").casefold() == "href" and normalized.startswith("data:"):
-            return ""
-        return match.group(0)
-
-    def replace_style_attr(match: re.Match[str]) -> str:
-        raw_value = match.group("quoted") if match.group("quote") else match.group("bare")
-        value = unescape(raw_value or "").casefold()
-        compact = re.sub(r"[\x00-\x20]+", "", value)
-        if any(
-            marker in compact
-            for marker in ("url(", "expression(", "@import", "behavior:", "-moz-binding")
-        ):
-            return ""
-        return match.group(0)
-
-    def sanitize_open_tag(match: re.Match[str]) -> str:
-        open_tag = match.group(0)
-        if open_tag.startswith("</"):
-            return open_tag
-        open_tag = _EVENT_HANDLER_ATTR_RE.sub("", open_tag)
-        open_tag = _SRCDOC_ATTR_RE.sub("", open_tag)
-        open_tag = _ACTIVE_URL_ATTR_RE.sub(replace_url_attr, open_tag)
-        return _STYLE_ATTR_RE.sub(replace_style_attr, open_tag)
-
-    return _HTML_TAG_RE.sub(sanitize_open_tag, html)
+    parser = _WebArticleSanitizer()
+    parser.feed(html)
+    parser.close()
+    return "".join(parser.parts)
 
 
 def _remove_balanced_elements_by_tag(html: str, *, tags: frozenset[str]) -> str:

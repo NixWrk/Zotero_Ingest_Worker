@@ -30,6 +30,7 @@ from zoteropdf2md.web_html_polish import (
     polish_web_html_file,
     polish_web_html_document,
     require_web_article_html,
+    sanitize_web_article_attributes,
 )
 
 
@@ -926,7 +927,8 @@ def test_pmc_polish_ignores_invalid_float_href() -> None:
 
     result = polish_web_html_document(html, source_url="https://pmc.ncbi.nlm.nih.gov/articles/PMC8911527/")
 
-    assert 'href="https://[broken/figure/fig1/"' in result.html
+    assert 'href="https://[broken/figure/fig1/"' not in result.html
+    assert "broken figure href" in result.html
 
 
 def test_polish_web_html_document_extracts_taylor_francis_nlm_fulltext() -> None:
@@ -1853,6 +1855,49 @@ def test_polish_web_html_replaces_navigation_and_active_media_with_provenance() 
     assert "Unsafe link" in result.html
     assert 'Code sample: onclick="example" href="javascript:example"' in result.html
     assert result.html.count('rel="noopener noreferrer"') == 3
+
+
+def test_source_article_sanitizer_blocks_active_markup_without_losing_science() -> None:
+    png = base64.b64encode(PNG_BYTES).decode("ascii")
+    html = f"""
+    <section onclick="alert(1) > still quoted" data-evidence="trial">
+      <a href="jav&#x61;script:alert(2)" ping="https://tracker.example/ping"
+         target="_blank">unsafe link text</a>
+      <span style="background:u\\72l(https://tracker.example/pixel)">tracked</span>
+      <form action="data:text/html,unsafe"><button>submit</button></form>
+      <svg viewBox="0 0 10 10"><defs><linearGradient id="g"></linearGradient></defs>
+        <path d="M0 0L10 10" fill="url(#g)"></path>
+        <animate attributeName="href" values="javascript:alert(3)"></animate>
+      </svg>
+      <math display="block"><mfrac><mi>x</mi><mn>2</mn></mfrac></math>
+      <table><tbody><tr><td colspan="2">result</td></tr></tbody></table>
+      <span style="font-size:90%;">small evidence</span>
+      <img alt="unsafe data" src="data:text/html,&lt;svg onload=alert(4)&gt;">
+      <img alt="unsafe svg" src="data:image/svg+xml,&lt;svg onload=alert(5)&gt;">
+      <source srcset="filesystem:https://tracker.example/image 1x">
+      <img alt="safe raster" src="data:image/png;base64,{png}">
+    </section>
+    """
+
+    sanitized = sanitize_web_article_attributes(html)
+
+    assert "onclick" not in sanitized
+    assert "javascript:" not in sanitized
+    assert "tracker.example" not in sanitized
+    assert "<form" not in sanitized
+    assert "submit" not in sanitized
+    assert "<animate" not in sanitized
+    assert "data:text/html" not in sanitized
+    assert "data:image/svg+xml" not in sanitized
+    assert "filesystem:" not in sanitized
+    assert "unsafe link text" in sanitized
+    assert 'data-evidence="trial"' in sanitized
+    assert '<svg viewbox="0 0 10 10">' in sanitized
+    assert 'fill="url(#g)"' in sanitized
+    assert '<math display="block"><mfrac><mi>x</mi><mn>2</mn></mfrac></math>' in sanitized
+    assert '<td colspan="2">result</td>' in sanitized
+    assert 'style="font-size:90%;"' in sanitized
+    assert f'src="data:image/png;base64,{png}"' in sanitized
 
 
 def test_srcset_rewriters_preserve_iiif_commas_inside_urls(tmp_path: Path) -> None:
