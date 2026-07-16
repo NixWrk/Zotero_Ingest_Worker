@@ -796,6 +796,13 @@ def test_metadata_queue_summary_and_listing_are_scoped_by_library(tmp_path):
         library_ids={"LIB1"},
         limit=1,
     )
+    second_scoped_job = store.list_metadata_jobs(
+        job_type="full_text",
+        statuses={"queued"},
+        library_ids={"LIB1"},
+        limit=1,
+        offset=1,
+    )
     global_summary = store.metadata_queue_summary(job_type="full_text")
 
     assert scoped_summary["queued"] == 2
@@ -803,6 +810,8 @@ def test_metadata_queue_summary_and_listing_are_scoped_by_library(tmp_path):
     assert scoped_summary["failed_transient"] == 0
     assert len(scoped_jobs) == 1
     assert scoped_jobs[0]["library_id"] == "LIB1"
+    assert second_scoped_job[0]["library_id"] == "LIB1"
+    assert second_scoped_job[0]["job_id"] != scoped_jobs[0]["job_id"]
     assert global_summary["queued"] == 2
     assert global_summary["failed_final"] == 1
     assert global_summary["failed_transient"] == 1

@@ -43,6 +43,7 @@ def run_post_action(
             job_type=_optional_str(payload.get("job_type") or payload.get("type")),
             statuses=_status_filter(payload),
             limit=max(0, _int_value(payload.get("limit"), 100)),
+            offset=max(0, _int_value(payload.get("offset"), 0)),
             library_ids=_library_id_filter(payload),
         )
     if path == "/api/zotero/metadata/enrich/backlog-scan":

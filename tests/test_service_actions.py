@@ -44,6 +44,7 @@ def test_run_post_action_routes_metadata_queue(monkeypatch: Any) -> None:
             "type": "full_text",
             "status": "queued,failed",
             "limit": "5",
+            "offset": "7",
             "library_ids": ["LIB2", "", "LIB1", "LIB1"],
         },
         _FakeFullRunManager(),
@@ -55,6 +56,7 @@ def test_run_post_action_routes_metadata_queue(monkeypatch: Any) -> None:
             "job_type": "full_text",
             "statuses": {"queued", "failed"},
             "limit": 5,
+            "offset": 7,
             "library_ids": {"LIB1", "LIB2"},
         },
     }
@@ -84,6 +86,7 @@ def test_run_post_action_metadata_queue_preserves_zero_limit(monkeypatch: Any) -
         "job_type": "full_text",
         "statuses": None,
         "limit": 0,
+        "offset": 0,
         "library_ids": None,
     }
 

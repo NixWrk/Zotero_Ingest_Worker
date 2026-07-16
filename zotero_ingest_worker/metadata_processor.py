@@ -155,6 +155,7 @@ class ZoteroMetadataProcessor:
         job_type: str | None = None,
         statuses: set[str] | None = None,
         limit: int = 100,
+        offset: int = 0,
         library_ids: set[str] | None = None,
     ) -> dict[str, Any]:
         return {
@@ -167,6 +168,7 @@ class ZoteroMetadataProcessor:
                 job_type=job_type,
                 statuses=statuses,
                 limit=limit,
+                offset=offset,
                 library_ids=library_ids,
             ),
         }

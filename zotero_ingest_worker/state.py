@@ -1290,6 +1290,7 @@ class PipelineStateStore:
         job_type: str | None = None,
         statuses: set[str] | None = None,
         limit: int | None = 100,
+        offset: int = 0,
         library_ids: set[str] | None = None,
     ) -> list[dict[str, Any]]:
         params: list[Any] = []
@@ -1308,9 +1309,14 @@ class PipelineStateStore:
             clauses.append(f"library_id in ({','.join('?' for _ in scoped_library_ids)})")
             params.extend(scoped_library_ids)
         where = f"where {' and '.join(clauses)}" if clauses else ""
-        limit_clause = "" if limit is None else "limit ?"
+        safe_offset = max(0, int(offset or 0))
+        limit_clause = ""
         if limit is not None:
-            params.append(limit)
+            limit_clause = "limit ? offset ?"
+            params.extend((limit, safe_offset))
+        elif safe_offset:
+            limit_clause = "limit -1 offset ?"
+            params.append(safe_offset)
         with self._connect() as connection:
             rows = connection.execute(
                 f"""
