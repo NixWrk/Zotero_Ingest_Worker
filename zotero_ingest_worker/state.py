@@ -2420,7 +2420,7 @@ class PipelineStateStore:
     def request_full_run_stop(self, run_id: str) -> dict[str, Any]:
         now = _utc_now().isoformat()
         with self._connect() as connection:
-            connection.execute(
+            cursor = connection.execute(
                 """
                 update full_runs
                 set stop_requested = 1,
@@ -2428,16 +2428,20 @@ class PipelineStateStore:
                     updated_at = ?,
                     heartbeat_at = ?
                 where run_id = ?
+                  and status in ('running', 'stopping')
+                  and finished_at is null
+                  and (status = 'running' or stop_requested = 0)
                 """,
                 (now, now, run_id),
             )
-            self._add_full_run_event(
-                connection,
-                run_id=run_id,
-                event="stop_requested",
-                message="Stop requested. Current leased job is allowed to finish.",
-                metadata=None,
-            )
+            if cursor.rowcount == 1:
+                self._add_full_run_event(
+                    connection,
+                    run_id=run_id,
+                    event="stop_requested",
+                    message="Stop requested. Current leased job is allowed to finish.",
+                    metadata=None,
+                )
         return self.get_full_run(run_id) or {}
 
     def full_run_stop_requested(self, run_id: str) -> bool:

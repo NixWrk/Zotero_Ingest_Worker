@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 from typing import Any
 
 from zotero_ingest_worker.full_run import FullRunManager, FullRunOptions, _result_failure_count
@@ -168,3 +169,71 @@ def test_ingest_run_state_records_status_and_events(tmp_path: Path) -> None:
     assert updated["phase"] == "draining_full_text"
     assert stopped["stop_requested"] == 1
     assert [event["event"] for event in events[:2]] == ["stop_requested", "drain_full_text"]
+
+
+def test_ingest_full_run_stop_is_idempotent_and_terminal_safe(tmp_path: Path) -> None:
+    store = OcrStateStore(tmp_path / "state.sqlite")
+
+    run = store.create_full_run(options={"mode": "ingest"})
+    first = store.request_full_run_stop(str(run["run_id"]))
+    repeated = store.request_full_run_stop(str(run["run_id"]))
+
+    assert first["status"] == "stopping"
+    assert repeated["status"] == "stopping"
+    events = store.list_full_run_events(str(run["run_id"]), limit=20)
+    assert [event["event"] for event in events].count("stop_requested") == 1
+
+    completed = store.update_full_run(
+        run_id=str(run["run_id"]),
+        status="stopped",
+        phase="stopped",
+        finished=True,
+    )
+    terminal_attempt = store.request_full_run_stop(str(run["run_id"]))
+    terminal_events = store.list_full_run_events(str(run["run_id"]), limit=20)
+
+    assert completed["status"] == "stopped"
+    assert terminal_attempt["status"] == "stopped"
+    assert [event["event"] for event in terminal_events].count("stop_requested") == 1
+
+    untouched = store.create_full_run(options={"mode": "ingest"})
+    store.update_full_run(
+        run_id=str(untouched["run_id"]),
+        status="succeeded",
+        phase="complete",
+        finished=True,
+    )
+    untouched_stop = store.request_full_run_stop(str(untouched["run_id"]))
+    untouched_events = store.list_full_run_events(str(untouched["run_id"]), limit=20)
+
+    assert untouched_stop["status"] == "succeeded"
+    assert untouched_stop["stop_requested"] == 0
+    assert all(event["event"] != "stop_requested" for event in untouched_events)
+
+
+def test_ingest_manager_does_not_stop_active_run_for_historical_target(
+    tmp_path: Path,
+) -> None:
+    manager = FullRunManager(SimpleNamespace(state_db_path=tmp_path / "state.sqlite"))
+    historical = manager.state.full_runs.create(options={"mode": "ingest"})
+    manager.state.full_runs.update(
+        run_id=str(historical["run_id"]),
+        status="succeeded",
+        phase="complete",
+        finished=True,
+    )
+    active = manager.state.full_runs.create(options={"mode": "ingest"})
+    manager._active_run_id = str(active["run_id"])
+    manager._stop_event.clear()
+
+    ignored = manager.stop(str(historical["run_id"]))
+
+    assert ignored["stop_requested"] is False
+    assert manager._stop_event.is_set() is False
+    assert manager.state.full_runs.get(str(active["run_id"]))["status"] == "running"
+    assert manager.state.full_runs.get(str(historical["run_id"]))["status"] == "succeeded"
+
+    accepted = manager.stop(str(active["run_id"]))
+
+    assert accepted["stop_requested"] is True
+    assert manager._stop_event.is_set() is True

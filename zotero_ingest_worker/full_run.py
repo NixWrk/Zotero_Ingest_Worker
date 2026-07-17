@@ -73,9 +73,23 @@ class FullRunManager:
             target = str(latest["run_id"]) if latest else None
         if not target:
             return {"ok": True, "stopped": False, "message": "No ingest run was found."}
-        self._stop_event.set()
         run = self.state.full_runs.request_stop(target)
-        return {"ok": True, "stop_requested": True, "run": run}
+        stop_requested = bool(
+            run
+            and str(run.get("status") or "") in {"running", "stopping"}
+            and int(run.get("stop_requested") or 0) == 1
+            and not run.get("finished_at")
+        )
+        if stop_requested and target == self._active_run_id:
+            self._stop_event.set()
+        result: dict[str, Any] = {
+            "ok": True,
+            "stop_requested": stop_requested,
+            "run": run,
+        }
+        if not stop_requested:
+            result["message"] = "The selected ingest run is not active."
+        return result
 
     def status(self, run_id: str | None = None, *, event_limit: int = 50) -> dict[str, Any]:
         run = self.state.full_runs.get(run_id) if run_id else self.state.full_runs.latest()
