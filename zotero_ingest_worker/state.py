@@ -837,6 +837,9 @@ class PipelineStateStore:
                     attempts = attempts + 1,
                     lease_owner = ?,
                     leased_until = ?,
+                    last_error = null,
+                    relay_status = null,
+                    relay_result = null,
                     updated_at = ?
                 where job_id = ?
                   and status = 'queued'
@@ -1060,6 +1063,9 @@ class PipelineStateStore:
                         attempts = 0,
                         lease_owner = null,
                         leased_until = null,
+                        last_error = null,
+                        relay_status = null,
+                        relay_result = null,
                         updated_at = ?
                     where job_id = ?
                       and status in ('failed_retryable', 'failed_final', 'cancelled', 'needs_chunk_fallback')
@@ -1075,6 +1081,9 @@ class PipelineStateStore:
                         phase = 'queued',
                         lease_owner = null,
                         leased_until = null,
+                        last_error = null,
+                        relay_status = null,
+                        relay_result = null,
                         updated_at = ?
                     where job_id = ?
                       and status in ('failed_retryable', 'failed_final', 'cancelled', 'needs_chunk_fallback')
@@ -1568,6 +1577,9 @@ class PipelineStateStore:
                     attempts = attempts + 1,
                     lease_owner = ?,
                     leased_until = ?,
+                    last_error = null,
+                    relay_status = null,
+                    relay_result = null,
                     updated_at = ?
                 where job_id = ?
                   and status = 'queued'
@@ -1798,6 +1810,9 @@ class PipelineStateStore:
                         attempts = 0,
                         lease_owner = null,
                         leased_until = null,
+                        last_error = null,
+                        relay_status = null,
+                        relay_result = null,
                         updated_at = ?
                     where job_id = ?
                       and status in ('failed_retryable', 'failed_final', 'skipped', 'cancelled')
@@ -1813,6 +1828,9 @@ class PipelineStateStore:
                         phase = 'queued',
                         lease_owner = null,
                         leased_until = null,
+                        last_error = null,
+                        relay_status = null,
+                        relay_result = null,
                         updated_at = ?
                     where job_id = ?
                       and status in ('failed_retryable', 'failed_final', 'skipped', 'cancelled')
@@ -1960,6 +1978,9 @@ class PipelineStateStore:
                     attempts = attempts + 1,
                     lease_owner = ?,
                     leased_until = ?,
+                    last_error = null,
+                    relay_status = null,
+                    relay_result = null,
                     updated_at = ?
                 where job_id = ?
                   and status = 'queued'
@@ -2183,6 +2204,9 @@ class PipelineStateStore:
                         attempts = 0,
                         lease_owner = null,
                         leased_until = null,
+                        last_error = null,
+                        relay_status = null,
+                        relay_result = null,
                         updated_at = ?
                     where job_id = ?
                       and status in ('failed_retryable', 'failed_final', 'manual_review', 'problem_document', 'cancelled')
@@ -2198,6 +2222,9 @@ class PipelineStateStore:
                         phase = 'queued',
                         lease_owner = null,
                         leased_until = null,
+                        last_error = null,
+                        relay_status = null,
+                        relay_result = null,
                         updated_at = ?
                     where job_id = ?
                       and status in ('failed_retryable', 'failed_final', 'manual_review', 'problem_document', 'cancelled')

@@ -1046,3 +1046,85 @@ def test_event_history_pruning_is_bounded_per_entity(tmp_path):
     assert second["deleted"]["full_run_events"] == 5
     assert second["has_more"]["full_run_events"] is False
     assert second["counts_after"]["full_run_events"] == 2
+
+
+def test_retry_and_lease_clear_attempt_scoped_diagnostics(tmp_path):
+    store = PipelineStateStore(tmp_path / "state.sqlite")
+
+    html_source = tmp_path / "paper.html"
+    html_source.write_text("<html>test</html>", encoding="utf-8")
+    html = store.enqueue_html_job(
+        library_id="LIB",
+        attachment_key="HTML1",
+        data_dir=tmp_path,
+        source_path=html_source,
+        signature=FileSignature.from_path(html_source),
+        collection_key="direct_pdf",
+        status="queued",
+        reason="test",
+    )
+    metadata_source = tmp_path / "zotero.sqlite"
+    metadata_source.write_bytes(b"state")
+    metadata = store.enqueue_metadata_job(
+        job_type="full_text",
+        library_id="LIB",
+        attachment_key="META1",
+        data_dir=tmp_path,
+        source_path=metadata_source,
+        signature=FileSignature.from_path(metadata_source),
+        status="queued",
+        reason="test",
+    )
+    ocr_source = tmp_path / "paper.pdf"
+    ocr_source.write_bytes(b"%PDF test")
+    ocr = store.enqueue_job(
+        library_id="LIB",
+        attachment_key="OCR1",
+        data_dir=tmp_path,
+        source_path=ocr_source,
+        signature=FileSignature.from_path(ocr_source),
+        status="queued",
+        reason="test",
+    )
+
+    ids = {
+        "html_jobs": str(html["job_id"]),
+        "metadata_jobs": str(metadata["job_id"]),
+        "ocr_jobs": str(ocr["job_id"]),
+    }
+    with store._connect() as connection:
+        for table, job_id in ids.items():
+            connection.execute(
+                f"update {table} set status = 'failed_retryable', phase = 'failed', "
+                "last_error = ?, relay_status = ?, relay_result = ? where job_id = ?",
+                ("old error", "failed", '{"old":true}', job_id),
+            )
+
+    retried = (
+        store.retry_html_job(str(html["job_id"])),
+        store.retry_metadata_job(str(metadata["job_id"])),
+        store.retry_job(str(ocr["job_id"])),
+    )
+    for job in retried:
+        assert job["status"] == "queued"
+        assert job["last_error"] is None
+        assert job["relay_status"] is None
+        assert job["relay_result"] is None
+
+    with store._connect() as connection:
+        for table, job_id in ids.items():
+            connection.execute(
+                f"update {table} set last_error = ?, relay_status = ?, relay_result = ? "
+                "where job_id = ?",
+                ("recovery error", "failed", '{"old":true}', job_id),
+            )
+
+    leased = (
+        store.lease_next_html_job(owner="worker", lease_seconds=60),
+        store.lease_next_metadata_job(
+            job_type="full_text", owner="worker", lease_seconds=60
+        ),
+        store.lease_next_job(owner="worker", lease_seconds=60),
+    )
+    for job in leased:
+        assert job is not None
