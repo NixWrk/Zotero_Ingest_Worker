@@ -1454,7 +1454,7 @@ class PipelineStateStore:
         with self._connect() as connection:
             rows = connection.execute(
                 f"""
-                select job_id, lease_owner
+                select job_id, lease_owner, updated_at
                 from metadata_jobs
                 where status = 'running'
                   and lease_owner is not null
@@ -1463,12 +1463,16 @@ class PipelineStateStore:
                 params,
             ).fetchall()
             jobs = [
-                (str(row["job_id"]), str(row["lease_owner"] or ""))
+                (
+                    str(row["job_id"]),
+                    str(row["lease_owner"] or ""),
+                    str(row["updated_at"]),
+                )
                 for row in rows
                 if not owner_alive(str(row["lease_owner"] or ""))
             ]
             recovered = 0
-            for job_id, previous_owner in jobs:
+            for job_id, previous_owner, observed_updated_at in jobs:
                 cursor = connection.execute(
                     """
                     update metadata_jobs
@@ -1481,8 +1485,9 @@ class PipelineStateStore:
                     where job_id = ?
                       and status = 'running'
                       and lease_owner = ?
+                      and updated_at = ?
                     """,
-                    (now, job_id, previous_owner),
+                    (now, job_id, previous_owner, observed_updated_at),
                 )
                 if cursor.rowcount != 1:
                     continue

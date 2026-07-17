@@ -650,6 +650,51 @@ def test_recover_orphaned_metadata_jobs_returns_running_jobs_to_queue(tmp_path):
     assert job["last_error"] == "Recovered orphaned metadata job lease."
 
 
+def test_metadata_orphan_recovery_preserves_lease_heartbeated_during_probe(tmp_path):
+    source = tmp_path / "zotero.sqlite"
+    source.write_bytes(b"state")
+    store = PipelineStateStore(tmp_path / "state.sqlite")
+    created = store.enqueue_metadata_job(
+        job_type="full_text",
+        library_id="LIB1",
+        attachment_key="PARENT1",
+        data_dir=tmp_path,
+        source_path=source,
+        signature=FileSignature.from_path(source),
+        status="queued",
+        reason="test",
+        parent_item_key="PARENT1",
+        parent_version=1,
+        queue_key="full-text-v1",
+    )
+    job_id = str(created["job_id"])
+    assert store.lease_next_metadata_job(
+        job_type="full_text",
+        owner="worker",
+        lease_seconds=60,
+    ) is not None
+
+    def heartbeat_during_probe(owner: str) -> bool:
+        assert owner == "worker"
+        assert store.heartbeat_metadata_job(
+            job_id=job_id,
+            owner=owner,
+            lease_seconds=3600,
+        )
+        return False
+
+    recovered = store.recover_orphaned_metadata_jobs(
+        job_type="full_text",
+        owner_alive=heartbeat_during_probe,
+    )
+    job = store.get_metadata_job(job_id)
+
+    assert recovered == 0
+    assert job is not None
+    assert job["status"] == "running"
+    assert job["lease_owner"] == "worker"
+
+
 def test_recover_orphaned_metadata_jobs_recovers_dead_pid_by_default(tmp_path):
     source = tmp_path / "zotero.sqlite"
     source.write_bytes(b"state")
