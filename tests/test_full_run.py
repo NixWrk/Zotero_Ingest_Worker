@@ -237,3 +237,36 @@ def test_ingest_manager_does_not_stop_active_run_for_historical_target(
 
     assert accepted["stop_requested"] is True
     assert manager._stop_event.is_set() is True
+
+
+def test_late_ingest_run_update_cannot_rewrite_terminal_state(tmp_path: Path) -> None:
+    store = OcrStateStore(tmp_path / "state.sqlite")
+
+    run = store.create_full_run(options={"mode": "ingest"})
+    terminal = store.update_full_run(
+        run_id=str(run["run_id"]),
+        status="succeeded",
+        phase="complete",
+        finished=True,
+        event="succeeded",
+        message="complete",
+    )
+    events_before = store.list_full_run_events(str(run["run_id"]), limit=20)
+
+    late = store.update_full_run(
+        run_id=str(run["run_id"]),
+        status="failed",
+        phase="late_background_failure",
+        last_error="late",
+        finished=True,
+        event="late_background_failure",
+        message="late",
+    )
+    events_after = store.list_full_run_events(str(run["run_id"]), limit=20)
+
+    assert terminal["status"] == "succeeded"
+    assert late["status"] == "succeeded"
+    assert late["phase"] == "complete"
+    assert late["last_error"] is None
+    assert late["updated_at"] == terminal["updated_at"]
+    assert events_after == events_before

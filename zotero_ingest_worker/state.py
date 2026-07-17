@@ -2381,7 +2381,7 @@ class PipelineStateStore:
     ) -> dict[str, Any]:
         now = _utc_now().isoformat()
         with self._connect() as connection:
-            connection.execute(
+            cursor = connection.execute(
                 """
                 update full_runs
                 set status = coalesce(?, status),
@@ -2393,6 +2393,8 @@ class PipelineStateStore:
                     heartbeat_at = ?,
                     updated_at = ?
                 where run_id = ?
+                  and status in ('running', 'stopping')
+                  and finished_at is null
                 """,
                 (
                     status,
@@ -2407,7 +2409,7 @@ class PipelineStateStore:
                     run_id,
                 ),
             )
-            if event:
+            if cursor.rowcount == 1 and event:
                 self._add_full_run_event(
                     connection,
                     run_id=run_id,
