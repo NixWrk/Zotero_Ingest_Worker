@@ -2602,14 +2602,17 @@ class PipelineStateStore:
         event: str,
         message: str,
     ) -> None:
-        connection.execute(
+        cursor = connection.execute(
             """
             insert into ocr_job_events (job_id, event, message, created_at)
-            values (?, ?, ?, ?)
+            select ?, ?, ?, ?
+            from ocr_jobs
+            where job_id = ?
             """,
-            (job_id, event, message, _utc_now().isoformat()),
+            (job_id, event, message, _utc_now().isoformat(), job_id),
         )
-        _maybe_maintain_state_history(connection)
+        if cursor.rowcount == 1:
+            _maybe_maintain_state_history(connection)
 
     @staticmethod
     def _add_html_job_event(
@@ -2619,14 +2622,17 @@ class PipelineStateStore:
         event: str,
         message: str,
     ) -> None:
-        connection.execute(
+        cursor = connection.execute(
             """
             insert into html_job_events (job_id, event, message, created_at)
-            values (?, ?, ?, ?)
+            select ?, ?, ?, ?
+            from html_jobs
+            where job_id = ?
             """,
-            (job_id, event, message, _utc_now().isoformat()),
+            (job_id, event, message, _utc_now().isoformat(), job_id),
         )
-        _maybe_maintain_state_history(connection)
+        if cursor.rowcount == 1:
+            _maybe_maintain_state_history(connection)
 
     @staticmethod
     def _add_metadata_job_event(
@@ -2636,14 +2642,17 @@ class PipelineStateStore:
         event: str,
         message: str,
     ) -> None:
-        connection.execute(
+        cursor = connection.execute(
             """
             insert into metadata_job_events (job_id, event, message, created_at)
-            values (?, ?, ?, ?)
+            select ?, ?, ?, ?
+            from metadata_jobs
+            where job_id = ?
             """,
-            (job_id, event, message, _utc_now().isoformat()),
+            (job_id, event, message, _utc_now().isoformat(), job_id),
         )
-        _maybe_maintain_state_history(connection)
+        if cursor.rowcount == 1:
+            _maybe_maintain_state_history(connection)
 
     @staticmethod
     def _add_full_run_event(
@@ -2654,14 +2663,17 @@ class PipelineStateStore:
         message: str,
         metadata: dict[str, Any] | None,
     ) -> None:
-        connection.execute(
+        cursor = connection.execute(
             """
             insert into full_run_events (run_id, event, message, metadata, created_at)
-            values (?, ?, ?, ?, ?)
+            select ?, ?, ?, ?, ?
+            from full_runs
+            where run_id = ?
             """,
-            (run_id, event, message, _json_or_none(metadata), _utc_now().isoformat()),
+            (run_id, event, message, _json_or_none(metadata), _utc_now().isoformat(), run_id),
         )
-        _maybe_maintain_state_history(connection)
+        if cursor.rowcount == 1:
+            _maybe_maintain_state_history(connection)
 
 
 OcrStateStore = PipelineStateStore

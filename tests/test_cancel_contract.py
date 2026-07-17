@@ -170,3 +170,54 @@ def test_ocr_cancel_event_requires_applied_transition(tmp_path: Path) -> None:
             retryable=False,
         ),
     )
+
+
+def test_missing_entities_do_not_create_orphan_events(tmp_path: Path) -> None:
+    store = PipelineStateStore(tmp_path / "state.sqlite")
+
+    assert store.mark_html_job_succeeded(
+        job_id="missing-html",
+        message="missing",
+        owner="worker",
+    ) == {}
+    assert store.mark_metadata_job_succeeded(
+        job_id="missing-metadata",
+        message="missing",
+        owner="worker",
+    ) == {}
+    assert store.mark_job_progress(
+        job_id="missing-ocr",
+        phase="stale",
+        message="missing",
+        owner="worker",
+    ) == {}
+    assert store.mark_job_succeeded(
+        job_id="missing-ocr",
+        message="missing",
+        owner="worker",
+    ) == {}
+    assert store.update_full_run(
+        run_id="missing-run",
+        phase="stale",
+        event="stale",
+    ) == {}
+    assert store.request_full_run_stop("missing-run") == {}
+
+    tables = (
+        "html_job_events",
+        "metadata_job_events",
+        "ocr_job_events",
+        "full_run_events",
+    )
+    with store._connect() as connection:
+        counts = {
+            table: int(connection.execute(f"select count(*) from {table}").fetchone()[0])
+            for table in tables
+        }
+
+    assert counts == {
+        "html_job_events": 0,
+        "metadata_job_events": 0,
+        "ocr_job_events": 0,
+        "full_run_events": 0,
+    }
