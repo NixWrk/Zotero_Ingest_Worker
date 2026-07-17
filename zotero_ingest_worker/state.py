@@ -3198,10 +3198,7 @@ def _terminal_owner_clause(owner: str | None) -> tuple[str, tuple[str, ...]]:
     normalized = str(owner or "").strip()
     if not normalized:
         return "", ()
-    return (
-        "and (lease_owner = ? or (status = 'queued' and lease_owner is null))",
-        (normalized,),
-    )
+    return "and status = 'running' and lease_owner = ?", (normalized,)
 
 
 def _stale_job_update_message(queue_name: str, owner: str | None) -> str:

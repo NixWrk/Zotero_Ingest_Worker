@@ -207,6 +207,14 @@ def test_stale_metadata_owner_cannot_complete_reclaimed_job(tmp_path):
             ("2000-01-01T00:00:00+00:00", job_id),
         )
     assert store.recover_expired_metadata_jobs(job_type="full_text") == 1
+    gap_completion = store.mark_metadata_job_succeeded(
+        job_id=job_id,
+        message="old worker finished before re-lease",
+        owner="old-owner",
+    )
+    assert gap_completion["status"] == "queued"
+    assert gap_completion["lease_owner"] is None
+
     second = store.lease_next_metadata_job(
         job_type="full_text", owner="new-owner", lease_seconds=60
     )
@@ -303,6 +311,14 @@ def test_stale_html_owner_cannot_complete_reclaimed_job(tmp_path):
             ("2000-01-01T00:00:00+00:00", job_id),
         )
     assert store.recover_expired_html_jobs() == 1
+    gap_completion = store.mark_html_job_succeeded(
+        job_id=job_id,
+        message="old worker finished before re-lease",
+        owner="old-owner",
+    )
+    assert gap_completion["status"] == "queued"
+    assert gap_completion["lease_owner"] is None
+
     second = store.lease_next_html_job(owner="new-owner", lease_seconds=60)
     assert second is not None
     before_heartbeat = str(second["leased_until"])
@@ -464,6 +480,14 @@ def test_stale_ocr_owner_cannot_update_reclaimed_job(tmp_path):
             ("2000-01-01T00:00:00+00:00", job_id),
         )
     assert store.recover_expired_jobs() == 1
+    gap_completion = store.mark_job_succeeded(
+        job_id=job_id,
+        message="old worker finished before re-lease",
+        owner="old-owner",
+    )
+    assert gap_completion["status"] == "queued"
+    assert gap_completion["lease_owner"] is None
+
     second = store.lease_next_job(owner="new-owner", lease_seconds=60)
     assert second is not None
     before_heartbeat = str(second["leased_until"])
