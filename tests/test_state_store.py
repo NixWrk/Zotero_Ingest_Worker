@@ -2,6 +2,8 @@ import json
 import os
 from concurrent.futures import ThreadPoolExecutor
 
+import pytest
+
 from zotero_ingest_worker.state import (
     FileSignature,
     PIPELINE_STATE_SCHEMA_VERSION,
@@ -472,6 +474,20 @@ def test_stale_ocr_owner_cannot_update_reclaimed_job(tmp_path):
         reason="test",
     )
     job_id = str(created["job_id"])
+
+    with pytest.raises(
+        ValueError,
+        match="OCR job progress requires a non-empty lease owner",
+    ):
+        store.mark_job_progress(
+            job_id=job_id,
+            phase="unfenced",
+            message="must fail closed",
+        )
+    queued = store.get_job(job_id)
+    assert queued is not None
+    assert queued["phase"] == "queued"
+
     first = store.lease_next_job(owner="old-owner", lease_seconds=60)
     assert first is not None
     with store._connect() as connection:

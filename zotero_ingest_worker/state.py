@@ -2253,15 +2253,16 @@ class PipelineStateStore:
         owner: str | None = None,
         lease_seconds: int | None = None,
     ) -> dict[str, Any]:
+        normalized_owner = str(owner or "").strip()
+        if not normalized_owner:
+            raise ValueError("OCR job progress requires a non-empty lease owner.")
         now = _utc_now()
         leased_until = (
             now + timedelta(seconds=max(1, int(lease_seconds)))
             if lease_seconds is not None
             else None
         )
-        normalized_owner = str(owner or "").strip()
-        owner_clause = "and status = 'running' and lease_owner = ?" if normalized_owner else ""
-        owner_params = (normalized_owner,) if normalized_owner else ()
+        owner_clause = "and status = 'running' and lease_owner = ?"
         with self._connect() as connection:
             cursor = connection.execute(
                 f"""
@@ -2277,7 +2278,7 @@ class PipelineStateStore:
                     leased_until.isoformat() if leased_until else None,
                     now.isoformat(),
                     job_id,
-                    *owner_params,
+                    normalized_owner,
                 ),
             )
             if cursor.rowcount != 1:
@@ -2285,7 +2286,7 @@ class PipelineStateStore:
                     connection,
                     job_id=job_id,
                     event="stale_progress_discarded",
-                    message=_stale_job_update_message("OCR", owner),
+                    message=_stale_job_update_message("OCR", normalized_owner),
                 )
             else:
                 self._add_job_event(
