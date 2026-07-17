@@ -1099,7 +1099,7 @@ class PipelineStateStore:
     def cancel_html_job(self, job_id: str) -> dict[str, Any]:
         now = _utc_now().isoformat()
         with self._connect() as connection:
-            connection.execute(
+            cursor = connection.execute(
                 """
                 update html_jobs
                 set status = 'cancelled',
@@ -1112,12 +1112,13 @@ class PipelineStateStore:
                 """,
                 (now, job_id),
             )
-            self._add_html_job_event(
-                connection,
-                job_id=job_id,
-                event="cancelled",
-                message="HTML job cancelled.",
-            )
+            if cursor.rowcount == 1:
+                self._add_html_job_event(
+                    connection,
+                    job_id=job_id,
+                    event="cancelled",
+                    message="HTML job cancelled.",
+                )
         return self.get_html_job(job_id) or {}
 
     def enqueue_metadata_job(
@@ -1831,7 +1832,7 @@ class PipelineStateStore:
     def cancel_metadata_job(self, job_id: str) -> dict[str, Any]:
         now = _utc_now().isoformat()
         with self._connect() as connection:
-            connection.execute(
+            cursor = connection.execute(
                 """
                 update metadata_jobs
                 set status = 'cancelled',
@@ -1844,12 +1845,13 @@ class PipelineStateStore:
                 """,
                 (now, job_id),
             )
-            self._add_metadata_job_event(
-                connection,
-                job_id=job_id,
-                event="cancelled",
-                message="Metadata job cancelled.",
-            )
+            if cursor.rowcount == 1:
+                self._add_metadata_job_event(
+                    connection,
+                    job_id=job_id,
+                    event="cancelled",
+                    message="Metadata job cancelled.",
+                )
         return self.get_metadata_job(job_id) or {}
 
     def recover_expired_jobs(self) -> int:
@@ -2215,7 +2217,7 @@ class PipelineStateStore:
     def cancel_job(self, job_id: str) -> dict[str, Any]:
         now = _utc_now().isoformat()
         with self._connect() as connection:
-            connection.execute(
+            cursor = connection.execute(
                 """
                 update ocr_jobs
                 set status = 'cancelled',
@@ -2228,7 +2230,13 @@ class PipelineStateStore:
                 """,
                 (now, job_id),
             )
-            self._add_job_event(connection, job_id=job_id, event="cancelled", message="Job cancelled.")
+            if cursor.rowcount == 1:
+                self._add_job_event(
+                    connection,
+                    job_id=job_id,
+                    event="cancelled",
+                    message="Job cancelled.",
+                )
         return self.get_job(job_id) or {}
 
     def mark_job_progress(
