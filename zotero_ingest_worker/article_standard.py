@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import html
 import json
 import os
@@ -8,6 +9,7 @@ import shutil
 import tempfile
 import urllib.parse
 import uuid
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -26,6 +28,30 @@ ARTICLE_PACKAGE_MAX_ASSET_BYTES = 8_000_000
 ARTICLE_PACKAGE_MAX_TOTAL_ASSET_BYTES = 64_000_000
 ARTICLE_PACKAGE_MAX_ASSETS = 80
 ARTICLE_PACKAGE_MAX_SCANNED_ASSETS = 512
+ARTICLE_PACKAGE_MAX_OUTPUT_BYTES = 128_000_000
+ARTICLE_PACKAGE_MAX_QUALITY_BYTES = 1_000_000
+ARTICLE_PACKAGE_MAX_PATH_PARTS = 64
+ARTICLE_PACKAGE_MAX_TREE_ENTRIES = (
+    ARTICLE_PACKAGE_MAX_ASSETS * ARTICLE_PACKAGE_MAX_PATH_PARTS
+    + ARTICLE_PACKAGE_MAX_SCANNED_ASSETS
+    + 64
+)
+
+
+@dataclass(frozen=True)
+class _FileFingerprint:
+    bytes: int
+    sha256: str
+    device: int
+    inode: int
+    mtime_ns: int
+    ctime_ns: int
+
+
+@dataclass(frozen=True)
+class _JsonObjectSnapshot:
+    value: dict[str, Any]
+    fingerprint: _FileFingerprint
 
 
 def standardize_native_html_download(
@@ -95,7 +121,13 @@ def write_article_package(
     source_context: str,
     article_verdict: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
-    source_url = str(source_download.get("final_url") or source_download.get("url") or "")
+    source_fingerprint = _stable_file_fingerprint(
+        source_html,
+        max_bytes=ARTICLE_PACKAGE_MAX_SOURCE_BYTES,
+    )
+    source_url = str(
+        source_download.get("final_url") or source_download.get("url") or ""
+    )
     try:
         polished = polish_web_html_file(source_html, source_url=source_url or None)
     except (OSError, WebHtmlPolishError) as exc:
@@ -105,6 +137,7 @@ def write_article_package(
             "source_path": str(source_html),
             "error": f"{exc.__class__.__name__}: {exc}"[:500],
         }
+    _require_source_html_unchanged(source_html, expected=source_fingerprint)
     if package_dir.is_symlink():
         return {
             "ok": False,
@@ -132,6 +165,13 @@ def write_article_package(
         )
         article_html.write_text(html_text, encoding="utf-8")
         shutil.copy2(source_html, source_copy)
+        _require_source_html_unchanged(source_html, expected=source_fingerprint)
+        source_copy_fingerprint = _stable_file_fingerprint(
+            source_copy,
+            max_bytes=ARTICLE_PACKAGE_MAX_SOURCE_BYTES,
+        )
+        if not _same_file_content(source_copy_fingerprint, source_fingerprint):
+            raise OSError("Article package source copy does not match source HTML")
         polish = _web_polish_manifest(polished)
 
         quality = evaluate_article_html(
@@ -139,25 +179,6 @@ def write_article_package(
             metadata=metadata,
             source_download=source_download,
             article_verdict=article_verdict or {},
-        )
-        manifest = build_article_manifest(
-            article_html=article_html,
-            metadata=metadata,
-            source_download=source_download,
-            source_context=source_context,
-            quality=quality,
-            assets=assets,
-            polish=polish,
-        )
-        manifest_path = staging_dir / "manifest.json"
-        quality_path = staging_dir / "quality.json"
-        manifest_path.write_text(
-            json.dumps(manifest, ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
-        quality_path.write_text(
-            json.dumps(quality, ensure_ascii=False, indent=2),
-            encoding="utf-8",
         )
         accepted = quality["status"] in {"passed", "warning"}
         if not accepted:
@@ -173,6 +194,35 @@ def write_article_package(
                 "previous_package_retained": package_dir.is_dir(),
             }
 
+        quality_path = staging_dir / "quality.json"
+        quality_path.write_text(
+            json.dumps(quality, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        integrity = _article_package_integrity_manifest(
+            staging_dir=staging_dir,
+            article_html=article_html,
+            source_copy=source_copy,
+            quality_path=quality_path,
+            assets=assets,
+        )
+        manifest = build_article_manifest(
+            article_html=article_html,
+            metadata=metadata,
+            source_download=source_download,
+            source_context=source_context,
+            source_fingerprint=source_fingerprint,
+            quality=quality,
+            assets=assets,
+            polish=polish,
+            integrity=integrity,
+        )
+        manifest_path = staging_dir / "manifest.json"
+        manifest_path.write_text(
+            json.dumps(manifest, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        _require_source_html_unchanged(source_html, expected=source_fingerprint)
         backup_cleanup_warning = _promote_article_package_tree(staging_dir, package_dir)
         result: dict[str, Any] = {
             "ok": True,
@@ -185,6 +235,8 @@ def write_article_package(
             "quality_status": quality["status"],
             "quality_failures": quality["failures"],
             "polish": polish,
+            "source_sha256": source_fingerprint.sha256,
+            "article_sha256": integrity["article_html"]["sha256"],
         }
         if backup_cleanup_warning is not None:
             result["backup_cleanup_warning"] = backup_cleanup_warning
@@ -192,6 +244,149 @@ def write_article_package(
     finally:
         if staging_dir.exists() or staging_dir.is_symlink():
             _remove_article_package_path(staging_dir)
+
+
+def _stat_identity(value: os.stat_result) -> tuple[int, int, int, int, int]:
+    return (
+        int(value.st_dev),
+        int(value.st_ino),
+        int(value.st_size),
+        int(value.st_mtime_ns),
+        int(value.st_ctime_ns),
+    )
+
+
+def _stat_version(value: os.stat_result) -> tuple[int, int, int]:
+    return (
+        int(value.st_size),
+        int(value.st_mtime_ns),
+        int(value.st_ctime_ns),
+    )
+
+
+def _stable_file_fingerprint(path: Path, *, max_bytes: int) -> _FileFingerprint:
+    if path.is_symlink() or not path.is_file():
+        raise OSError(f"Expected a regular file without symlinks: {path}")
+    limit = max(max_bytes, 0)
+    before = path.stat()
+    digest = hashlib.sha256()
+    total = 0
+    with path.open("rb") as stream:
+        opened_before = os.fstat(stream.fileno())
+        while True:
+            chunk = stream.read(min(1_048_576, limit - total + 1))
+            if not chunk:
+                break
+            total += len(chunk)
+            if total > limit:
+                raise OSError(f"File exceeds {limit} bytes: {path}")
+            digest.update(chunk)
+        opened_after = os.fstat(stream.fileno())
+    if path.is_symlink():
+        raise OSError(f"File became a symlink while fingerprinting: {path}")
+    after = path.stat()
+    identity = _stat_identity(before)
+    if (
+        identity != _stat_identity(after)
+        or _stat_version(opened_before) != _stat_version(opened_after)
+        or total != int(before.st_size)
+        or total != int(opened_after.st_size)
+        or total != int(after.st_size)
+    ):
+        raise OSError(f"File changed while fingerprinting: {path}")
+    return _FileFingerprint(
+        bytes=total,
+        sha256=digest.hexdigest(),
+        device=int(after.st_dev),
+        inode=int(after.st_ino),
+        mtime_ns=int(after.st_mtime_ns),
+        ctime_ns=int(after.st_ctime_ns),
+    )
+
+
+def _require_source_html_unchanged(
+    source_html: Path,
+    *,
+    expected: _FileFingerprint,
+) -> None:
+    try:
+        current = _stable_file_fingerprint(
+            source_html,
+            max_bytes=ARTICLE_PACKAGE_MAX_SOURCE_BYTES,
+        )
+    except OSError as exc:
+        raise OSError(
+            f"source HTML changed during article package build: {source_html}"
+        ) from exc
+    if current != expected:
+        raise OSError(
+            f"source HTML changed during article package build: {source_html}"
+        )
+
+
+def _same_file_content(left: _FileFingerprint, right: _FileFingerprint) -> bool:
+    return left.bytes == right.bytes and left.sha256 == right.sha256
+
+
+def _integrity_record(
+    path: Path,
+    *,
+    relative_path: str,
+    max_bytes: int,
+) -> dict[str, Any]:
+    fingerprint = _stable_file_fingerprint(path, max_bytes=max_bytes)
+    return {
+        "path": relative_path,
+        "bytes": fingerprint.bytes,
+        "sha256": fingerprint.sha256,
+    }
+
+
+def _article_package_integrity_manifest(
+    *,
+    staging_dir: Path,
+    article_html: Path,
+    source_copy: Path,
+    quality_path: Path,
+    assets: list[dict[str, Any]],
+) -> dict[str, Any]:
+    asset_integrity: list[dict[str, Any]] = []
+    for asset in assets:
+        if asset.get("status") != "copied":
+            continue
+        relative_path = str(asset.get("path") or "")
+        asset_path = _contained_package_file(staging_dir, relative_path)
+        if asset_path is None:
+            raise OSError(f"Invalid copied article asset path: {relative_path}")
+        record = _integrity_record(
+            asset_path,
+            relative_path=relative_path,
+            max_bytes=ARTICLE_PACKAGE_MAX_ASSET_BYTES,
+        )
+        if int(asset.get("bytes") or -1) != record["bytes"]:
+            raise OSError(f"Copied article asset byte count changed: {relative_path}")
+        if str(asset.get("sha256") or "") != record["sha256"]:
+            raise OSError(f"Copied article asset digest changed: {relative_path}")
+        asset_integrity.append(record)
+    asset_integrity.sort(key=lambda record: str(record["path"]).casefold())
+    return {
+        "article_html": _integrity_record(
+            article_html,
+            relative_path=ARTICLE_HTML_FILENAME,
+            max_bytes=ARTICLE_PACKAGE_MAX_OUTPUT_BYTES,
+        ),
+        "source_copy": _integrity_record(
+            source_copy,
+            relative_path=f"source/{source_copy.name}",
+            max_bytes=ARTICLE_PACKAGE_MAX_SOURCE_BYTES,
+        ),
+        "quality": _integrity_record(
+            quality_path,
+            relative_path="quality.json",
+            max_bytes=ARTICLE_PACKAGE_MAX_QUALITY_BYTES,
+        ),
+        "assets": asset_integrity,
+    }
 
 
 def _promote_article_package_tree(staging_dir: Path, package_dir: Path) -> str | None:
@@ -270,35 +465,346 @@ def _recover_interrupted_article_package(package_dir: Path) -> None:
 def _article_package_tree_complete(package_dir: Path) -> bool:
     if not package_dir.is_dir() or package_dir.is_symlink():
         return False
-    required_files = (
-        package_dir / ARTICLE_HTML_FILENAME,
-        package_dir / "manifest.json",
-        package_dir / "quality.json",
+    manifest_path = package_dir / "manifest.json"
+    quality_path = package_dir / "quality.json"
+    manifest_snapshot = _read_json_object_bounded(
+        manifest_path,
+        max_bytes=ARTICLE_PACKAGE_MAX_QUALITY_BYTES,
     )
-    if not all(path.is_file() and not path.is_symlink() for path in required_files):
+    quality_snapshot = _read_json_object_bounded(
+        quality_path,
+        max_bytes=ARTICLE_PACKAGE_MAX_QUALITY_BYTES,
+    )
+    if manifest_snapshot is None or quality_snapshot is None:
         return False
-    source_dir = package_dir / "source"
-    if not source_dir.is_dir() or source_dir.is_symlink():
+    manifest = manifest_snapshot.value
+    quality = quality_snapshot.value
+    if quality.get("status") not in {"passed", "warning"}:
+        return False
+    manifest_quality = manifest.get("quality")
+    if not isinstance(manifest_quality, dict) or manifest_quality.get(
+        "status"
+    ) != quality.get("status"):
+        return False
+    if not _article_package_integrity_valid(
+        package_dir=package_dir,
+        manifest=manifest,
+        quality=quality,
+        quality_fingerprint=quality_snapshot.fingerprint,
+    ):
         return False
     try:
-        if not any(
-            path.is_file() and not path.is_symlink() for path in source_dir.iterdir()
-        ):
-            return False
-        manifest = json.loads(
-            (package_dir / "manifest.json").read_text(encoding="utf-8")
+        current_manifest = _stable_file_fingerprint(
+            manifest_path,
+            max_bytes=ARTICLE_PACKAGE_MAX_QUALITY_BYTES,
         )
-        quality = json.loads((package_dir / "quality.json").read_text(encoding="utf-8"))
-    except (OSError, UnicodeError, json.JSONDecodeError):
+        current_quality = _stable_file_fingerprint(
+            quality_path,
+            max_bytes=ARTICLE_PACKAGE_MAX_QUALITY_BYTES,
+        )
+    except OSError:
         return False
     return (
-        isinstance(manifest, dict)
-        and isinstance(quality, dict)
-        and quality.get("status")
-        in {
-            "passed",
-            "warning",
-        }
+        current_manifest == manifest_snapshot.fingerprint
+        and current_quality == quality_snapshot.fingerprint
+    )
+
+
+def validated_article_package_html_path(article_html: Path) -> Path | None:
+    if article_html.name != ARTICLE_HTML_FILENAME or article_html.is_symlink():
+        return None
+    if not _article_package_tree_complete(article_html.parent):
+        return None
+    return article_html
+
+
+def _article_package_integrity_valid(
+    *,
+    package_dir: Path,
+    manifest: dict[str, Any],
+    quality: dict[str, Any],
+    quality_fingerprint: _FileFingerprint,
+) -> bool:
+    if manifest.get("schema_version") != 2:
+        return False
+    if manifest.get("standard") != ARTICLE_HTML_STANDARD_VERSION:
+        return False
+    if quality.get("standard") != ARTICLE_HTML_STANDARD_VERSION:
+        return False
+    normalizer = manifest.get("normalizer")
+    if (
+        not isinstance(normalizer, dict)
+        or normalizer.get("version") != NATIVE_HTML_NORMALIZER_VERSION
+    ):
+        return False
+    if manifest.get("files") != {
+        "article_html": ARTICLE_HTML_FILENAME,
+        "assets_dir": ASSETS_DIRNAME,
+        "manifest": "manifest.json",
+        "quality": "quality.json",
+        "source_dir": "source",
+        "logs_dir": "logs",
+    }:
+        return False
+    integrity = manifest.get("integrity")
+    if not isinstance(integrity, dict):
+        return False
+    fixed_records = (
+        ("article_html", ARTICLE_HTML_FILENAME, ARTICLE_PACKAGE_MAX_OUTPUT_BYTES),
+        ("quality", "quality.json", ARTICLE_PACKAGE_MAX_QUALITY_BYTES),
+    )
+    expected_paths = {"manifest.json"}
+    for key, expected_path, max_bytes in fixed_records:
+        record = integrity.get(key)
+        if not _integrity_record_matches(
+            package_dir=package_dir,
+            record=record,
+            expected_path=expected_path,
+            max_bytes=max_bytes,
+            actual_fingerprint=(quality_fingerprint if key == "quality" else None),
+        ):
+            return False
+        expected_paths.add(expected_path)
+
+    source_record = integrity.get("source_copy")
+    if not isinstance(source_record, dict):
+        return False
+    source_path = str(source_record.get("path") or "")
+    if not source_path.startswith("source/") or source_path.count("/") != 1:
+        return False
+    if not _integrity_record_matches(
+        package_dir=package_dir,
+        record=source_record,
+        expected_path=source_path,
+        max_bytes=ARTICLE_PACKAGE_MAX_SOURCE_BYTES,
+    ):
+        return False
+    source_metadata = manifest.get("source")
+    if not isinstance(source_metadata, dict):
+        return False
+    if source_metadata.get("bytes") != source_record.get("bytes"):
+        return False
+    if source_metadata.get("sha256") != source_record.get("sha256"):
+        return False
+    manifest_quality = manifest.get("quality")
+    if not isinstance(manifest_quality, dict):
+        return False
+    if manifest_quality.get("failures") != quality.get("failures"):
+        return False
+    if manifest_quality.get("warnings") != quality.get("warnings"):
+        return False
+    if manifest.get("canonical") != quality.get("canonical_contract"):
+        return False
+    expected_paths.add(source_path)
+
+    asset_records = integrity.get("assets")
+    if (
+        not isinstance(asset_records, list)
+        or len(asset_records) > ARTICLE_PACKAGE_MAX_ASSETS
+    ):
+        return False
+    copied_assets = manifest.get("assets")
+    if (
+        not isinstance(copied_assets, list)
+        or len(copied_assets) > ARTICLE_PACKAGE_MAX_SCANNED_ASSETS + 1
+    ):
+        return False
+    asset_items: list[dict[str, Any]] = []
+    for item in copied_assets:
+        if not isinstance(item, dict):
+            return False
+        status = item.get("status")
+        path = item.get("path")
+        byte_count = item.get("bytes")
+        if (
+            status not in {"copied", "skipped"}
+            or not isinstance(path, str)
+            or not path
+            or len(path) > 4096
+            or isinstance(byte_count, bool)
+            or not isinstance(byte_count, int)
+            or byte_count < 0
+        ):
+            return False
+        if status == "copied" and not re.fullmatch(
+            r"[0-9a-f]{64}",
+            str(item.get("sha256") or ""),
+        ):
+            return False
+        if status == "skipped" and not str(item.get("reason") or ""):
+            return False
+        asset_items.append(item)
+    copied_records = [item for item in asset_items if item.get("status") == "copied"]
+    copied_by_path = {str(item.get("path") or ""): item for item in copied_records}
+    if len(copied_by_path) != len(copied_records) or len(copied_by_path) != len(
+        asset_records
+    ):
+        return False
+    seen_assets: set[str] = set()
+    for record in asset_records:
+        if not isinstance(record, dict):
+            return False
+        relative_path = str(record.get("path") or "")
+        if (
+            not relative_path.startswith(f"{ASSETS_DIRNAME}/")
+            or relative_path in seen_assets
+            or relative_path not in copied_by_path
+        ):
+            return False
+        copied_record = copied_by_path[relative_path]
+        if copied_record.get("bytes") != record.get("bytes"):
+            return False
+        if copied_record.get("sha256") != record.get("sha256"):
+            return False
+        if not _integrity_record_matches(
+            package_dir=package_dir,
+            record=record,
+            expected_path=relative_path,
+            max_bytes=ARTICLE_PACKAGE_MAX_ASSET_BYTES,
+        ):
+            return False
+        seen_assets.add(relative_path)
+        expected_paths.add(relative_path)
+
+    actual_paths = _article_package_payload_paths(package_dir)
+    return actual_paths == expected_paths
+
+
+def _integrity_record_matches(
+    *,
+    package_dir: Path,
+    record: object,
+    expected_path: str,
+    max_bytes: int,
+    actual_fingerprint: _FileFingerprint | None = None,
+) -> bool:
+    if not isinstance(record, dict):
+        return False
+    if str(record.get("path") or "") != expected_path:
+        return False
+    byte_count = record.get("bytes")
+    digest = str(record.get("sha256") or "")
+    if (
+        isinstance(byte_count, bool)
+        or not isinstance(byte_count, int)
+        or byte_count < 0
+    ):
+        return False
+    if not re.fullmatch(r"[0-9a-f]{64}", digest):
+        return False
+    path = _contained_package_file(package_dir, expected_path)
+    if path is None:
+        return False
+    if actual_fingerprint is None:
+        try:
+            actual_fingerprint = _stable_file_fingerprint(path, max_bytes=max_bytes)
+        except OSError:
+            return False
+    return (
+        actual_fingerprint.bytes == byte_count and actual_fingerprint.sha256 == digest
+    )
+
+
+def _contained_package_file(package_dir: Path, relative_path: str) -> Path | None:
+    if not relative_path or len(relative_path) > 4096 or "\\" in relative_path:
+        return None
+    relative = Path(relative_path)
+    if relative.is_absolute() or relative.drive:
+        return None
+    parts = relative.parts
+    if (
+        not parts
+        or len(parts) > ARTICLE_PACKAGE_MAX_PATH_PARTS
+        or any(part in {"", ".", ".."} or ":" in part for part in parts)
+    ):
+        return None
+    candidate = package_dir.joinpath(*parts)
+    current = package_dir
+    for part in parts:
+        current = current / part
+        if current.is_symlink():
+            return None
+    try:
+        package_root = package_dir.resolve(strict=True)
+        resolved = candidate.resolve(strict=True)
+        resolved.relative_to(package_root)
+    except (OSError, ValueError):
+        return None
+    return candidate if candidate.is_file() else None
+
+
+def _article_package_payload_paths(package_dir: Path) -> set[str] | None:
+    paths: set[str] = set()
+    scanned = 0
+    try:
+        for path in package_dir.rglob("*"):
+            scanned += 1
+            if scanned > ARTICLE_PACKAGE_MAX_TREE_ENTRIES:
+                return None
+            relative = path.relative_to(package_dir).as_posix()
+            if (
+                len(path.relative_to(package_dir).parts)
+                > ARTICLE_PACKAGE_MAX_PATH_PARTS
+            ):
+                return None
+            if relative == "logs" or relative.startswith("logs/"):
+                if path.is_symlink():
+                    return None
+                continue
+            if path.is_symlink():
+                return None
+            if path.is_file():
+                paths.add(relative)
+            elif not path.is_dir():
+                return None
+    except OSError:
+        return None
+    return paths
+
+
+def _read_json_object_bounded(
+    path: Path,
+    *,
+    max_bytes: int,
+) -> _JsonObjectSnapshot | None:
+    if path.is_symlink() or not path.is_file():
+        return None
+    limit = max(max_bytes, 0)
+    try:
+        before = path.stat()
+        with path.open("rb") as stream:
+            opened_before = os.fstat(stream.fileno())
+            payload = stream.read(limit + 1)
+            opened_after = os.fstat(stream.fileno())
+        if len(payload) > limit:
+            return None
+        if path.is_symlink():
+            return None
+        after = path.stat()
+        size = len(payload)
+        if (
+            _stat_identity(before) != _stat_identity(after)
+            or _stat_version(opened_before) != _stat_version(opened_after)
+            or size != int(before.st_size)
+            or size != int(opened_after.st_size)
+            or size != int(after.st_size)
+        ):
+            return None
+        parsed = json.loads(payload.decode("utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return None
+    if not isinstance(parsed, dict):
+        return None
+    return _JsonObjectSnapshot(
+        value=parsed,
+        fingerprint=_FileFingerprint(
+            bytes=size,
+            sha256=hashlib.sha256(payload).hexdigest(),
+            device=int(after.st_dev),
+            inode=int(after.st_ino),
+            mtime_ns=int(after.st_mtime_ns),
+            ctime_ns=int(after.st_ctime_ns),
+        ),
     )
 
 
@@ -322,13 +828,15 @@ def build_article_manifest(
     metadata: Any,
     source_download: dict[str, Any],
     source_context: str,
+    source_fingerprint: _FileFingerprint,
     quality: dict[str, Any],
     assets: list[dict[str, Any]],
     polish: dict[str, Any],
+    integrity: dict[str, Any],
 ) -> dict[str, Any]:
     identifiers = _metadata_identifiers(metadata)
     return {
-        "schema_version": 1,
+        "schema_version": 2,
         "standard": ARTICLE_HTML_STANDARD_VERSION,
         "canonical": quality["canonical_contract"],
         "normalizer": {
@@ -351,6 +859,8 @@ def build_article_manifest(
             "final_url": str(source_download.get("final_url") or ""),
             "content_type": str(source_download.get("content_type") or ""),
             "original_output_path": str(source_download.get("output_path") or ""),
+            "bytes": source_fingerprint.bytes,
+            "sha256": source_fingerprint.sha256,
         },
         "files": {
             "article_html": article_html.name,
@@ -360,6 +870,7 @@ def build_article_manifest(
             "source_dir": "source",
             "logs_dir": "logs",
         },
+        "integrity": integrity,
         "assets": assets,
         "quality": {
             "status": quality["status"],
@@ -511,30 +1022,45 @@ def _article_html_with_standard_assets(
             continue
         size = _file_size_or_zero(resolved)
         if size > max(max_asset_bytes, 0):
-            assets.append(_skipped_asset(relative.as_posix(), "asset_too_large", size=size))
+            assets.append(
+                _skipped_asset(relative.as_posix(), "asset_too_large", size=size)
+            )
             continue
         if copied_count >= max(max_assets, 0):
-            assets.append(_skipped_asset(relative.as_posix(), "asset_count_limit", size=size))
+            assets.append(
+                _skipped_asset(relative.as_posix(), "asset_count_limit", size=size)
+            )
             continue
         if total_bytes + size > max(max_total_asset_bytes, 0):
-            assets.append(_skipped_asset(relative.as_posix(), "asset_total_bytes_limit", size=size))
+            assets.append(
+                _skipped_asset(
+                    relative.as_posix(), "asset_total_bytes_limit", size=size
+                )
+            )
             continue
         target = target_assets_dir / relative
         target.parent.mkdir(parents=True, exist_ok=True)
-        copied_bytes = _copy_file_bounded(
+        copied_fingerprint = _copy_file_bounded(
             resolved,
             target,
-            max_bytes=min(max(max_asset_bytes, 0), max(max_total_asset_bytes, 0) - total_bytes),
+            max_bytes=min(
+                max(max_asset_bytes, 0), max(max_total_asset_bytes, 0) - total_bytes
+            ),
         )
-        if copied_bytes is None:
-            assets.append(_skipped_asset(relative.as_posix(), "asset_changed_or_too_large", size=size))
+        if copied_fingerprint is None:
+            assets.append(
+                _skipped_asset(
+                    relative.as_posix(), "asset_changed_or_too_large", size=size
+                )
+            )
             continue
         copied_count += 1
-        total_bytes += copied_bytes
+        total_bytes += copied_fingerprint.bytes
         assets.append(
             {
                 "path": f"{ASSETS_DIRNAME}/{relative.as_posix()}",
-                "bytes": copied_bytes,
+                "bytes": copied_fingerprint.bytes,
+                "sha256": copied_fingerprint.sha256,
                 "status": "copied",
             }
         )
@@ -616,12 +1142,24 @@ def _reset_generated_assets_dir(target_assets_dir: Path) -> None:
         shutil.rmtree(target_assets_dir)
 
 
-def _copy_file_bounded(source: Path, target: Path, *, max_bytes: int) -> int | None:
+def _copy_file_bounded(
+    source: Path,
+    target: Path,
+    *,
+    max_bytes: int,
+) -> _FileFingerprint | None:
     limit = max(max_bytes, 0)
-    temp = target.with_name(f".{target.name}.article-asset-tmp")
+    temp = target.with_name(f".{target.name}.article-asset-tmp-{uuid.uuid4().hex}")
     copied = 0
     try:
-        with source.open("rb") as source_stream, temp.open("wb") as target_stream:
+        if source.is_symlink() or not source.is_file():
+            return None
+        before = source.stat()
+        if int(before.st_size) > limit:
+            return None
+        digest = hashlib.sha256()
+        with source.open("rb") as source_stream, temp.open("xb") as target_stream:
+            opened_before = os.fstat(source_stream.fileno())
             while True:
                 chunk = source_stream.read(min(1_048_576, limit - copied + 1))
                 if not chunk:
@@ -630,11 +1168,40 @@ def _copy_file_bounded(source: Path, target: Path, *, max_bytes: int) -> int | N
                 if copied > limit:
                     return None
                 target_stream.write(chunk)
-        shutil.copystat(source, temp)
+                digest.update(chunk)
+            target_stream.flush()
+            os.fsync(target_stream.fileno())
+            opened_after = os.fstat(source_stream.fileno())
+        if source.is_symlink():
+            return None
+        after = source.stat()
+        identity = _stat_identity(before)
+        if (
+            identity != _stat_identity(after)
+            or _stat_version(opened_before) != _stat_version(opened_after)
+            or copied != int(before.st_size)
+            or copied != int(opened_after.st_size)
+            or copied != int(after.st_size)
+        ):
+            return None
+        copied_fingerprint = _FileFingerprint(
+            bytes=copied,
+            sha256=digest.hexdigest(),
+            device=int(after.st_dev),
+            inode=int(after.st_ino),
+            mtime_ns=int(after.st_mtime_ns),
+            ctime_ns=int(after.st_ctime_ns),
+        )
+        current_source = _stable_file_fingerprint(source, max_bytes=limit)
+        if current_source != copied_fingerprint:
+            return None
+        temp_fingerprint = _stable_file_fingerprint(temp, max_bytes=limit)
+        if not _same_file_content(temp_fingerprint, copied_fingerprint):
+            return None
         os.replace(temp, target)
-        return copied
+        return copied_fingerprint
     finally:
-        if temp.exists():
+        if temp.exists() or temp.is_symlink():
             temp.unlink()
 
 

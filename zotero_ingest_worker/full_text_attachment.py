@@ -14,7 +14,10 @@ from .full_text_article import (
     html_download_article_verdict,
     is_arxiv_abs_landing_download,
 )
-from .article_standard import standardize_native_html_download
+from .article_standard import (
+    standardize_native_html_download,
+    validated_article_package_html_path,
+)
 from .local_attachment_sync import sync_parent_attachment_local
 from .local_zotero import LocalAttachment, LocalItemMetadata
 from .source_html_maintenance import TrashAttachment, cleanup_source_html_inventory
@@ -267,14 +270,28 @@ class FullTextAttachmentService:
         )
         html["standard_package"] = package
         article_html_path = Path(str(package.get("article_html_path") or ""))
-        if package.get("ok") and article_html_path.exists():
-            html["standard_article_html_path"] = str(article_html_path)
+        validated_path = (
+            validated_article_package_html_path(article_html_path)
+            if package.get("ok") is True
+            else None
+        )
+        if validated_path is not None:
+            html["standard_article_html_path"] = str(validated_path)
             return {
                 "ok": True,
-                "source_path": article_html_path,
+                "source_path": validated_path,
                 "raw_source_path": str(raw_source_path),
                 "article_standard": package,
                 "raw_html_fallback": False,
+            }
+        if package.get("ok") is True:
+            return {
+                "ok": False,
+                "kind": "html",
+                "status": "article_package_integrity_failed",
+                "sourcePath": str(article_html_path),
+                "source": html,
+                "article_standard": package,
             }
         if self.allow_raw_html_fallback:
             return {
@@ -516,15 +533,17 @@ def _html_attachment_standard_package(item: dict[str, Any]) -> dict[str, Any] | 
 
 
 def _html_attachment_existing_standard_path(item: dict[str, Any]) -> Path | None:
-    for candidate in (
-        str(item.get("standard_article_html_path") or "").strip(),
-        str((_html_attachment_standard_package(item) or {}).get("article_html_path") or "").strip(),
-    ):
+    package = _html_attachment_standard_package(item)
+    candidates = [str(item.get("standard_article_html_path") or "").strip()]
+    if package is not None and package.get("ok") is True:
+        candidates.append(str(package.get("article_html_path") or "").strip())
+    for candidate in candidates:
         if not candidate:
             continue
         path = Path(candidate)
-        if path.exists():
-            return path
+        validated = validated_article_package_html_path(path)
+        if validated is not None:
+            return validated
     return None
 
 

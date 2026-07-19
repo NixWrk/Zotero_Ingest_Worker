@@ -665,3 +665,94 @@ def test_full_text_attachment_service_skips_pdf_when_parent_has_pdf(tmp_path: Pa
         "source": {"ok": True, "status": "downloaded", "output_path": str(source)},
     }
     assert create_calls == []
+
+
+def test_existing_standard_path_requires_valid_package_integrity(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "article.html"
+    source.write_text(
+        """
+        <html><head><title>Article</title></head><body><article>
+          <h1>Article</h1><p>Accepted article body.</p>
+        </article></body></html>
+        """,
+        encoding="utf-8",
+    )
+    package = full_text_attachment.standardize_native_html_download(
+        {
+            "source": "publisher",
+            "output_path": str(source),
+            "article_verdict": {"ok": True, "text_chars": 12_000},
+        },
+        metadata=SimpleNamespace(title="Article"),
+        package_root=tmp_path / "packages",
+        source_context="test",
+    )
+    assert package["ok"] is True
+    article_html = Path(package["article_html_path"])
+    item = {
+        "output_path": str(source),
+        "standard_article_html_path": str(article_html),
+        "standard_package": package,
+    }
+
+    assert (
+        full_text_attachment._html_attachment_existing_standard_path(item)
+        == article_html
+    )
+
+    article_html.write_text("tampered", encoding="utf-8")
+
+    assert full_text_attachment._html_attachment_existing_standard_path(item) is None
+
+
+def test_prepare_html_attachment_source_rejects_tampered_fresh_package(
+    monkeypatch: object,
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "article.html"
+    source.write_text(
+        """
+        <html><head><title>Article</title></head><body><article>
+          <h1>Article</h1><p>Accepted article body.</p>
+        </article></body></html>
+        """,
+        encoding="utf-8",
+    )
+    original_standardize = full_text_attachment.standardize_native_html_download
+
+    def standardize_then_tamper(
+        *args: object,
+        **kwargs: object,
+    ) -> dict[str, Any]:
+        package = original_standardize(*args, **kwargs)
+        assert package["ok"] is True
+        Path(package["article_html_path"]).write_text("tampered", encoding="utf-8")
+        return package
+
+    monkeypatch.setattr(
+        full_text_attachment,
+        "standardize_native_html_download",
+        standardize_then_tamper,
+    )
+    service = FullTextAttachmentService(
+        relay_enabled=True,
+        create_parent_attachment=lambda **_kwargs: {"ok": True},
+        enqueue_pdf_for_ocr=lambda **_kwargs: {"ok": True},
+        enqueue_pdf_for_html=lambda **_kwargs: {"ok": True},
+        allow_raw_html_fallback=True,
+    )
+    html = {
+        "source": "publisher",
+        "output_path": str(source),
+        "article_verdict": {"ok": True, "text_chars": 12_000},
+    }
+
+    result = service._prepare_html_attachment_source(
+        html=html,
+        metadata=SimpleNamespace(title="Article"),
+    )
+
+    assert result["ok"] is False
+    assert result["status"] == "article_package_integrity_failed"
