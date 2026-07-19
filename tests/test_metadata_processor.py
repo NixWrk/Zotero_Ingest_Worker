@@ -471,10 +471,13 @@ def test_metadata_drain_heartbeats_while_handler_runs(monkeypatch: Any) -> None:
     processor = ZoteroMetadataProcessor.__new__(ZoteroMetadataProcessor)
     processor.config = SimpleNamespace(metadata_job_lease_seconds=60)
     heartbeats: list[dict[str, Any]] = []
+    enough_heartbeats = threading.Event()
 
     class FakeState:
         def heartbeat_metadata_job(self, **kwargs: Any) -> bool:
             heartbeats.append(kwargs)
+            if len(heartbeats) >= 3:
+                enough_heartbeats.set()
             return True
 
         def get_metadata_job(self, _job_id: str) -> dict[str, Any]:
@@ -489,7 +492,7 @@ def test_metadata_drain_heartbeats_while_handler_runs(monkeypatch: Any) -> None:
 
     def slow_handler(job: dict[str, Any]) -> dict[str, Any]:
         assert job["lease_owner"] == "owner-a"
-        time.sleep(0.04)
+        assert enough_heartbeats.wait(timeout=2.0)
         return {"job_id": job["job_id"], "status": "succeeded"}
 
     monkeypatch.setattr(processor, "_drain_full_text_job", slow_handler)
