@@ -5,7 +5,9 @@ import json
 import os
 import re
 import shutil
+import tempfile
 import urllib.parse
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -109,54 +111,209 @@ def write_article_package(
             "reason": "article_package_symlink",
             "source_path": str(source_html),
         }
-    if package_dir.exists():
-        shutil.rmtree(package_dir)
-    package_dir.mkdir(parents=True, exist_ok=True)
-    (package_dir / "source").mkdir(exist_ok=True)
-    (package_dir / "logs").mkdir(exist_ok=True)
+    package_dir.parent.mkdir(parents=True, exist_ok=True)
+    _recover_interrupted_article_package(package_dir)
+    staging_dir = Path(
+        tempfile.mkdtemp(
+            prefix=f".{package_dir.name}.staging-",
+            dir=package_dir.parent,
+        )
+    )
+    try:
+        (staging_dir / "source").mkdir()
+        (staging_dir / "logs").mkdir()
 
-    article_html = package_dir / ARTICLE_HTML_FILENAME
-    source_copy = package_dir / "source" / source_html.name
-    html_text, assets = _article_html_with_standard_assets(
-        source_html=source_html,
-        package_dir=package_dir,
-        html_text=polished.html,
-    )
-    article_html.write_text(html_text, encoding="utf-8")
-    shutil.copy2(source_html, source_copy)
-    polish = _web_polish_manifest(polished)
+        article_html = staging_dir / ARTICLE_HTML_FILENAME
+        source_copy = staging_dir / "source" / source_html.name
+        html_text, assets = _article_html_with_standard_assets(
+            source_html=source_html,
+            package_dir=staging_dir,
+            html_text=polished.html,
+        )
+        article_html.write_text(html_text, encoding="utf-8")
+        shutil.copy2(source_html, source_copy)
+        polish = _web_polish_manifest(polished)
 
-    quality = evaluate_article_html(
-        article_html=article_html,
-        metadata=metadata,
-        source_download=source_download,
-        article_verdict=article_verdict or {},
+        quality = evaluate_article_html(
+            article_html=article_html,
+            metadata=metadata,
+            source_download=source_download,
+            article_verdict=article_verdict or {},
+        )
+        manifest = build_article_manifest(
+            article_html=article_html,
+            metadata=metadata,
+            source_download=source_download,
+            source_context=source_context,
+            quality=quality,
+            assets=assets,
+            polish=polish,
+        )
+        manifest_path = staging_dir / "manifest.json"
+        quality_path = staging_dir / "quality.json"
+        manifest_path.write_text(
+            json.dumps(manifest, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        quality_path.write_text(
+            json.dumps(quality, ensure_ascii=False, indent=2),
+            encoding="utf-8",
+        )
+        accepted = quality["status"] in {"passed", "warning"}
+        if not accepted:
+            return {
+                "ok": False,
+                "reason": "article_quality_failed",
+                "standard": ARTICLE_HTML_STANDARD_VERSION,
+                "normalizer": NATIVE_HTML_NORMALIZER_VERSION,
+                "package_dir": str(package_dir),
+                "quality_status": quality["status"],
+                "quality_failures": quality["failures"],
+                "polish": polish,
+                "previous_package_retained": package_dir.is_dir(),
+            }
+
+        backup_cleanup_warning = _promote_article_package_tree(staging_dir, package_dir)
+        result: dict[str, Any] = {
+            "ok": True,
+            "standard": ARTICLE_HTML_STANDARD_VERSION,
+            "normalizer": NATIVE_HTML_NORMALIZER_VERSION,
+            "package_dir": str(package_dir),
+            "article_html_path": str(package_dir / ARTICLE_HTML_FILENAME),
+            "manifest_path": str(package_dir / "manifest.json"),
+            "quality_path": str(package_dir / "quality.json"),
+            "quality_status": quality["status"],
+            "quality_failures": quality["failures"],
+            "polish": polish,
+        }
+        if backup_cleanup_warning is not None:
+            result["backup_cleanup_warning"] = backup_cleanup_warning
+        return result
+    finally:
+        if staging_dir.exists() or staging_dir.is_symlink():
+            _remove_article_package_path(staging_dir)
+
+
+def _promote_article_package_tree(staging_dir: Path, package_dir: Path) -> str | None:
+    if not _article_package_tree_complete(staging_dir):
+        raise OSError(f"Article package staging tree is incomplete: {staging_dir}")
+    backup_dir: Path | None = None
+    published_by_this_call = False
+    try:
+        if package_dir.exists() or package_dir.is_symlink():
+            if package_dir.is_symlink():
+                raise OSError(f"Article package target is a symlink: {package_dir}")
+            backup_dir = package_dir.with_name(
+                f".{package_dir.name}.backup-{uuid.uuid4().hex}"
+            )
+            os.replace(package_dir, backup_dir)
+        os.replace(staging_dir, package_dir)
+        published_by_this_call = True
+        if not _article_package_tree_complete(package_dir):
+            raise OSError(
+                f"Published article package tree is incomplete: {package_dir}"
+            )
+    except BaseException:
+        if published_by_this_call and (
+            package_dir.exists() or package_dir.is_symlink()
+        ):
+            _remove_article_package_path(package_dir)
+        elif (
+            package_dir.exists() or package_dir.is_symlink()
+        ) and not _article_package_tree_complete(package_dir):
+            _remove_article_package_path(package_dir)
+        if backup_dir is not None and backup_dir.exists():
+            if not package_dir.exists() and not package_dir.is_symlink():
+                os.replace(backup_dir, package_dir)
+            else:
+                try:
+                    _remove_article_package_path(backup_dir)
+                except OSError:
+                    pass
+        raise
+    else:
+        if backup_dir is not None and backup_dir.exists():
+            try:
+                _remove_article_package_path(backup_dir)
+            except OSError as exc:
+                return f"{exc.__class__.__name__}: {exc}"[:500]
+        return None
+
+
+def _recover_interrupted_article_package(package_dir: Path) -> None:
+    backups = sorted(
+        package_dir.parent.glob(f".{package_dir.name}.backup-*"),
+        key=_path_mtime_ns,
+        reverse=True,
     )
-    manifest = build_article_manifest(
-        article_html=article_html,
-        metadata=metadata,
-        source_download=source_download,
-        source_context=source_context,
-        quality=quality,
-        assets=assets,
-        polish=polish,
+    if not backups:
+        return
+    if _article_package_tree_complete(package_dir):
+        for backup in backups:
+            try:
+                _remove_article_package_path(backup)
+            except OSError:
+                pass
+        return
+    for backup in backups:
+        if not _article_package_tree_complete(backup):
+            continue
+        if package_dir.exists() or package_dir.is_symlink():
+            _remove_article_package_path(package_dir)
+        os.replace(backup, package_dir)
+        for stale_backup in backups:
+            if stale_backup != backup and stale_backup.exists():
+                _remove_article_package_path(stale_backup)
+        return
+
+
+def _article_package_tree_complete(package_dir: Path) -> bool:
+    if not package_dir.is_dir() or package_dir.is_symlink():
+        return False
+    required_files = (
+        package_dir / ARTICLE_HTML_FILENAME,
+        package_dir / "manifest.json",
+        package_dir / "quality.json",
     )
-    manifest_path = package_dir / "manifest.json"
-    quality_path = package_dir / "quality.json"
-    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
-    quality_path.write_text(json.dumps(quality, ensure_ascii=False, indent=2), encoding="utf-8")
-    return {
-        "ok": quality["status"] in {"passed", "warning"},
-        "standard": ARTICLE_HTML_STANDARD_VERSION,
-        "normalizer": NATIVE_HTML_NORMALIZER_VERSION,
-        "package_dir": str(package_dir),
-        "article_html_path": str(article_html),
-        "manifest_path": str(manifest_path),
-        "quality_path": str(quality_path),
-        "quality_status": quality["status"],
-        "quality_failures": quality["failures"],
-        "polish": polish,
-    }
+    if not all(path.is_file() and not path.is_symlink() for path in required_files):
+        return False
+    source_dir = package_dir / "source"
+    if not source_dir.is_dir() or source_dir.is_symlink():
+        return False
+    try:
+        if not any(
+            path.is_file() and not path.is_symlink() for path in source_dir.iterdir()
+        ):
+            return False
+        manifest = json.loads(
+            (package_dir / "manifest.json").read_text(encoding="utf-8")
+        )
+        quality = json.loads((package_dir / "quality.json").read_text(encoding="utf-8"))
+    except (OSError, UnicodeError, json.JSONDecodeError):
+        return False
+    return (
+        isinstance(manifest, dict)
+        and isinstance(quality, dict)
+        and quality.get("status")
+        in {
+            "passed",
+            "warning",
+        }
+    )
+
+
+def _remove_article_package_path(path: Path) -> None:
+    if path.is_symlink() or path.is_file():
+        path.unlink()
+    elif path.exists():
+        shutil.rmtree(path)
+
+
+def _path_mtime_ns(path: Path) -> int:
+    try:
+        return int(path.stat().st_mtime_ns)
+    except OSError:
+        return 0
 
 
 def build_article_manifest(

@@ -358,3 +358,203 @@ def test_standardize_native_html_reports_package_write_failure(
     assert result["ok"] is False
     assert result["reason"] == "article_package_write_failed"
     assert "disk full" in result["error"]
+
+
+def test_standardize_native_html_preserves_committed_package_when_rebuild_fails(
+    monkeypatch: object,
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "article.html"
+    source.write_text(
+        """
+        <html><head><title>New Article</title></head><body><article>
+          <h1>New Article</h1><p>Replacement article body.</p>
+        </article></body></html>
+        """,
+        encoding="utf-8",
+    )
+    package_root = tmp_path / "packages"
+    package_dir = package_root / "publisher.article"
+    package_dir.mkdir(parents=True)
+    previous_article = package_dir / "article.html"
+    previous_manifest = package_dir / "manifest.json"
+    previous_article.write_text("previous accepted article", encoding="utf-8")
+    previous_manifest.write_text('{"accepted": true}', encoding="utf-8")
+    original_copy2 = article_standard_module.shutil.copy2
+
+    def fail_source_copy(
+        source_path: object, target_path: object, *args: object, **kwargs: object
+    ) -> object:
+        if Path(target_path).parent.name == "source":
+            raise OSError("simulated source-copy failure")
+        return original_copy2(source_path, target_path, *args, **kwargs)
+
+    monkeypatch.setattr(article_standard_module.shutil, "copy2", fail_source_copy)  # type: ignore[attr-defined]
+
+    result = standardize_native_html_download(
+        {
+            "source": "publisher",
+            "output_path": str(source),
+            "article_verdict": {"ok": True, "text_chars": 12_000},
+        },
+        metadata=SimpleNamespace(title="New Article"),
+        package_root=package_root,
+        source_context="test",
+    )
+
+    assert result["ok"] is False
+    assert result["reason"] == "article_package_write_failed"
+    assert "simulated source-copy failure" in result["error"]
+    assert previous_article.read_text(encoding="utf-8") == "previous accepted article"
+    assert previous_manifest.read_text(encoding="utf-8") == '{"accepted": true}'
+    assert not list(package_root.glob(".publisher.article.staging-*"))
+
+
+def test_standardize_native_html_preserves_committed_package_on_quality_failure(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "article.html"
+    source.write_text(
+        """
+        <html><head><title>New Article</title></head><body><article>
+          <h1>New Article</h1><p>Replacement article body.</p>
+          <img src="https://cdn.example.test/remote.png">
+        </article></body></html>
+        """,
+        encoding="utf-8",
+    )
+    package_root = tmp_path / "packages"
+    package_dir = package_root / "publisher.article"
+    package_dir.mkdir(parents=True)
+    previous_article = package_dir / "article.html"
+    previous_manifest = package_dir / "manifest.json"
+    previous_article.write_text("previous accepted article", encoding="utf-8")
+    previous_manifest.write_text('{"accepted": true}', encoding="utf-8")
+
+    result = standardize_native_html_download(
+        {
+            "source": "publisher",
+            "output_path": str(source),
+            "article_verdict": {"ok": True, "text_chars": 12_000},
+        },
+        metadata=SimpleNamespace(title="New Article"),
+        package_root=package_root,
+        source_context="test",
+    )
+
+    assert result["ok"] is False
+    assert "remote_assets_present" in result["quality_failures"]
+    assert result["previous_package_retained"] is True
+    assert "article_html_path" not in result
+    assert previous_article.read_text(encoding="utf-8") == "previous accepted article"
+    assert previous_manifest.read_text(encoding="utf-8") == '{"accepted": true}'
+    assert not list(package_root.glob(".publisher.article.staging-*"))
+
+
+def test_standardize_native_html_recovers_backup_before_failed_rebuild(
+    monkeypatch: object,
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "article.html"
+    source.write_text(
+        """
+        <html><head><title>Article</title></head><body><article>
+          <h1>Article</h1><p>Accepted article body.</p>
+        </article></body></html>
+        """,
+        encoding="utf-8",
+    )
+    package_root = tmp_path / "packages"
+    download = {
+        "source": "publisher",
+        "output_path": str(source),
+        "article_verdict": {"ok": True, "text_chars": 12_000},
+    }
+    accepted = standardize_native_html_download(
+        download,
+        metadata=SimpleNamespace(title="Article"),
+        package_root=package_root,
+        source_context="test",
+    )
+    assert accepted["ok"] is True
+    package_dir = Path(accepted["package_dir"])
+    accepted_article = (package_dir / "article.html").read_bytes()
+    backup_dir = package_root / ".publisher.article.backup-interrupted"
+    article_standard_module.os.replace(package_dir, backup_dir)
+
+    monkeypatch.setattr(
+        article_standard_module.shutil,
+        "copy2",
+        lambda *_args, **_kwargs: (_ for _ in ()).throw(
+            OSError("simulated reboot follow-up failure")
+        ),
+    )  # type: ignore[attr-defined]
+
+    result = standardize_native_html_download(
+        download,
+        metadata=SimpleNamespace(title="Article"),
+        package_root=package_root,
+        source_context="test",
+    )
+
+    assert result["ok"] is False
+    assert result["reason"] == "article_package_write_failed"
+    assert (package_dir / "article.html").read_bytes() == accepted_article
+    assert not backup_dir.exists()
+    assert not list(package_root.glob(".publisher.article.staging-*"))
+
+
+def test_article_package_promotion_does_not_clobber_concurrent_winner(
+    monkeypatch: object,
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "article.html"
+    source.write_text(
+        """
+        <html><head><title>Article</title></head><body><article>
+          <h1>Article</h1><p>Accepted article body.</p>
+        </article></body></html>
+        """,
+        encoding="utf-8",
+    )
+    package_root = tmp_path / "packages"
+    accepted = standardize_native_html_download(
+        {
+            "source": "publisher",
+            "output_path": str(source),
+            "article_verdict": {"ok": True, "text_chars": 12_000},
+        },
+        metadata=SimpleNamespace(title="Article"),
+        package_root=package_root,
+        source_context="test",
+    )
+    assert accepted["ok"] is True
+    package_dir = Path(accepted["package_dir"])
+    staging_dir = package_root / ".publisher.article.staging-race"
+    concurrent_dir = package_root / ".publisher.article.concurrent-winner"
+    article_standard_module.shutil.copytree(package_dir, staging_dir)
+    article_standard_module.shutil.copytree(package_dir, concurrent_dir)
+    (staging_dir / "article.html").write_text("our candidate", encoding="utf-8")
+    (concurrent_dir / "article.html").write_text("concurrent winner", encoding="utf-8")
+    original_replace = article_standard_module.os.replace
+
+    def race_replace(source_path: object, target_path: object) -> None:
+        if Path(source_path) == staging_dir and Path(target_path) == package_dir:
+            original_replace(concurrent_dir, package_dir)
+            raise FileExistsError("simulated concurrent publication")
+        original_replace(source_path, target_path)
+
+    monkeypatch.setattr(article_standard_module.os, "replace", race_replace)  # type: ignore[attr-defined]
+
+    try:
+        article_standard_module._promote_article_package_tree(staging_dir, package_dir)
+    except FileExistsError as exc:
+        assert "simulated concurrent publication" in str(exc)
+    else:
+        raise AssertionError("Concurrent publication race did not fail this writer")
+
+    assert (package_dir / "article.html").read_text(
+        encoding="utf-8"
+    ) == "concurrent winner"
+    assert staging_dir.exists()
+    assert not list(package_root.glob(".publisher.article.backup-*"))
