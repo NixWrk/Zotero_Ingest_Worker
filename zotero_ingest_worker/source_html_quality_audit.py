@@ -22,20 +22,41 @@ from zoteropdf2md.html_links import (
     urlsplit_or_none,
 )
 
-from .config import discover_zotero_data_dirs, from_env, is_zotero_data_dir, unique_paths
+from .bounded_io import read_text_bounded
+from .config import (
+    discover_zotero_data_dirs,
+    from_env,
+    is_zotero_data_dir,
+    unique_paths,
+)
 from .local_zotero_paths import library_id_for_data_dir
 
+MAX_AUDIT_HTML_BYTES = 128_000_000
 
 SOURCE_HTML_RE = re.compile(r"\[\s*source\s+html\s*\]|\bsource\s+html\b", re.IGNORECASE)
 ARXIV_HTML_RE = re.compile(r"\[\s*arxiv\s+html\s*\]|\barxiv\s+html\b", re.IGNORECASE)
-GENERATED_HTML_RE = re.compile(r"\[(?:[a-z]{2,12}|mixed|unknown) html\]\.html?$", re.IGNORECASE)
-LANGUAGE_HTML_RE = re.compile(r"\[([a-z0-9]{2,12}|mixed|unknown) html\](?:\.x?html?)?", re.IGNORECASE)
+GENERATED_HTML_RE = re.compile(
+    r"\[(?:[a-z]{2,12}|mixed|unknown) html\]\.html?$", re.IGNORECASE
+)
+LANGUAGE_HTML_RE = re.compile(
+    r"\[([a-z0-9]{2,12}|mixed|unknown) html\](?:\.x?html?)?", re.IGNORECASE
+)
 SPRINGER_TABLE_PLACEHOLDER_RE = re.compile(r"/tables/\d+\b", re.IGNORECASE)
-IGNORED_BLOCK_RE = re.compile(r"<(?:script|style)\b[^>]*>[\s\S]*?</(?:script|style)>", re.IGNORECASE)
-DEF_LIST_RE = re.compile(r"<dl\b(?=[^>]*\bclass\s*=\s*['\"][^'\"]*\bdef-list\b)", re.IGNORECASE)
-LTX_TABLE_RE = re.compile(r"<figure\b(?=[^>]*\bclass\s*=\s*['\"][^'\"]*\bltx_table\b)", re.IGNORECASE)
-DISP_FORMULA_TABLE_RE = re.compile(r"<table\b(?=[^>]*\bclass\s*=\s*['\"][^'\"]*\bdisp-formula\b)", re.IGNORECASE)
-DISPLAY_MATH_RE = re.compile(r"<math\b(?=[^>]*\bdisplay\s*=\s*['\"]block['\"])", re.IGNORECASE)
+IGNORED_BLOCK_RE = re.compile(
+    r"<(?:script|style)\b[^>]*>[\s\S]*?</(?:script|style)>", re.IGNORECASE
+)
+DEF_LIST_RE = re.compile(
+    r"<dl\b(?=[^>]*\bclass\s*=\s*['\"][^'\"]*\bdef-list\b)", re.IGNORECASE
+)
+LTX_TABLE_RE = re.compile(
+    r"<figure\b(?=[^>]*\bclass\s*=\s*['\"][^'\"]*\bltx_table\b)", re.IGNORECASE
+)
+DISP_FORMULA_TABLE_RE = re.compile(
+    r"<table\b(?=[^>]*\bclass\s*=\s*['\"][^'\"]*\bdisp-formula\b)", re.IGNORECASE
+)
+DISPLAY_MATH_RE = re.compile(
+    r"<math\b(?=[^>]*\bdisplay\s*=\s*['\"]block['\"])", re.IGNORECASE
+)
 LTX_ROWCOLOR_RE = re.compile(
     r"(?:\\rowcolor|<span\b(?=[^>]*\bltx_ERROR\b)[^>]*>\s*\\rowcolor\s*</span>)",
     re.IGNORECASE,
@@ -271,7 +292,11 @@ class ArticleHtmlAuditParser(HTMLParser):
                 self.hrefs.append(href)
                 self.metrics.links += 1
                 parsed = urlsplit_or_none(href)
-                if parsed is not None and parsed.scheme in {"http", "https"} and parsed.fragment:
+                if (
+                    parsed is not None
+                    and parsed.scheme in {"http", "https"}
+                    and parsed.fragment
+                ):
                     self.metrics.absolute_fragment_links += 1
                 if _looks_like_supplementary_resource_href(href):
                     self._mark_current_figure_has_media()
@@ -281,7 +306,18 @@ class ArticleHtmlAuditParser(HTMLParser):
             self._figure_stack.append(_figure_tag_has_intrinsic_content(attr_map))
         elif self._figure_stack and "ltx_error" in attr_map.get("class", "").casefold():
             self.metrics.latexml_figure_render_error += 1
-        elif tag_name in {"audio", "canvas", "embed", "iframe", "img", "math", "object", "picture", "svg", "video"}:
+        elif tag_name in {
+            "audio",
+            "canvas",
+            "embed",
+            "iframe",
+            "img",
+            "math",
+            "object",
+            "picture",
+            "svg",
+            "video",
+        }:
             self._mark_current_figure_has_media()
 
         if tag_name == "picture":
@@ -342,15 +378,29 @@ class ArticleHtmlAuditParser(HTMLParser):
                 self.metrics.local_fragment_unresolved += 1
                 if len(self.unresolved_local_fragments) < 20:
                     self.unresolved_local_fragments.append(href)
-        self.metrics.absolute_fragment_links_resolve_local = count_same_document_absolute_fragment_links(html)
-        self.metrics.springer_table_placeholder_markers = len(SPRINGER_TABLE_PLACEHOLDER_RE.findall(content_html))
-        self.metrics.latexml_rowcolor_artifacts = len(LTX_ROWCOLOR_RE.findall(content_html))
+        self.metrics.absolute_fragment_links_resolve_local = (
+            count_same_document_absolute_fragment_links(html)
+        )
+        self.metrics.springer_table_placeholder_markers = len(
+            SPRINGER_TABLE_PLACEHOLDER_RE.findall(content_html)
+        )
+        self.metrics.latexml_rowcolor_artifacts = len(
+            LTX_ROWCOLOR_RE.findall(content_html)
+        )
         self.metrics.def_lists = len(DEF_LIST_RE.findall(content_html))
         self.metrics.latexml_tables = len(LTX_TABLE_RE.findall(content_html))
-        self.metrics.latexml_itemize_marker_blocks = len(LTX_ITEMIZE_MARKER_BLOCK_RE.findall(content_html))
-        self.metrics.latexml_inline_black_text_styles = len(LTX_INLINE_BLACK_TEXT_RE.findall(content_html))
-        self.metrics.latexml_black_mathcolor_attrs = len(LTX_BLACK_MATHCOLOR_RE.findall(content_html))
-        self.metrics.disp_formula_tables = len(DISP_FORMULA_TABLE_RE.findall(content_html))
+        self.metrics.latexml_itemize_marker_blocks = len(
+            LTX_ITEMIZE_MARKER_BLOCK_RE.findall(content_html)
+        )
+        self.metrics.latexml_inline_black_text_styles = len(
+            LTX_INLINE_BLACK_TEXT_RE.findall(content_html)
+        )
+        self.metrics.latexml_black_mathcolor_attrs = len(
+            LTX_BLACK_MATHCOLOR_RE.findall(content_html)
+        )
+        self.metrics.disp_formula_tables = len(
+            DISP_FORMULA_TABLE_RE.findall(content_html)
+        )
         self.metrics.display_math_blocks = len(DISPLAY_MATH_RE.findall(content_html))
         if "ltx_caption" in content_html and "ltx_transformed_outer" in content_html:
             self.metrics.latexml_caption_transformed_blocks = 1
@@ -444,7 +494,9 @@ def run_audit(
     for data_dir in zotero_data_dirs:
         attachment_index = _load_html_attachment_index(data_dir, db_errors=db_errors)
         seen_attachment_paths: set[str] = set()
-        for html_path in _iter_storage_html_files(data_dir / "storage", walk_errors=walk_errors):
+        for html_path in _iter_storage_html_files(
+            data_dir / "storage", walk_errors=walk_errors
+        ):
             attachment = attachment_index.get(_safe_resolve_key(html_path))
             if attachment is not None:
                 seen_attachment_paths.add(_safe_resolve_key(attachment.file_path))
@@ -464,19 +516,24 @@ def run_audit(
                 zotero_path=attachment.zotero_path,
             ):
                 continue
-            records.append(_audit_missing_html_attachment(data_dir=data_dir, attachment=attachment))
+            records.append(
+                _audit_missing_html_attachment(data_dir=data_dir, attachment=attachment)
+            )
     _mark_stale_arxiv_html_records(records)
 
     source_records = [record for record in records if record["is_source_html"]]
     non_source_records = [record for record in records if not record["is_source_html"]]
     duplicate_source_parents = _duplicate_source_parents(source_records)
     critical_records = [
-        record for record in records if any(issue in CRITICAL_ISSUES for issue in record["issues"])
+        record
+        for record in records
+        if any(issue in CRITICAL_ISSUES for issue in record["issues"])
     ]
     warning_records = [
         record
         for record in records
-        if record["warnings"] or any(issue in WARNING_ISSUES for issue in record["issues"])
+        if record["warnings"]
+        or any(issue in WARNING_ISSUES for issue in record["issues"])
     ]
     issue_counts: Counter[str] = Counter()
     warning_counts: Counter[str] = Counter()
@@ -485,7 +542,9 @@ def run_audit(
     for record in records:
         issue_counts.update(record["issues"])
         warning_counts.update(record["warnings"])
-        warning_counts.update(issue for issue in record["issues"] if issue in WARNING_ISSUES)
+        warning_counts.update(
+            issue for issue in record["issues"] if issue in WARNING_ISSUES
+        )
     for record in source_records:
         source_kind_counts.update([record["source_kind"] or "unknown"])
         remote_image_hosts.update(dict(record.get("remote_image_hosts", [])))
@@ -589,7 +648,9 @@ def load_source_html_job_index(state_db: Path | None) -> SourceHtmlJobIndex:
 
 
 def main(argv: list[str] | None = None) -> int:
-    parser = argparse.ArgumentParser(description="Audit polished Zotero source HTML attachments.")
+    parser = argparse.ArgumentParser(
+        description="Audit polished Zotero source HTML attachments."
+    )
     parser.add_argument("--zotero-data-dir", action="append", type=Path, default=[])
     parser.add_argument("--zotero-root", action="append", type=Path, default=[])
     parser.add_argument("--state-db", type=Path)
@@ -651,7 +712,11 @@ def _audit_html_file(
     title = attachment.title if attachment is not None else html_path.stem
     parent_key = attachment.parent_key if attachment is not None else None
     try:
-        html = html_path.read_text(encoding="utf-8", errors="replace")
+        html = read_text_bounded(
+            html_path,
+            max_bytes=MAX_AUDIT_HTML_BYTES,
+            errors="replace",
+        )
     except OSError as exc:
         html = ""
         read_error = str(exc)
@@ -667,15 +732,20 @@ def _audit_html_file(
             pass
         parser.finalize(html)
 
-    is_source_html = _looks_like_source_html(html_path, title=title, zotero_path=attachment.zotero_path if attachment else "")
-    is_arxiv_html = _looks_like_arxiv_html(html_path, title=title, zotero_path=attachment.zotero_path if attachment else "")
+    is_source_html = _looks_like_source_html(
+        html_path, title=title, zotero_path=attachment.zotero_path if attachment else ""
+    )
+    is_arxiv_html = _looks_like_arxiv_html(
+        html_path, title=title, zotero_path=attachment.zotero_path if attachment else ""
+    )
     is_generated_html = _looks_like_generated_html(
         html_path,
         title=title,
         zotero_path=attachment.zotero_path if attachment else "",
     )
     job_ok = (
-        (library_id, key) in job_index.succeeded_source_keys or key in job_index.succeeded_source_attachment_keys
+        (library_id, key) in job_index.succeeded_source_keys
+        or key in job_index.succeeded_source_attachment_keys
         if job_index.enabled
         else None
     )
@@ -715,7 +785,10 @@ def _audit_html_file(
             issues.append("latexml_figure_render_error")
         if counts["latexml_rowcolor_artifacts"]:
             issues.append("latexml_rowcolor_artifact")
-        if counts["latexml_itemize_marker_blocks"] and not style_rules["latexml_itemize"]:
+        if (
+            counts["latexml_itemize_marker_blocks"]
+            and not style_rules["latexml_itemize"]
+        ):
             issues.append("latexml_itemize_marker_layout")
         if counts["latexml_inline_black_text_styles"]:
             issues.append("latexml_inline_black_text")
@@ -725,17 +798,25 @@ def _audit_html_file(
             issues.append("frontiers_reference_button")
         if counts["def_lists"] and not style_rules["def_list"]:
             issues.append("missing_def_list_style")
-        if counts["latexml_caption_transformed_blocks"] and not style_rules["latexml_caption"]:
+        if (
+            counts["latexml_caption_transformed_blocks"]
+            and not style_rules["latexml_caption"]
+        ):
             issues.append("missing_latexml_caption_style")
         if counts["latexml_tables"] and not style_rules["latexml_table"]:
             issues.append("missing_latexml_table_style")
-        if (counts["disp_formula_tables"] or counts["display_math_blocks"]) and not style_rules["formula"]:
+        if (
+            counts["disp_formula_tables"] or counts["display_math_blocks"]
+        ) and not style_rules["formula"]:
             issues.append("missing_formula_style")
         if counts["scripts"]:
             issues.append("script_tags_present")
         if counts["table_without_rows"]:
             issues.append("table_without_rows")
-        if parser.source_kind == "springer_nature_article" and counts["springer_table_placeholder_markers"]:
+        if (
+            parser.source_kind == "springer_nature_article"
+            and counts["springer_table_placeholder_markers"]
+        ):
             issues.append("springer_table_placeholder")
         if counts["figure_without_media_warning"]:
             warnings.append("figure_without_media_warning")
@@ -778,7 +859,9 @@ def _audit_html_file(
     }
 
 
-def _audit_missing_html_attachment(*, data_dir: Path, attachment: HtmlAttachmentRow) -> dict[str, Any]:
+def _audit_missing_html_attachment(
+    *, data_dir: Path, attachment: HtmlAttachmentRow
+) -> dict[str, Any]:
     is_source_html = _looks_like_source_html(
         attachment.file_path,
         title=attachment.title,
@@ -822,14 +905,18 @@ def _audit_missing_html_attachment(*, data_dir: Path, attachment: HtmlAttachment
     }
 
 
-def _load_html_attachment_index(data_dir: Path, *, db_errors: list[dict[str, str]]) -> dict[str, HtmlAttachmentRow]:
+def _load_html_attachment_index(
+    data_dir: Path, *, db_errors: list[dict[str, str]]
+) -> dict[str, HtmlAttachmentRow]:
     db_path = data_dir / "zotero.sqlite"
     storage_dir = data_dir / "storage"
     if not db_path.is_file():
         db_errors.append({"path": str(db_path), "error": "zotero.sqlite missing"})
         return {}
     try:
-        connection = sqlite3.connect(f"file:{db_path.as_posix()}?mode=ro&immutable=1", uri=True)
+        connection = sqlite3.connect(
+            f"file:{db_path.as_posix()}?mode=ro&immutable=1", uri=True
+        )
         connection.row_factory = sqlite3.Row
         rows = connection.execute(
             """
@@ -870,7 +957,9 @@ def _load_html_attachment_index(data_dir: Path, *, db_errors: list[dict[str, str
     for row in rows:
         key = str(row["key"])
         zotero_path = str(row["path"] or "")
-        file_path = _resolve_zotero_html_path(storage_dir=storage_dir, key=key, zotero_path=zotero_path)
+        file_path = _resolve_zotero_html_path(
+            storage_dir=storage_dir, key=key, zotero_path=zotero_path
+        )
         attachment = HtmlAttachmentRow(
             key=key,
             parent_key=str(row["parentKey"]) if row["parentKey"] else None,
@@ -882,14 +971,18 @@ def _load_html_attachment_index(data_dir: Path, *, db_errors: list[dict[str, str
     return by_path
 
 
-def _iter_storage_html_files(storage_dir: Path, *, walk_errors: list[dict[str, str]]) -> Iterable[Path]:
+def _iter_storage_html_files(
+    storage_dir: Path, *, walk_errors: list[dict[str, str]]
+) -> Iterable[Path]:
     if not storage_dir.is_dir():
         return
     stack = [storage_dir]
     while stack:
         current = stack.pop()
         try:
-            children = sorted(current.iterdir(), key=lambda path: path.name.lower(), reverse=True)
+            children = sorted(
+                current.iterdir(), key=lambda path: path.name.lower(), reverse=True
+            )
         except OSError as exc:
             walk_errors.append({"path": str(current), "error": str(exc)})
             continue
@@ -911,7 +1004,11 @@ def _resolve_zotero_html_path(*, storage_dir: Path, key: str, zotero_path: str) 
     folder = storage_dir / key
     try:
         candidates = sorted(
-            (child for child in folder.iterdir() if child.is_file() and child.suffix.lower() in LOCAL_HTML_SUFFIXES),
+            (
+                child
+                for child in folder.iterdir()
+                if child.is_file() and child.suffix.lower() in LOCAL_HTML_SUFFIXES
+            ),
             key=lambda child: child.stat().st_mtime,
             reverse=True,
         )
@@ -929,7 +1026,13 @@ def _resolve_zotero_data_dirs(
     max_depth: int,
 ) -> tuple[Path, ...]:
     if explicit:
-        return unique_paths(tuple(path.expanduser() for path in explicit if is_zotero_data_dir(path.expanduser())))
+        return unique_paths(
+            tuple(
+                path.expanduser()
+                for path in explicit
+                if is_zotero_data_dir(path.expanduser())
+            )
+        )
     discovery_roots = roots or config_roots
     discovered = discover_zotero_data_dirs(discovery_roots, max_depth=max_depth)
     if discovered:
@@ -937,7 +1040,9 @@ def _resolve_zotero_data_dirs(
     return tuple(path for path in config_data_dirs if is_zotero_data_dir(path))
 
 
-def _duplicate_source_parents(source_records: list[dict[str, Any]]) -> list[dict[str, Any]]:
+def _duplicate_source_parents(
+    source_records: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
     by_parent: dict[tuple[str, str], list[dict[str, Any]]] = defaultdict(list)
     for record in source_records:
         parent_key = str(record.get("parent_key") or "")
@@ -987,10 +1092,14 @@ def _mark_stale_arxiv_html_records(records: list[dict[str, Any]]) -> None:
 
 
 def _source_html_job_label(pipeline_key: str) -> str | None:
-    if pipeline_key == "source_html" or ("source_html=1" in pipeline_key and "en=1" in pipeline_key):
+    if pipeline_key == "source_html" or (
+        "source_html=1" in pipeline_key and "en=1" in pipeline_key
+    ):
         return "source_html"
     if pipeline_key == "source_html_translate" or (
-        "source_html=1" in pipeline_key and "ru=1" in pipeline_key and "en=1" not in pipeline_key
+        "source_html=1" in pipeline_key
+        and "ru=1" in pipeline_key
+        and "en=1" not in pipeline_key
     ):
         return "source_html_translate"
     return None
@@ -1031,9 +1140,13 @@ def _is_frontiers_figure_js_control(tag_name: str, attr_map: dict[str, str]) -> 
     aria_label = attr_map.get("aria-label", "")
     if "ArticleFigure__figureButton" in class_name:
         return True
-    if "ButtonIcon" in class_name and data_event.startswith(("articleFigure-", "articleTable-")):
+    if "ButtonIcon" in class_name and data_event.startswith(
+        ("articleFigure-", "articleTable-")
+    ):
         return True
-    return bool("ButtonIcon" in class_name and aria_label.startswith(("Expand ", "Download ")))
+    return bool(
+        "ButtonIcon" in class_name and aria_label.startswith(("Expand ", "Download "))
+    )
 
 
 def _is_pmc_dead_ui_control(tag_name: str, attr_map: dict[str, str]) -> bool:

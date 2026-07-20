@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import concurrent.futures
+import logging
 import threading
 import time
 from dataclasses import asdict
@@ -18,7 +19,14 @@ from .metadata_jobs import (
     METADATA_JOB_SCIHUB_PDF,
 )
 from .metadata_processor import ZoteroMetadataProcessor
-from .state import PipelineStateStore
+from .state import (
+    DEFAULT_FULL_RUN_STALE_AFTER_SECONDS,
+    MAX_FULL_RUN_EVENT_LIMIT,
+    PipelineStateStore,
+)
+
+_FULL_RUN_HEARTBEAT_INTERVAL_SECONDS = 30
+_LOGGER = logging.getLogger(__name__)
 
 
 class FullRunManager:
@@ -33,28 +41,43 @@ class FullRunManager:
     def start(self, payload: dict[str, Any]) -> dict[str, Any]:
         options = FullRunOptions.from_payload(payload)
         with self._lock:
-            if self._thread is not None and self._thread.is_alive() and self._active_run_id:
+            if (
+                self._thread is not None
+                and self._thread.is_alive()
+                and self._active_run_id
+            ):
+                run_id = self._active_run_id
+                run = self.state.full_runs.get(run_id)
+                if run is None:
+                    raise RuntimeError(
+                        f"active full-run thread has no state row: {run_id}"
+                    )
                 return {
                     "ok": True,
+                    "started": False,
                     "already_running": True,
-                    "run": self.status(self._active_run_id)["run"],
+                    "run_id": run_id,
+                    "run": run,
                 }
 
-            stale = self.state.full_runs.running()
-            if stale is not None:
-                self.state.full_runs.update(
-                    run_id=str(stale["run_id"]),
-                    status="interrupted",
-                    phase="interrupted",
-                    current_job_kind=None,
-                    current_job_id=None,
-                    finished=True,
-                    event="interrupted",
-                    message="Previous ingest run was marked interrupted before a new run started.",
-                )
+            claimed = self.state.full_runs.create(
+                options={**asdict(options), "mode": "ingest"},
+                stale_after_seconds=DEFAULT_FULL_RUN_STALE_AFTER_SECONDS,
+            )
+            created = claimed.get("created")
+            if type(created) is not bool:
+                raise RuntimeError("full-run claim returned an invalid created flag")
+            run_id = str(claimed["run_id"])
+            run = {key: value for key, value in claimed.items() if key != "created"}
+            if not created:
+                return {
+                    "ok": True,
+                    "started": False,
+                    "already_running": True,
+                    "run_id": run_id,
+                    "run": run,
+                }
 
-            run = self.state.full_runs.create(options={**asdict(options), "mode": "ingest"})
-            run_id = str(run["run_id"])
             self._stop_event = threading.Event()
             self._active_run_id = run_id
             self._thread = threading.Thread(
@@ -63,8 +86,28 @@ class FullRunManager:
                 name=f"zotero-ingest-run-{run_id}",
                 daemon=True,
             )
-            self._thread.start()
-        return {"ok": True, "started": True, "run_id": run_id, "run": self.status(run_id)}
+            try:
+                self._thread.start()
+            except BaseException as exc:
+                self._thread = None
+                self._active_run_id = None
+                self.state.full_runs.update(
+                    run_id=run_id,
+                    status="failed",
+                    phase="thread_start_failed",
+                    last_error=str(exc) or type(exc).__name__,
+                    finished=True,
+                    event="thread_start_failed",
+                    message="Full-run controller thread failed to start.",
+                )
+                raise
+        return {
+            "ok": True,
+            "started": True,
+            "already_running": False,
+            "run_id": run_id,
+            "run": run,
+        }
 
     def stop(self, run_id: str | None = None) -> dict[str, Any]:
         target = run_id or self._active_run_id
@@ -91,13 +134,28 @@ class FullRunManager:
             result["message"] = "The selected ingest run is not active."
         return result
 
-    def status(self, run_id: str | None = None, *, event_limit: int = 50) -> dict[str, Any]:
-        run = self.state.full_runs.get(run_id) if run_id else self.state.full_runs.latest()
+    def status(
+        self, run_id: str | None = None, *, event_limit: int = 50
+    ) -> dict[str, Any]:
+        safe_event_limit = _validated_full_run_event_limit(event_limit)
+        run = (
+            self.state.full_runs.get(run_id)
+            if run_id
+            else self.state.full_runs.latest()
+        )
         metadata_queue = self.state.metadata_jobs.summary(job_type=METADATA_JOB_ENRICH)
-        arxiv_html_queue = self.state.metadata_jobs.summary(job_type=METADATA_JOB_ARXIV_HTML)
-        full_text_queue = self.state.metadata_jobs.summary(job_type=METADATA_JOB_FULL_TEXT)
-        researchgate_pdf_queue = self.state.metadata_jobs.summary(job_type=METADATA_JOB_RESEARCHGATE_PDF)
-        scihub_pdf_queue = self.state.metadata_jobs.summary(job_type=METADATA_JOB_SCIHUB_PDF)
+        arxiv_html_queue = self.state.metadata_jobs.summary(
+            job_type=METADATA_JOB_ARXIV_HTML
+        )
+        full_text_queue = self.state.metadata_jobs.summary(
+            job_type=METADATA_JOB_FULL_TEXT
+        )
+        researchgate_pdf_queue = self.state.metadata_jobs.summary(
+            job_type=METADATA_JOB_RESEARCHGATE_PDF
+        )
+        scihub_pdf_queue = self.state.metadata_jobs.summary(
+            job_type=METADATA_JOB_SCIHUB_PDF
+        )
         result: dict[str, Any] = {
             "ok": True,
             "run": run,
@@ -136,7 +194,7 @@ class FullRunManager:
         if run:
             result["events"] = self.state.full_runs.events(
                 str(run["run_id"]),
-                limit=event_limit,
+                limit=safe_event_limit,
             )
         return result
 
@@ -146,23 +204,46 @@ class FullRunManager:
         run_processed = 0
         run_failed = 0
         scihub_pdf_backlog_scanned = False
+        run_stop_event = self._stop_event
+        heartbeat_stop = threading.Event()
+        heartbeat_thread = threading.Thread(
+            target=self._heartbeat_loop,
+            args=(run_id, heartbeat_stop, run_stop_event),
+            name=f"zotero-ingest-run-heartbeat-{run_id}",
+            daemon=True,
+        )
+        heartbeat_started = False
 
         try:
+            heartbeat_thread.start()
+            heartbeat_started = True
+            if options.dry_run:
+                self._run_dry_run(run_id, options)
+                return
             self._record_stage(
                 run_id=run_id,
                 phase="running",
                 message="Ingest controller entered the processing loop.",
             )
-            while not self._stop_event.is_set() and not self.state.full_run_stop_requested(run_id):
+            while (
+                not run_stop_event.is_set()
+                and not self.state.full_run_stop_requested(run_id)
+            ):
                 now = time.monotonic()
                 if now - last_intake >= options.intake_interval_seconds:
                     self._run_intake(run_id, options)
                     last_intake = now
                     scihub_pdf_backlog_scanned = False
 
-                metadata_queue = self.state.metadata_queue_summary(job_type=METADATA_JOB_ENRICH)
-                arxiv_html_queue = self.state.metadata_queue_summary(job_type=METADATA_JOB_ARXIV_HTML)
-                full_text_queue = self.state.metadata_queue_summary(job_type=METADATA_JOB_FULL_TEXT)
+                metadata_queue = self.state.metadata_queue_summary(
+                    job_type=METADATA_JOB_ENRICH
+                )
+                arxiv_html_queue = self.state.metadata_queue_summary(
+                    job_type=METADATA_JOB_ARXIV_HTML
+                )
+                full_text_queue = self.state.metadata_queue_summary(
+                    job_type=METADATA_JOB_FULL_TEXT
+                )
                 researchgate_pdf_queue = self.state.metadata_queue_summary(
                     job_type=METADATA_JOB_RESEARCHGATE_PDF
                 )
@@ -227,14 +308,21 @@ class FullRunManager:
                     message=f"No queued ingest work. idle_cycles={idle_cycles}.",
                     metadata=idle_metadata,
                 )
-                if options.stop_when_idle and idle_cycles >= options.idle_cycles_to_complete:
+                if (
+                    options.stop_when_idle
+                    and idle_cycles >= options.idle_cycles_to_complete
+                ):
                     completed_with_errors = run_failed > 0
                     self._record_stage(
                         run_id=run_id,
-                        status="completed_with_errors" if completed_with_errors else "succeeded",
+                        status="completed_with_errors"
+                        if completed_with_errors
+                        else "succeeded",
                         phase="complete",
                         finished=True,
-                        event="complete_with_errors" if completed_with_errors else "complete",
+                        event="complete_with_errors"
+                        if completed_with_errors
+                        else "complete",
                         message=(
                             "Ingest run completed with errors because all queues were idle "
                             f"(processed={run_processed}, failed={run_failed})."
@@ -257,7 +345,7 @@ class FullRunManager:
                 finished=True,
                 message="Ingest run stopped by request.",
             )
-        except Exception as exc:
+        except BaseException as exc:
             self._record_stage(
                 run_id=run_id,
                 status="failed",
@@ -266,10 +354,96 @@ class FullRunManager:
                 finished=True,
                 message=str(exc),
             )
+            if not isinstance(exc, Exception):
+                raise
         finally:
+            heartbeat_stop.set()
+            if heartbeat_started:
+                heartbeat_thread.join(timeout=_FULL_RUN_HEARTBEAT_INTERVAL_SECONDS + 5)
             with self._lock:
                 if self._active_run_id == run_id:
                     self._active_run_id = None
+
+    def _heartbeat_loop(
+        self,
+        run_id: str,
+        stop_event: threading.Event,
+        run_stop_event: threading.Event,
+    ) -> None:
+        while not stop_event.is_set():
+            try:
+                active = self.state.full_runs.heartbeat(run_id)
+            except Exception:
+                _LOGGER.exception(
+                    "Full-run heartbeat failed; stopping owned run %s before its "
+                    "ownership can expire.",
+                    run_id,
+                )
+                run_stop_event.set()
+                return
+            if not active:
+                run_stop_event.set()
+                return
+            if stop_event.wait(_FULL_RUN_HEARTBEAT_INTERVAL_SECONDS):
+                return
+
+    def _run_dry_run(self, run_id: str, options: FullRunOptions) -> None:
+        self._record_stage(
+            run_id=run_id,
+            phase="dry_run",
+            message="Read-only ingest queue preview started; backlog intake is disabled.",
+        )
+        metadata_queue = self.state.metadata_queue_summary(job_type=METADATA_JOB_ENRICH)
+        arxiv_html_queue = self.state.metadata_queue_summary(
+            job_type=METADATA_JOB_ARXIV_HTML
+        )
+        full_text_queue = self.state.metadata_queue_summary(
+            job_type=METADATA_JOB_FULL_TEXT
+        )
+        researchgate_pdf_queue = self.state.metadata_queue_summary(
+            job_type=METADATA_JOB_RESEARCHGATE_PDF
+        )
+        scihub_pdf_queue = self.state.metadata_queue_summary(
+            job_type=METADATA_JOB_SCIHUB_PDF
+        )
+        actions = self._ready_actions(
+            options,
+            metadata_queue=metadata_queue,
+            arxiv_html_queue=arxiv_html_queue,
+            full_text_queue=full_text_queue,
+            researchgate_pdf_queue=researchgate_pdf_queue,
+            scihub_pdf_queue=scihub_pdf_queue,
+            scihub_pdf_backlog_pending=False,
+        )
+        results = self._drain_parallel_actions(
+            run_id=run_id,
+            actions=actions,
+            options=options,
+        )
+        self._record_stage(
+            run_id=run_id,
+            status="succeeded",
+            phase="dry_run_complete",
+            finished=True,
+            event="dry_run_complete",
+            message=(
+                "Read-only ingest queue preview completed; no backlog jobs were enqueued "
+                "and no queued jobs were leased."
+            ),
+            metadata={
+                "dry_run": True,
+                "backlog_intake_disabled": True,
+                "actions": {
+                    action: _result_summary(result)
+                    for action, result in results.items()
+                },
+                "metadata_queue": metadata_queue,
+                "arxiv_html_queue": arxiv_html_queue,
+                "full_text_queue": full_text_queue,
+                "researchgate_pdf_queue": researchgate_pdf_queue,
+                "scihub_pdf_queue": scihub_pdf_queue,
+            },
+        )
 
     def _run_intake(self, run_id: str, options: FullRunOptions) -> None:
         self._record_stage(
@@ -367,6 +541,7 @@ class FullRunManager:
                 lambda: metadata.drain_full_text_queue(
                     limit=options.drain_limit,
                     dry_run=options.dry_run,
+                    require_relay=options.require_relay,
                 ),
             ),
             "researchgate_pdf": (
@@ -440,7 +615,9 @@ class FullRunManager:
             }
 
         results: dict[str, dict[str, Any]] = {}
-        with concurrent.futures.ThreadPoolExecutor(max_workers=len(actions)) as executor:
+        with concurrent.futures.ThreadPoolExecutor(
+            max_workers=len(actions)
+        ) as executor:
             futures = {
                 executor.submit(
                     self._drain_action,
@@ -514,3 +691,11 @@ class FullRunManager:
             + int(researchgate_pdf_queue.get("running") or 0)
             + int(scihub_pdf_queue.get("running") or 0)
         )
+
+
+def _validated_full_run_event_limit(value: object) -> int:
+    if type(value) is not int or not 0 <= value <= MAX_FULL_RUN_EVENT_LIMIT:
+        raise ValueError(
+            f"event_limit must be an integer between 0 and {MAX_FULL_RUN_EVENT_LIMIT}"
+        )
+    return value

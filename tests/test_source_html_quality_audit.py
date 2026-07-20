@@ -3,6 +3,9 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 
+import pytest
+
+import zotero_ingest_worker.source_html_quality_audit as audit_module
 from zoteropdf2md.html_theme import web_readability_style
 from zotero_ingest_worker.local_zotero_paths import library_id_for_data_dir
 from zotero_ingest_worker.source_html_quality_audit import run_audit
@@ -71,6 +74,32 @@ def test_source_html_audit_accepts_standard_polished_html(tmp_path: Path) -> Non
     assert report["summary"]["warning_counts"] == {}
     assert report["all_records"][0]["path"] == str(html_path)
     assert report["all_records"][0]["job_ok"] is True
+
+
+def test_source_html_audit_bounds_html_reads(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    data_dir = tmp_path / "Zotero_Test"
+    _write_html_attachment(
+        data_dir,
+        key="LARGE123",
+        parent_key="PARENT1",
+        title="Large Article [source HTML]",
+        html="<html><body>oversized</body></html>",
+    )
+    monkeypatch.setattr(
+        audit_module,
+        "MAX_AUDIT_HTML_BYTES",
+        8,
+        raising=False,
+    )
+
+    report = run_audit(zotero_data_dirs=(data_dir,), state_db=None)
+
+    record = report["all_records"][0]
+    assert "html_read_error" in record["issues"]
+    assert "exceeds 8 bytes" in record["read_error"]
 
 
 def test_source_html_audit_treats_legacy_non_ru_html_as_source(tmp_path: Path) -> None:
@@ -157,7 +186,9 @@ def test_source_html_audit_accepts_nested_figure_media(tmp_path: Path) -> None:
     assert report["summary"]["warning_counts"] == {}
 
 
-def test_source_html_audit_accepts_latexml_table_and_listing_figures(tmp_path: Path) -> None:
+def test_source_html_audit_accepts_latexml_table_and_listing_figures(
+    tmp_path: Path,
+) -> None:
     data_dir = tmp_path / "Zotero_Test"
     html = GOOD_HTML.replace(
         '<figure><img alt="Plot" src="data:image/png;base64,iVBORw0KGgo="/></figure>',
@@ -217,7 +248,9 @@ def test_source_html_audit_accepts_video_figure_boxes(tmp_path: Path) -> None:
     assert report["summary"]["warning_counts"] == {}
 
 
-def test_source_html_audit_flags_latexml_render_errors_inside_figures(tmp_path: Path) -> None:
+def test_source_html_audit_flags_latexml_render_errors_inside_figures(
+    tmp_path: Path,
+) -> None:
     data_dir = tmp_path / "Zotero_Test"
     html = GOOD_HTML.replace(
         '<figure><img alt="Plot" src="data:image/png;base64,iVBORw0KGgo="/></figure>',
@@ -238,7 +271,9 @@ def test_source_html_audit_flags_latexml_render_errors_inside_figures(tmp_path: 
     assert "latexml_figure_render_error" in report["critical_records"][0]["issues"]
 
 
-def test_source_html_audit_flags_latexml_item_marker_layout_without_style(tmp_path: Path) -> None:
+def test_source_html_audit_flags_latexml_item_marker_layout_without_style(
+    tmp_path: Path,
+) -> None:
     data_dir = tmp_path / "Zotero_Test"
     html = """<!doctype html>
     <html>
@@ -296,7 +331,9 @@ def test_source_html_audit_flags_latexml_inline_black_text(tmp_path: Path) -> No
     report = run_audit(zotero_data_dirs=(data_dir,), state_db=None)
 
     assert report["summary"]["issue_counts"]["latexml_inline_black_text"] == 1
-    assert report["critical_records"][0]["counts"]["latexml_inline_black_text_styles"] == 1
+    assert (
+        report["critical_records"][0]["counts"]["latexml_inline_black_text_styles"] == 1
+    )
 
 
 def test_source_html_audit_flags_latexml_black_mathcolor(tmp_path: Path) -> None:
@@ -380,7 +417,10 @@ def test_source_html_audit_flags_discovered_regression_defects(tmp_path: Path) -
     assert "missing_latexml_caption_style" in issues
     assert "missing_latexml_table_style" in issues
     assert "missing_formula_style" in issues
-    assert report["critical_records"][0]["counts"]["picture_inline_data_img_with_source"] == 1
+    assert (
+        report["critical_records"][0]["counts"]["picture_inline_data_img_with_source"]
+        == 1
+    )
     assert report["critical_records"][0]["counts"]["latexml_rowcolor_artifacts"] == 1
 
 
@@ -413,7 +453,9 @@ def test_source_html_audit_flags_frontiers_reference_buttons(tmp_path: Path) -> 
     assert "frontiers_reference_button" in report["critical_records"][0]["issues"]
 
 
-def test_source_html_audit_flags_discovered_js_wrapped_source_html(tmp_path: Path) -> None:
+def test_source_html_audit_flags_discovered_js_wrapped_source_html(
+    tmp_path: Path,
+) -> None:
     data_dir = tmp_path / "Zotero_Test"
     html = f"""<!doctype html>
     <html>
@@ -462,7 +504,9 @@ def test_source_html_audit_flags_discovered_js_wrapped_source_html(tmp_path: Pat
     assert record["counts"]["pmc_dead_ui_controls"] == 2
 
 
-def test_source_html_audit_flags_discovered_js_wrapped_generated_html(tmp_path: Path) -> None:
+def test_source_html_audit_flags_discovered_js_wrapped_generated_html(
+    tmp_path: Path,
+) -> None:
     data_dir = tmp_path / "Zotero_Test"
     html = f"""<!doctype html>
     <html>
@@ -501,7 +545,9 @@ def test_source_html_audit_flags_discovered_js_wrapped_generated_html(tmp_path: 
     assert "missing_web_polish_style" not in record["issues"]
 
 
-def test_source_html_audit_flags_stale_active_arxiv_html_sibling(tmp_path: Path) -> None:
+def test_source_html_audit_flags_stale_active_arxiv_html_sibling(
+    tmp_path: Path,
+) -> None:
     data_dir = tmp_path / "Zotero_Test"
     _write_html_attachment(
         data_dir,
@@ -513,10 +559,14 @@ def test_source_html_audit_flags_stale_active_arxiv_html_sibling(tmp_path: Path)
     arxiv_dir = data_dir / "storage" / "ARXIV001"
     arxiv_dir.mkdir(parents=True)
     arxiv_filename = "Article [ARXIV HTML].html"
-    (arxiv_dir / arxiv_filename).write_text("<html><body>old arxiv html</body></html>", encoding="utf-8")
+    (arxiv_dir / arxiv_filename).write_text(
+        "<html><body>old arxiv html</body></html>", encoding="utf-8"
+    )
     connection = sqlite3.connect(data_dir / "zotero.sqlite")
     try:
-        connection.execute("insert into items (itemID, key, dateModified) values (3, 'ARXIV001', '')")
+        connection.execute(
+            "insert into items (itemID, key, dateModified) values (3, 'ARXIV001', '')"
+        )
         connection.execute(
             """
             insert into itemAttachments (itemID, parentItemID, linkMode, contentType, path)
@@ -524,8 +574,12 @@ def test_source_html_audit_flags_stale_active_arxiv_html_sibling(tmp_path: Path)
             """,
             (f"storage:{arxiv_filename}",),
         )
-        connection.execute("insert into itemDataValues (valueID, value) values (2, 'Article [ARXIV HTML]')")
-        connection.execute("insert into itemData (itemID, fieldID, valueID) values (3, 1, 2)")
+        connection.execute(
+            "insert into itemDataValues (valueID, value) values (2, 'Article [ARXIV HTML]')"
+        )
+        connection.execute(
+            "insert into itemData (itemID, fieldID, valueID) values (3, 1, 2)"
+        )
         connection.commit()
     finally:
         connection.close()
@@ -543,7 +597,9 @@ def test_source_html_audit_flags_stale_active_arxiv_html_sibling(tmp_path: Path)
     assert report["summary"]["issue_counts"]["stale_arxiv_html_attachment"] == 1
 
 
-def test_source_html_audit_flags_stale_arxiv_db_record_with_missing_file(tmp_path: Path) -> None:
+def test_source_html_audit_flags_stale_arxiv_db_record_with_missing_file(
+    tmp_path: Path,
+) -> None:
     data_dir = tmp_path / "Zotero_Test"
     _write_html_attachment(
         data_dir,
@@ -554,15 +610,21 @@ def test_source_html_audit_flags_stale_arxiv_db_record_with_missing_file(tmp_pat
     )
     connection = sqlite3.connect(data_dir / "zotero.sqlite")
     try:
-        connection.execute("insert into items (itemID, key, dateModified) values (3, 'ARXIV001', '')")
+        connection.execute(
+            "insert into items (itemID, key, dateModified) values (3, 'ARXIV001', '')"
+        )
         connection.execute(
             """
             insert into itemAttachments (itemID, parentItemID, linkMode, contentType, path)
             values (3, 1, 1, 'text/html', 'storage:Article [ARXIV HTML].html')
             """
         )
-        connection.execute("insert into itemDataValues (valueID, value) values (2, 'Article [ARXIV HTML]')")
-        connection.execute("insert into itemData (itemID, fieldID, valueID) values (3, 1, 2)")
+        connection.execute(
+            "insert into itemDataValues (valueID, value) values (2, 'Article [ARXIV HTML]')"
+        )
+        connection.execute(
+            "insert into itemData (itemID, fieldID, valueID) values (3, 1, 2)"
+        )
         connection.commit()
     finally:
         connection.close()
@@ -582,7 +644,9 @@ def test_source_html_audit_flags_stale_arxiv_db_record_with_missing_file(tmp_pat
     assert report["summary"]["issue_counts"]["html_attachment_missing_file"] == 1
 
 
-def test_source_html_audit_does_not_flag_jobs_when_state_has_no_source_jobs(tmp_path: Path) -> None:
+def test_source_html_audit_does_not_flag_jobs_when_state_has_no_source_jobs(
+    tmp_path: Path,
+) -> None:
     data_dir = tmp_path / "Zotero_Test"
     _write_html_attachment(
         data_dir,
@@ -611,7 +675,9 @@ def test_source_html_audit_flags_orphan_source_html_file(tmp_path: Path) -> None
     report = run_audit(zotero_data_dirs=(data_dir,), state_db=None)
 
     assert report["summary"]["source_html_files"] == 1
-    assert report["critical_records"][0]["issues"] == ["missing_zotero_attachment_record"]
+    assert report["critical_records"][0]["issues"] == [
+        "missing_zotero_attachment_record"
+    ]
 
 
 def test_source_html_audit_flags_orphan_arxiv_html_file(tmp_path: Path) -> None:
@@ -626,7 +692,9 @@ def test_source_html_audit_flags_orphan_arxiv_html_file(tmp_path: Path) -> None:
     assert report["summary"]["non_source_html_files"] == 1
     assert report["summary"]["issue_counts"]["missing_zotero_attachment_record"] == 1
     assert report["critical_records"][0]["is_arxiv_html"] is True
-    assert report["critical_records"][0]["issues"] == ["missing_zotero_attachment_record"]
+    assert report["critical_records"][0]["issues"] == [
+        "missing_zotero_attachment_record"
+    ]
 
 
 def _write_html_attachment(
@@ -645,8 +713,13 @@ def _write_html_attachment(
     _write_zotero_schema(data_dir)
     connection = sqlite3.connect(data_dir / "zotero.sqlite")
     try:
-        connection.execute("insert into items (itemID, key, dateModified) values (1, ?, '')", (parent_key,))
-        connection.execute("insert into items (itemID, key, dateModified) values (2, ?, '')", (key,))
+        connection.execute(
+            "insert into items (itemID, key, dateModified) values (1, ?, '')",
+            (parent_key,),
+        )
+        connection.execute(
+            "insert into items (itemID, key, dateModified) values (2, ?, '')", (key,)
+        )
         connection.execute(
             """
             insert into itemAttachments (itemID, parentItemID, linkMode, contentType, path)
@@ -654,9 +727,15 @@ def _write_html_attachment(
             """,
             (f"storage:{filename}",),
         )
-        connection.execute("insert into fields (fieldID, fieldName) values (1, 'title')")
-        connection.execute("insert into itemDataValues (valueID, value) values (1, ?)", (title,))
-        connection.execute("insert into itemData (itemID, fieldID, valueID) values (2, 1, 1)")
+        connection.execute(
+            "insert into fields (fieldID, fieldName) values (1, 'title')"
+        )
+        connection.execute(
+            "insert into itemDataValues (valueID, value) values (1, ?)", (title,)
+        )
+        connection.execute(
+            "insert into itemData (itemID, fieldID, valueID) values (2, 1, 1)"
+        )
         connection.commit()
     finally:
         connection.close()

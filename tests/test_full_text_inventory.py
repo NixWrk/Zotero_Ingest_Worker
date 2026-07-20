@@ -1,8 +1,12 @@
 from __future__ import annotations
 
+import pytest
+
 from zotero_ingest_worker.full_text_inventory import (
     FullTextAttachmentRecord,
     FullTextInventory,
+    inventory_has_pdf,
+    inventory_has_source_html,
     inventory_fingerprint,
     pdf_download_limit,
     should_skip_full_text_scan,
@@ -158,3 +162,45 @@ def test_attachment_content_type_detection_normalizes_mime_values() -> None:
     assert pdf.is_html is False
     assert html.is_pdf is False
     assert html.is_html is True
+
+
+@pytest.mark.parametrize(
+    "invalid_flag",
+    ["false", 1],
+    ids=["string-false", "integer-one"],
+)
+def test_inventory_flags_require_exact_booleans(invalid_flag: object) -> None:
+    inventory: dict[str, object] = {
+        "has_pdf": invalid_flag,
+        "has_source_html": invalid_flag,
+        "has_html": invalid_flag,
+        "pdf_count": 0,
+        "source_html_count": 0,
+        "html_count": 0,
+    }
+
+    assert inventory_has_pdf(inventory) is False
+    assert inventory_has_source_html(inventory) is False
+    assert should_skip_full_text_scan(inventory) is False
+    assert pdf_download_limit(inventory) == 3
+    assert inventory_fingerprint(inventory) == ("pdf=0:0|source_html=0:0|html=0:0")
+
+
+@pytest.mark.parametrize(
+    "invalid_count",
+    [True, "1", 1.5, -1],
+    ids=["boolean", "numeric-string", "float", "negative"],
+)
+def test_inventory_fingerprint_requires_exact_nonnegative_counts(
+    invalid_count: object,
+) -> None:
+    inventory: dict[str, object] = {
+        "has_pdf": False,
+        "has_source_html": False,
+        "has_html": False,
+        "pdf_count": invalid_count,
+        "source_html_count": invalid_count,
+        "html_count": invalid_count,
+    }
+
+    assert inventory_fingerprint(inventory) == ("pdf=0:0|source_html=0:0|html=0:0")

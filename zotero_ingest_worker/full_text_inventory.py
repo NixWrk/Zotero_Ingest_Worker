@@ -25,26 +25,33 @@ class FullTextAttachmentRecord:
 
     @property
     def is_pdf(self) -> bool:
-        return bool(is_pdf_attachment(
-            content_type=self.content_type,
-            path=self.path,
-            file_path=self.file_path,
-        ))
+        return bool(
+            is_pdf_attachment(
+                content_type=self.content_type,
+                path=self.path,
+                file_path=self.file_path,
+            )
+        )
 
     @property
     def is_html(self) -> bool:
-        return bool(is_html_attachment(
-            content_type=self.content_type,
-            path=self.path,
-            file_path=self.file_path,
-        ))
+        return bool(
+            is_html_attachment(
+                content_type=self.content_type,
+                path=self.path,
+                file_path=self.file_path,
+            )
+        )
 
     @property
     def is_source_html(self) -> bool:
         if not self.is_html:
             return False
         haystack = f"{self.title} {self.path} {self.file_path}".casefold()
-        if "[source html]" in haystack or re.search(r"\bsource\s+html\b", haystack) is not None:
+        if (
+            "[source html]" in haystack
+            or re.search(r"\bsource\s+html\b", haystack) is not None
+        ):
             return True
         match = re.search(
             r"\[([a-z0-9]{2,12}|mixed|unknown) html\](?:\.x?html?)?",
@@ -58,7 +65,10 @@ class FullTextAttachmentRecord:
         if not self.is_html:
             return False
         haystack = f"{self.title} {self.path} {self.file_path}".casefold()
-        return re.search(r"\[(?:[a-z]{2,12}|mixed|unknown) html\]\.html?\b", haystack) is not None
+        return (
+            re.search(r"\[(?:[a-z]{2,12}|mixed|unknown) html\]\.html?\b", haystack)
+            is not None
+        )
 
     def to_dict(self) -> dict[str, object]:
         payload = asdict(self)
@@ -81,15 +91,25 @@ class FullTextInventory:
     def html_count(self) -> int:
         # Only real HTML counts: a record whose file is missing on disk
         # (e.g. an unsynced Zotero snapshot) is not usable full text.
-        return sum(1 for item in self.attachments if item.is_html and item.exists is not False)
+        return sum(
+            1 for item in self.attachments if item.is_html and item.exists is not False
+        )
 
     @property
     def source_html_count(self) -> int:
-        return sum(1 for item in self.attachments if item.is_source_html and item.exists is not False)
+        return sum(
+            1
+            for item in self.attachments
+            if item.is_source_html and item.exists is not False
+        )
 
     @property
     def generated_html_count(self) -> int:
-        return sum(1 for item in self.attachments if item.is_generated_html and item.exists is not False)
+        return sum(
+            1
+            for item in self.attachments
+            if item.is_generated_html and item.exists is not False
+        )
 
     @property
     def unknown_html_count(self) -> int:
@@ -136,22 +156,26 @@ class FullTextInventory:
 def inventory_has_pdf(inventory: dict[str, object] | FullTextInventory) -> bool:
     if isinstance(inventory, FullTextInventory):
         return inventory.has_pdf
-    return bool(inventory.get("has_pdf"))
+    return inventory.get("has_pdf") is True
 
 
 def inventory_has_source_html(inventory: dict[str, object] | FullTextInventory) -> bool:
     if isinstance(inventory, FullTextInventory):
         return inventory.has_source_html
     if "has_source_html" in inventory:
-        return bool(inventory.get("has_source_html"))
-    return bool(inventory.get("has_html"))
+        return inventory.get("has_source_html") is True
+    return inventory.get("has_html") is True
 
 
-def should_skip_full_text_scan(inventory: dict[str, object] | FullTextInventory) -> bool:
+def should_skip_full_text_scan(
+    inventory: dict[str, object] | FullTextInventory,
+) -> bool:
     return inventory_has_pdf(inventory) and inventory_has_source_html(inventory)
 
 
-def pdf_download_limit(inventory: dict[str, object] | FullTextInventory, *, default: int = 3) -> int:
+def pdf_download_limit(
+    inventory: dict[str, object] | FullTextInventory, *, default: int = 3
+) -> int:
     return 0 if inventory_has_pdf(inventory) else default
 
 
@@ -161,10 +185,10 @@ def inventory_fingerprint(inventory: dict[str, object] | FullTextInventory) -> s
     else:
         data = inventory
     return (
-        f"pdf={int(bool(data.get('has_pdf')))}:{_int_value(data.get('pdf_count'))}|"
-        f"source_html={int(bool(data.get('has_source_html')))}:"
+        f"pdf={int(inventory_has_pdf(data))}:{_int_value(data.get('pdf_count'))}|"
+        f"source_html={int(inventory_has_source_html(data))}:"
         f"{_int_value(data.get('source_html_count'))}|"
-        f"html={int(bool(data.get('has_html')))}:{_int_value(data.get('html_count'))}"
+        f"html={int(data.get('has_html') is True)}:{_int_value(data.get('html_count'))}"
     )
 
 
@@ -174,12 +198,9 @@ def _is_source_html_language_marker(value: str) -> bool:
 
 
 def _int_value(value: object) -> int:
-    if not isinstance(value, (str, bytes, bytearray, int, float)):
+    if isinstance(value, bool) or not isinstance(value, int) or value < 0:
         return 0
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return 0
+    return value
 
 
 def resolved_attachment_path(

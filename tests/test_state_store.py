@@ -1,5 +1,6 @@
 import json
 import os
+import threading
 from concurrent.futures import ThreadPoolExecutor
 
 import pytest
@@ -16,6 +17,21 @@ def test_pipeline_state_store_sets_schema_version(tmp_path):
     store = PipelineStateStore(tmp_path / "state.sqlite")
 
     assert store.schema_version() == PIPELINE_STATE_SCHEMA_VERSION
+
+
+def test_pipeline_state_store_rejects_newer_schema_before_mutation(tmp_path):
+    path = tmp_path / "state.sqlite"
+    store = PipelineStateStore(path)
+    future_version = PIPELINE_STATE_SCHEMA_VERSION + 1
+    with store._connect() as connection:
+        connection.execute(f"pragma user_version = {future_version}")
+
+    with pytest.raises(RuntimeError, match="newer than supported"):
+        PipelineStateStore(path)
+
+    with store._connect() as connection:
+        actual_version = int(connection.execute("pragma user_version").fetchone()[0])
+    assert actual_version == future_version
 
 
 def test_pipeline_state_store_enables_wal_and_maintenance_indexes(tmp_path):
@@ -94,7 +110,9 @@ def test_pipeline_state_connect_closes_connection(tmp_path):
     except Exception as exc:
         assert exc.__class__.__name__ == "ProgrammingError"
     else:
-        raise AssertionError("PipelineStateStore._connect() left a sqlite connection open.")
+        raise AssertionError(
+            "PipelineStateStore._connect() left a sqlite connection open."
+        )
 
 
 def test_legacy_state_store_alias_remains_compatible():
@@ -131,10 +149,522 @@ def test_pipeline_state_repository_facades_delegate_to_store(tmp_path):
     assert updated is not None
     assert store.full_runs.latest()["run_id"] == run["run_id"]
     assert store.full_runs.get(str(run["run_id"]))["phase"] == "testing"
-    assert store.full_runs.events(str(run["run_id"]), limit=1)[0]["event"] == "test_event"
+    assert (
+        store.full_runs.events(str(run["run_id"]), limit=1)[0]["event"] == "test_event"
+    )
     assert store.ocr_jobs.summary()["queued"] == 0
     assert store.html_jobs.summary()["queued"] == 0
     assert store.metadata_jobs.summary(job_type="enrich")["queued"] == 0
+
+
+def test_metadata_enqueue_is_atomic_under_parallel_duplicate_requests(tmp_path):
+    store = PipelineStateStore(tmp_path / "state.sqlite")
+    source = tmp_path / "zotero.sqlite"
+    source.write_bytes(b"sqlite")
+    signature = FileSignature.from_path(source)
+    workers = 8
+    barrier = threading.Barrier(workers)
+    local = threading.local()
+    original_lookup = store.get_metadata_job_by_dedupe_key
+
+    def synchronized_initial_lookup(dedupe_key: str):
+        result = original_lookup(dedupe_key)
+        calls = int(getattr(local, "calls", 0))
+        local.calls = calls + 1
+        if calls == 0:
+            barrier.wait(timeout=5)
+        return result
+
+    store.get_metadata_job_by_dedupe_key = synchronized_initial_lookup  # type: ignore[method-assign]
+
+    def enqueue() -> dict[str, object]:
+        return store.enqueue_metadata_job(
+            job_type="full_text",
+            library_id="LIB1",
+            attachment_key="PARENT1",
+            data_dir=tmp_path,
+            source_path=source,
+            signature=signature,
+            status="queued",
+            reason="parallel-test",
+            parent_item_key="PARENT1",
+            parent_version=1,
+            queue_key="full-text-v1",
+        )
+
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        results = list(executor.map(lambda _index: enqueue(), range(workers)))
+
+    assert sum(result["created"] is True for result in results) == 1
+    assert len({str(result["job_id"]) for result in results}) == 1
+    assert len(store.list_metadata_jobs(job_type="full_text", limit=None)) == 1
+
+
+@pytest.mark.parametrize("queue_name", ["ocr", "html"])
+def test_attachment_enqueue_is_atomic_under_parallel_duplicate_requests(
+    tmp_path, queue_name
+):
+    store = PipelineStateStore(tmp_path / "state.sqlite")
+    source = tmp_path / ("paper.pdf" if queue_name == "ocr" else "paper.html")
+    source.write_bytes(b"content")
+    signature = FileSignature.from_path(source)
+    workers = 8
+    barrier = threading.Barrier(workers)
+    local = threading.local()
+    lookup_name = (
+        "get_job_by_dedupe_key" if queue_name == "ocr" else "get_html_job_by_dedupe_key"
+    )
+    original_lookup = getattr(store, lookup_name)
+
+    def synchronized_initial_lookup(dedupe_key: str):
+        result = original_lookup(dedupe_key)
+        calls = int(getattr(local, "calls", 0))
+        local.calls = calls + 1
+        if calls == 0:
+            barrier.wait(timeout=5)
+        return result
+
+    setattr(store, lookup_name, synchronized_initial_lookup)
+
+    def enqueue() -> dict[str, object]:
+        common = {
+            "library_id": "LIB1",
+            "attachment_key": "ATTACHMENT1",
+            "data_dir": tmp_path,
+            "source_path": source,
+            "signature": signature,
+            "status": "queued",
+            "reason": "parallel-test",
+        }
+        if queue_name == "ocr":
+            return store.enqueue_job(**common)
+        return store.enqueue_html_job(
+            **common,
+            collection_key="direct_pdf",
+            pipeline_key="direct-pdf-v1",
+        )
+
+    with ThreadPoolExecutor(max_workers=workers) as executor:
+        results = list(executor.map(lambda _index: enqueue(), range(workers)))
+
+    assert sum(result["created"] is True for result in results) == 1
+    assert len({str(result["job_id"]) for result in results}) == 1
+    listed = (
+        store.list_jobs(limit=100)
+        if queue_name == "ocr"
+        else store.list_html_jobs(limit=100)
+    )
+    assert len(listed) == 1
+
+
+@pytest.mark.parametrize("queue_name", ["ocr", "html", "metadata"])
+def test_forced_enqueue_starts_a_distinct_generation(tmp_path, queue_name):
+    store = PipelineStateStore(tmp_path / "state.sqlite")
+    source = tmp_path / f"{queue_name}.source"
+    source.write_bytes(b"content")
+    common = {
+        "library_id": "LIB1",
+        "attachment_key": "ATTACHMENT1",
+        "data_dir": tmp_path,
+        "source_path": source,
+        "signature": FileSignature.from_path(source),
+        "status": "queued",
+        "reason": "forced-generation-test",
+        "force": True,
+    }
+
+    if queue_name == "ocr":
+        first = store.enqueue_job(**common)
+        second = store.enqueue_job(**common)
+        listed = store.list_jobs(limit=100)
+    elif queue_name == "html":
+        first = store.enqueue_html_job(
+            **common,
+            collection_key="direct_pdf",
+            pipeline_key="direct-pdf-v1",
+        )
+        second = store.enqueue_html_job(
+            **common,
+            collection_key="direct_pdf",
+            pipeline_key="direct-pdf-v1",
+        )
+        listed = store.list_html_jobs(limit=100)
+    else:
+        first = store.enqueue_metadata_job(
+            **common,
+            job_type="full_text",
+            queue_key="full-text-v1",
+        )
+        second = store.enqueue_metadata_job(
+            **common,
+            job_type="full_text",
+            queue_key="full-text-v1",
+        )
+        listed = store.list_metadata_jobs(job_type="full_text", limit=None)
+
+    assert first["created"] is True
+    assert second["created"] is True
+    assert first["job_id"] != second["job_id"]
+    assert len(listed) == 2
+
+
+@pytest.mark.parametrize(
+    ("method_name", "extra"),
+    [
+        ("lease_next_job", {}),
+        ("lease_next_html_job", {}),
+        ("lease_next_metadata_job", {"job_type": "full_text"}),
+    ],
+)
+@pytest.mark.parametrize("lease_seconds", [0, -1, True, 1.5, "60", 604_801])
+def test_queue_claim_rejects_invalid_lease_contract(
+    tmp_path, method_name, extra, lease_seconds
+):
+    store = PipelineStateStore(tmp_path / "state.sqlite")
+
+    with pytest.raises(ValueError, match="lease_seconds"):
+        getattr(store, method_name)(
+            owner="worker",
+            lease_seconds=lease_seconds,
+            **extra,
+        )
+
+
+@pytest.mark.parametrize(
+    ("method_name", "extra"),
+    [
+        ("lease_next_job", {}),
+        ("lease_next_html_job", {}),
+        ("lease_next_metadata_job", {"job_type": "full_text"}),
+    ],
+)
+@pytest.mark.parametrize("owner", [None, "", "   ", 7])
+def test_queue_claim_rejects_invalid_owner_contract(
+    tmp_path, method_name, extra, owner
+):
+    store = PipelineStateStore(tmp_path / "state.sqlite")
+
+    with pytest.raises(ValueError, match="owner"):
+        getattr(store, method_name)(
+            owner=owner,
+            lease_seconds=60,
+            **extra,
+        )
+
+
+@pytest.mark.parametrize("queue_name", ["ocr", "html", "metadata"])
+@pytest.mark.parametrize(
+    "max_attempts",
+    [True, -1, 1.5, "3", 2_147_483_648],
+)
+def test_queue_enqueue_rejects_invalid_max_attempts(
+    tmp_path,
+    queue_name,
+    max_attempts,
+):
+    store = PipelineStateStore(tmp_path / "state.sqlite")
+    source = tmp_path / f"{queue_name}.source"
+    source.write_bytes(b"content")
+    common = {
+        "library_id": "LIB1",
+        "attachment_key": "ATTACHMENT1",
+        "data_dir": tmp_path,
+        "source_path": source,
+        "signature": FileSignature.from_path(source),
+        "status": "queued",
+        "reason": "attempt-budget-contract-test",
+        "max_attempts": max_attempts,
+    }
+
+    with pytest.raises(ValueError, match="max_attempts"):
+        if queue_name == "ocr":
+            store.enqueue_job(**common)
+        elif queue_name == "html":
+            store.enqueue_html_job(**common, collection_key="direct_pdf")
+        else:
+            store.enqueue_metadata_job(job_type="full_text", **common)
+
+
+@pytest.mark.parametrize("queue_name", ["ocr", "html", "metadata"])
+def test_queue_enqueue_accepts_zero_as_unlimited_attempt_budget(tmp_path, queue_name):
+    store = PipelineStateStore(tmp_path / "state.sqlite")
+    source = tmp_path / f"{queue_name}.source"
+    source.write_bytes(b"content")
+    common = {
+        "library_id": "LIB1",
+        "attachment_key": "ATTACHMENT1",
+        "data_dir": tmp_path,
+        "source_path": source,
+        "signature": FileSignature.from_path(source),
+        "status": "queued",
+        "reason": "unlimited-attempt-budget-test",
+        "max_attempts": 0,
+    }
+    if queue_name == "ocr":
+        created = store.enqueue_job(**common)
+    elif queue_name == "html":
+        created = store.enqueue_html_job(**common, collection_key="direct_pdf")
+    else:
+        created = store.enqueue_metadata_job(job_type="full_text", **common)
+    assert created["max_attempts"] == 0
+
+
+@pytest.mark.parametrize("attempt", [True, 0, -1, 1.5, "1"])
+def test_metadata_attempt_token_rejects_invalid_values(tmp_path, attempt):
+    store = PipelineStateStore(tmp_path / "state.sqlite")
+    source = tmp_path / "zotero.sqlite"
+    source.write_bytes(b"sqlite")
+    created = store.enqueue_metadata_job(
+        job_type="full_text",
+        library_id="LIB1",
+        attachment_key="PARENT1",
+        data_dir=tmp_path,
+        source_path=source,
+        signature=FileSignature.from_path(source),
+        status="queued",
+        reason="attempt-contract-test",
+    )
+    leased = store.lease_next_metadata_job(
+        job_type="full_text",
+        owner="worker",
+        lease_seconds=60,
+    )
+    assert leased is not None
+
+    with pytest.raises(ValueError, match="attempt"):
+        store.heartbeat_metadata_job(
+            job_id=str(created["job_id"]),
+            owner="worker",
+            lease_seconds=60,
+            attempt=attempt,
+        )
+    with pytest.raises(ValueError, match="attempt"):
+        store.mark_metadata_job_succeeded(
+            job_id=str(created["job_id"]),
+            owner="worker",
+            attempt=attempt,
+            message="invalid attempt",
+        )
+    current = store.get_metadata_job(str(created["job_id"]))
+    assert current is not None
+    assert current["status"] == "running"
+
+
+def test_expired_ocr_lease_cannot_complete_or_extend_progress(tmp_path):
+    store = PipelineStateStore(tmp_path / "state.sqlite")
+    source = tmp_path / "paper.pdf"
+    source.write_bytes(b"%PDF test")
+    created = store.enqueue_job(
+        library_id="LIB1",
+        attachment_key="OCR1",
+        data_dir=tmp_path,
+        source_path=source,
+        signature=FileSignature.from_path(source),
+        status="queued",
+        reason="expired-lease-test",
+    )
+    job_id = str(created["job_id"])
+    leased = store.lease_next_job(owner="worker", lease_seconds=60)
+    assert leased is not None
+    with store._connect() as connection:
+        connection.execute(
+            "update ocr_jobs set leased_until = ? where job_id = ?",
+            ("2000-01-01T00:00:00+00:00", job_id),
+        )
+
+    completion = store.mark_job_succeeded(
+        job_id=job_id,
+        owner="worker",
+        message="too late",
+    )
+    progress = store.mark_job_progress(
+        job_id=job_id,
+        owner="worker",
+        phase="publishing",
+        message="too late",
+        lease_seconds=60,
+    )
+
+    assert completion["status"] == "running"
+    assert progress["status"] == "running"
+    assert progress["phase"] == "leased"
+    assert progress["leased_until"] == "2000-01-01T00:00:00+00:00"
+
+
+def test_state_json_rejects_non_finite_values_without_partial_mutation(tmp_path):
+    store = PipelineStateStore(tmp_path / "state.sqlite")
+
+    with pytest.raises(ValueError):
+        store.create_full_run(options={"score": float("nan")})
+    assert store.latest_full_run() is None
+
+    source = tmp_path / "zotero.sqlite"
+    source.write_bytes(b"sqlite")
+    created = store.enqueue_metadata_job(
+        job_type="full_text",
+        library_id="LIB1",
+        attachment_key="PARENT1",
+        data_dir=tmp_path,
+        source_path=source,
+        signature=FileSignature.from_path(source),
+        status="queued",
+        reason="json-contract-test",
+    )
+    leased = store.lease_next_metadata_job(
+        job_type="full_text",
+        owner="worker",
+        lease_seconds=60,
+    )
+    assert leased is not None
+
+    with pytest.raises(ValueError):
+        store.mark_metadata_job_succeeded(
+            job_id=str(created["job_id"]),
+            owner="worker",
+            attempt=1,
+            message="invalid JSON",
+            result={"score": float("inf")},
+        )
+    current = store.get_metadata_job(str(created["job_id"]))
+    assert current is not None
+    assert current["status"] == "running"
+    assert current["result_json"] is None
+
+
+def test_metadata_string_result_is_stored_as_valid_json(tmp_path):
+    store = PipelineStateStore(tmp_path / "state.sqlite")
+    source = tmp_path / "zotero.sqlite"
+    source.write_bytes(b"sqlite")
+    created = store.enqueue_metadata_job(
+        job_type="full_text",
+        library_id="LIB1",
+        attachment_key="PARENT1",
+        data_dir=tmp_path,
+        source_path=source,
+        signature=FileSignature.from_path(source),
+        status="queued",
+        reason="json-string-test",
+    )
+    leased = store.lease_next_metadata_job(
+        job_type="full_text",
+        owner="worker",
+        lease_seconds=60,
+    )
+    assert leased is not None
+
+    completed = store.mark_metadata_job_succeeded(
+        job_id=str(created["job_id"]),
+        owner="worker",
+        attempt=1,
+        message="stored",
+        result="plain text",
+    )
+
+    assert json.loads(str(completed["result_json"])) == "plain text"
+
+
+@pytest.mark.parametrize(
+    ("relay_result", "expected"),
+    [
+        (None, None),
+        ({"ok": True}, "succeeded"),
+        ({"ok": False}, "failed"),
+        ({"ok": "true"}, "invalid"),
+        ([], "invalid"),
+    ],
+)
+def test_ocr_completion_classifies_relay_result_exactly(
+    tmp_path, relay_result, expected
+):
+    store = PipelineStateStore(tmp_path / "state.sqlite")
+    source = tmp_path / "paper.pdf"
+    source.write_bytes(b"%PDF test")
+    created = store.enqueue_job(
+        library_id="LIB1",
+        attachment_key="OCR1",
+        data_dir=tmp_path,
+        source_path=source,
+        signature=FileSignature.from_path(source),
+        status="queued",
+        reason="relay-contract-test",
+    )
+    leased = store.lease_next_job(owner="worker", lease_seconds=60)
+    assert leased is not None
+
+    completed = store.mark_job_succeeded(
+        job_id=str(created["job_id"]),
+        owner="worker",
+        message="complete",
+        relay_result=relay_result,
+    )
+
+    assert completed["relay_status"] == expected
+
+
+def test_metadata_attempt_token_rejects_stale_completion_after_reclaim(tmp_path):
+    store = PipelineStateStore(tmp_path / "state.sqlite")
+    source = tmp_path / "zotero.sqlite"
+    source.write_bytes(b"sqlite")
+    created = store.enqueue_metadata_job(
+        job_type="full_text",
+        library_id="LIB1",
+        attachment_key="PARENT1",
+        data_dir=tmp_path,
+        source_path=source,
+        signature=FileSignature.from_path(source),
+        status="queued",
+        reason="attempt-token-test",
+        parent_item_key="PARENT1",
+        parent_version=1,
+        queue_key="full-text-v1",
+    )
+    job_id = str(created["job_id"])
+    first = store.lease_next_metadata_job(
+        job_type="full_text",
+        owner="shared-owner",
+        lease_seconds=60,
+    )
+    assert first is not None
+    assert first["attempts"] == 1
+    with store._connect() as connection:
+        connection.execute(
+            "update metadata_jobs set leased_until = ? where job_id = ?",
+            ("2000-01-01T00:00:00+00:00", job_id),
+        )
+    assert store.recover_expired_metadata_jobs(job_type="full_text") == 1
+    second = store.lease_next_metadata_job(
+        job_type="full_text",
+        owner="shared-owner",
+        lease_seconds=60,
+    )
+    assert second is not None
+    assert second["attempts"] == 2
+
+    stale = store.mark_metadata_job_succeeded(
+        job_id=job_id,
+        owner="shared-owner",
+        attempt=1,
+        message="stale attempt",
+    )
+
+    assert stale["status"] == "running"
+    assert stale["attempts"] == 2
+    current = store.mark_metadata_job_succeeded(
+        job_id=job_id,
+        owner="shared-owner",
+        attempt=2,
+        message="current attempt",
+    )
+    assert current["status"] == "succeeded"
+    with store._connect() as connection:
+        events = [
+            str(row["event"])
+            for row in connection.execute(
+                "select event from metadata_job_events where job_id = ? order by event_id",
+                (job_id,),
+            ).fetchall()
+        ]
+    assert "stale_completion_discarded" in events
 
 
 def test_metadata_job_lease_is_unique_under_parallel_workers(tmp_path):
@@ -684,11 +1214,14 @@ def test_metadata_orphan_recovery_preserves_lease_heartbeated_during_probe(tmp_p
         queue_key="full-text-v1",
     )
     job_id = str(created["job_id"])
-    assert store.lease_next_metadata_job(
-        job_type="full_text",
-        owner="worker",
-        lease_seconds=60,
-    ) is not None
+    assert (
+        store.lease_next_metadata_job(
+            job_type="full_text",
+            owner="worker",
+            lease_seconds=60,
+        )
+        is not None
+    )
 
     def heartbeat_during_probe(owner: str) -> bool:
         assert owner == "worker"
@@ -902,7 +1435,9 @@ def test_metadata_queue_summary_and_listing_are_scoped_by_library(tmp_path):
     assert global_summary["failed_transient"] == 1
 
 
-def test_large_terminal_metadata_result_is_compacted_without_changing_return_value(tmp_path):
+def test_large_terminal_metadata_result_is_compacted_without_changing_return_value(
+    tmp_path,
+):
     source = tmp_path / "zotero.sqlite"
     source.write_bytes(b"state")
     store = PipelineStateStore(tmp_path / "state.sqlite")
@@ -958,7 +1493,9 @@ def test_large_terminal_metadata_result_is_compacted_without_changing_return_val
     assert stored["result_json"] != expected_json
     assert len(str(stored["result_json"]).encode("utf-8")) <= 64 * 1024
     compacted = json.loads(str(stored["result_json"]))
-    assert compacted["_compacted"]["original_bytes"] == len(expected_json.encode("utf-8"))
+    assert compacted["_compacted"]["original_bytes"] == len(
+        expected_json.encode("utf-8")
+    )
     assert compacted["summary"]["worker_status"] == "pdf_found"
     assert compacted["downstream_refs"] == [downstream_ref, downstream_ref]
     assert (
@@ -1128,3 +1665,401 @@ def test_retry_and_lease_clear_attempt_scoped_diagnostics(tmp_path):
     )
     for job in leased:
         assert job is not None
+        assert job["last_error"] is None
+        assert job["relay_status"] is None
+        assert job["relay_result"] is None
+
+
+def test_large_failed_metadata_result_is_compacted_without_changing_return_value(
+    tmp_path,
+):
+    source = tmp_path / "zotero.sqlite"
+    source.write_bytes(b"state")
+    store = PipelineStateStore(tmp_path / "state.sqlite")
+    created = store.enqueue_metadata_job(
+        job_type="full_text",
+        library_id="LIB1",
+        attachment_key="PARENT-FAILED-LARGE",
+        data_dir=tmp_path,
+        source_path=source,
+        signature=FileSignature.from_path(source),
+        status="queued",
+        reason="test",
+        parent_item_key="PARENT-FAILED-LARGE",
+        queue_key="full-text-v1",
+    )
+    leased = store.lease_next_metadata_job(
+        job_type="full_text",
+        owner="failure-owner",
+        lease_seconds=60,
+    )
+    assert leased is not None
+    payload = {
+        "worker_status": "html_found",
+        "relay_attachment": {
+            "ok": False,
+            "status": "local_copy_failed",
+            "diagnostic": "Ж" * 100_000,
+        },
+    }
+    expected_json = json.dumps(payload, ensure_ascii=False)
+    relay_result = {"ok": False, "reason": "relay rejected attachment"}
+
+    failed = store.mark_metadata_job_failed(
+        job_id=str(created["job_id"]),
+        message="attachment failed",
+        retryable=True,
+        result=payload,
+        relay_result=relay_result,
+        owner="failure-owner",
+    )
+    stored = store.get_metadata_job(str(created["job_id"]))
+
+    assert failed["status"] == "failed_retryable"
+    assert failed["result_json"] == expected_json
+    assert failed["relay_status"] == "failed"
+    assert json.loads(str(failed["relay_result"])) == relay_result
+    assert stored is not None
+    assert stored["result_json"] != expected_json
+    assert len(str(stored["result_json"]).encode("utf-8")) <= 64 * 1024
+    compacted = json.loads(str(stored["result_json"]))
+    assert compacted["_compacted"]["original_bytes"] == len(
+        expected_json.encode("utf-8")
+    )
+    assert compacted["summary"]["worker_status"] == "html_found"
+    assert stored["relay_status"] == "failed"
+    assert json.loads(str(stored["relay_result"])) == relay_result
+
+
+def test_stale_metadata_owner_cannot_overwrite_failure_evidence(tmp_path):
+    source = tmp_path / "zotero.sqlite"
+    source.write_bytes(b"state")
+    store = PipelineStateStore(tmp_path / "state.sqlite")
+    created = store.enqueue_metadata_job(
+        job_type="full_text",
+        library_id="LIB1",
+        attachment_key="PARENT-FAILURE-FENCE",
+        data_dir=tmp_path,
+        source_path=source,
+        signature=FileSignature.from_path(source),
+        status="queued",
+        reason="test",
+        parent_item_key="PARENT-FAILURE-FENCE",
+        queue_key="full-text-v1",
+    )
+    job_id = str(created["job_id"])
+    first = store.lease_next_metadata_job(
+        job_type="full_text", owner="old-owner", lease_seconds=60
+    )
+    assert first is not None
+    with store._connect() as connection:
+        connection.execute(
+            "update metadata_jobs set leased_until = ? where job_id = ?",
+            ("2000-01-01T00:00:00+00:00", job_id),
+        )
+    assert store.recover_expired_metadata_jobs(job_type="full_text") == 1
+    second = store.lease_next_metadata_job(
+        job_type="full_text", owner="new-owner", lease_seconds=60
+    )
+    assert second is not None
+
+    stale_running = store.mark_metadata_job_failed(
+        job_id=job_id,
+        message="old failure",
+        retryable=True,
+        result={"generation": "old"},
+        relay_result={"ok": False, "generation": "old"},
+        owner="old-owner",
+    )
+    assert stale_running["status"] == "running"
+    assert stale_running["lease_owner"] == "new-owner"
+    assert stale_running["result_json"] is None
+    assert stale_running["relay_result"] is None
+
+    current = store.mark_metadata_job_failed(
+        job_id=job_id,
+        message="new failure",
+        retryable=True,
+        result={"generation": "new"},
+        relay_result={"ok": False, "generation": "new"},
+        owner="new-owner",
+    )
+    stale_terminal = store.mark_metadata_job_failed(
+        job_id=job_id,
+        message="late old failure",
+        retryable=False,
+        result={"generation": "old-late"},
+        relay_result={"ok": True, "generation": "old-late"},
+        owner="old-owner",
+    )
+
+    assert current["status"] == "failed_retryable"
+    assert stale_terminal["status"] == "failed_retryable"
+    assert json.loads(str(stale_terminal["result_json"])) == {"generation": "new"}
+    assert stale_terminal["relay_status"] == "failed"
+    assert json.loads(str(stale_terminal["relay_result"])) == {
+        "ok": False,
+        "generation": "new",
+    }
+    with store._connect() as connection:
+        events = [
+            str(row["event"])
+            for row in connection.execute(
+                "select event from metadata_job_events where job_id = ? order by event_id",
+                (job_id,),
+            ).fetchall()
+        ]
+    assert events.count("stale_completion_discarded") == 2
+    assert events.count("failed_retryable") == 1
+
+
+@pytest.mark.parametrize(
+    "relay_result",
+    [
+        {"ok": "true"},
+        {},
+        [],
+        {"ok": True, "dryRun": "false"},
+        {"ok": True, "skipped": "false"},
+    ],
+    ids=[
+        "truthy-ok",
+        "missing-ok",
+        "non-object",
+        "malformed-dry-run",
+        "malformed-skip",
+    ],
+)
+def test_metadata_failure_marks_malformed_relay_result_invalid(
+    tmp_path,
+    relay_result,
+):
+    source = tmp_path / "zotero.sqlite"
+    source.write_bytes(b"state")
+    store = PipelineStateStore(tmp_path / "state.sqlite")
+    created = store.enqueue_metadata_job(
+        job_type="full_text",
+        library_id="LIB1",
+        attachment_key="PARENT-INVALID-RELAY",
+        data_dir=tmp_path,
+        source_path=source,
+        signature=FileSignature.from_path(source),
+        status="queued",
+        reason="test",
+        parent_item_key="PARENT-INVALID-RELAY",
+        queue_key="full-text-v1",
+    )
+    leased = store.lease_next_metadata_job(
+        job_type="full_text",
+        owner="failure-owner",
+        lease_seconds=60,
+    )
+    assert leased is not None
+
+    failed = store.mark_metadata_job_failed(
+        job_id=str(created["job_id"]),
+        message="invalid relay result",
+        retryable=True,
+        relay_result=relay_result,
+        owner="failure-owner",
+    )
+
+    assert failed["status"] == "failed_retryable"
+    assert failed["relay_status"] == "invalid"
+
+
+def _completed_html_relay_status(tmp_path, relay_result: object) -> str | None:
+    source = tmp_path / "paper.pdf"
+    source.write_bytes(b"%PDF")
+    store = PipelineStateStore(tmp_path / "state.sqlite")
+    created = store.enqueue_html_job(
+        library_id="LIB1",
+        attachment_key="PDF-RELAY-STATUS",
+        data_dir=tmp_path,
+        source_path=source,
+        signature=FileSignature.from_path(source),
+        collection_key="direct_pdf",
+        status="queued",
+        reason="relay status contract",
+    )
+    leased = store.lease_next_html_job(owner="relay-owner", lease_seconds=60)
+    assert leased is not None
+
+    completed = store.mark_html_job_succeeded(
+        job_id=str(created["job_id"]),
+        message="relay status contract",
+        relay_result=relay_result,
+        owner="relay-owner",
+    )
+    value = completed["relay_status"]
+    return str(value) if value is not None else None
+
+
+@pytest.mark.parametrize(
+    "relay_result",
+    [
+        [],
+        {},
+        {"ok": "true"},
+        {"attachments": []},
+        {"attachments": {"en": []}},
+        {"attachments": {"en": {}}},
+        {"attachments": {"en": {"ok": "true"}}},
+        {"attachments": {"en": {"relay": []}}},
+        {"attachments": {"en": {"relay": {}}}},
+        {"attachments": {"en": {"relay": {"ok": "true"}}}},
+        {"attachments": {1: {"ok": True}}},
+        {"attachments": {" ": {"ok": True}}},
+        {"attachments": {"en": {"ok": True, "skipped": "false"}}},
+        {"attachments": {"en": {"ok": True, "required": "false"}}},
+        {"attachments": {"en": {"relay": {"ok": True, "dryRun": "false"}}}},
+        {"attachments": {"en": {"relay": {"ok": True, "skipped": "false"}}}},
+        {"ok": True, "skipped": "false"},
+    ],
+    ids=[
+        "non-object",
+        "empty-object",
+        "truthy-ok",
+        "attachments-not-object",
+        "attachment-not-object",
+        "attachment-missing-contract",
+        "attachment-truthy-ok",
+        "nested-relay-not-object",
+        "nested-relay-missing-ok",
+        "nested-relay-truthy-ok",
+        "non-string-attachment-key",
+        "empty-attachment-key",
+        "attachment-malformed-skipped",
+        "attachment-malformed-required",
+        "nested-relay-malformed-dry-run",
+        "nested-relay-malformed-skipped",
+        "outer-malformed-skipped",
+    ],
+)
+def test_html_completion_marks_malformed_relay_result_invalid(
+    tmp_path,
+    relay_result,
+):
+    assert _completed_html_relay_status(tmp_path, relay_result) == "invalid"
+
+
+@pytest.mark.parametrize(
+    "relay_result, expected",
+    [
+        ({"attachments": {}}, "skipped"),
+        ({"ok": True}, "succeeded"),
+        ({"ok": False}, "failed_optional"),
+        ({"attachments": {"en": {"ok": True}}}, "succeeded"),
+        ({"attachments": {"en": {"ok": False}}}, "failed_optional"),
+        (
+            {"attachments": {"en": {"relay": {"ok": True}}}},
+            "succeeded",
+        ),
+        (
+            {"attachments": {"en": {"relay": {"ok": False}}}},
+            "failed_optional",
+        ),
+    ],
+)
+def test_html_completion_preserves_valid_relay_statuses(
+    tmp_path,
+    relay_result,
+    expected: str,
+):
+    assert _completed_html_relay_status(tmp_path, relay_result) == expected
+
+
+def test_expired_metadata_lease_cannot_heartbeat_or_complete(tmp_path) -> None:
+    source = tmp_path / "zotero.sqlite"
+    source.write_bytes(b"state")
+    store = PipelineStateStore(tmp_path / "state.sqlite")
+    created = store.enqueue_metadata_job(
+        job_type="full_text",
+        library_id="LIB1",
+        attachment_key="PARENT1",
+        data_dir=tmp_path,
+        source_path=source,
+        signature=FileSignature.from_path(source),
+        status="queued",
+        reason="test",
+        parent_item_key="PARENT1",
+        parent_version=1,
+        queue_key="full-text-v1",
+    )
+    job_id = str(created["job_id"])
+    assert (
+        store.lease_next_metadata_job(
+            job_type="full_text",
+            owner="expired-owner",
+            lease_seconds=60,
+        )
+        is not None
+    )
+    with store._connect() as connection:
+        connection.execute(
+            "update metadata_jobs set leased_until = ? where job_id = ?",
+            ("2000-01-01T00:00:00+00:00", job_id),
+        )
+
+    heartbeat = store.heartbeat_metadata_job(
+        job_id=job_id,
+        owner="expired-owner",
+        lease_seconds=600,
+    )
+    completion = store.mark_metadata_job_succeeded(
+        job_id=job_id,
+        message="late completion",
+        owner="expired-owner",
+    )
+
+    assert heartbeat is False
+    assert completion["status"] == "running"
+    assert completion["lease_owner"] == "expired-owner"
+    assert store.recover_expired_metadata_jobs(job_type="full_text") == 1
+    assert store.get_metadata_job(job_id)["status"] == "queued"
+
+
+def test_expired_html_lease_cannot_heartbeat_or_complete(tmp_path) -> None:
+    source = tmp_path / "paper.pdf"
+    source.write_bytes(b"%PDF")
+    store = PipelineStateStore(tmp_path / "state.sqlite")
+    created = store.enqueue_html_job(
+        library_id="LIB1",
+        attachment_key="PDF1",
+        data_dir=tmp_path,
+        source_path=source,
+        signature=FileSignature.from_path(source),
+        collection_key="direct_pdf",
+        status="queued",
+        reason="test",
+    )
+    job_id = str(created["job_id"])
+    assert (
+        store.lease_next_html_job(
+            owner="expired-owner",
+            lease_seconds=60,
+        )
+        is not None
+    )
+    with store._connect() as connection:
+        connection.execute(
+            "update html_jobs set leased_until = ? where job_id = ?",
+            ("2000-01-01T00:00:00+00:00", job_id),
+        )
+
+    heartbeat = store.heartbeat_html_job(
+        job_id=job_id,
+        owner="expired-owner",
+        lease_seconds=600,
+    )
+    completion = store.mark_html_job_succeeded(
+        job_id=job_id,
+        message="late completion",
+        owner="expired-owner",
+    )
+
+    assert heartbeat is False
+    assert completion["status"] == "running"
+    assert completion["lease_owner"] == "expired-owner"
+    assert store.recover_expired_html_jobs() == 1
+    assert store.get_html_job(job_id)["status"] == "queued"

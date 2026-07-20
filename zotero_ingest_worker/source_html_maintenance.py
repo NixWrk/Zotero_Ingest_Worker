@@ -18,6 +18,7 @@ def cleanup_source_html_inventory(
     trash_attachment: TrashAttachment | None,
     dry_run: bool,
     delete_webdav: bool = False,
+    ensure_active: Callable[[], None] | None = None,
 ) -> dict[str, Any]:
     records = _source_html_records_from_inventory(inventory)
     return cleanup_source_html_records(
@@ -27,6 +28,7 @@ def cleanup_source_html_inventory(
         trash_attachment=trash_attachment,
         dry_run=dry_run,
         delete_webdav=delete_webdav,
+        ensure_active=ensure_active,
     )
 
 
@@ -38,10 +40,13 @@ def cleanup_source_html_records(
     trash_attachment: TrashAttachment | None,
     dry_run: bool,
     delete_webdav: bool = False,
+    ensure_active: Callable[[], None] | None = None,
 ) -> dict[str, Any]:
     source_records = [record for record in records if record.is_source_html]
     if not source_records:
-        return _cleanup_result(metadata=metadata, dry_run=dry_run, candidates=[], trashed=[])
+        return _cleanup_result(
+            metadata=metadata, dry_run=dry_run, candidates=[], trashed=[]
+        )
 
     keep_key = _source_html_keep_key(source_records)
     candidates = [
@@ -58,16 +63,30 @@ def cleanup_source_html_records(
         elif trash_attachment is None:
             relay = {"ok": False, "skipped": True, "reason": "trash_callback_missing"}
         else:
+            if ensure_active is not None:
+                ensure_active()
             attachment = _record_attachment(
                 metadata=metadata,
                 storage_dir=storage_dir,
                 record=candidate["record"],
             )
             try:
-                relay = trash_attachment(
+                relay_value = trash_attachment(
                     attachment=attachment,
                     dry_run=dry_run,
                     delete_webdav=delete_webdav,
+                )
+                relay = (
+                    relay_value
+                    if isinstance(relay_value, dict)
+                    else {
+                        "ok": False,
+                        "reason": "trash_invalid_result",
+                        "error": (
+                            "trash_invalid_result: expected mapping, got "
+                            f"{type(relay_value).__name__}"
+                        ),
+                    }
                 )
             except Exception as exc:
                 relay = {
@@ -75,19 +94,24 @@ def cleanup_source_html_records(
                     "reason": "trash_failed",
                     "error": f"{type(exc).__name__}: {exc}",
                 }
-        if not dry_run and not relay.get("ok"):
+        if not dry_run and relay.get("ok") is not True:
             errors.append(
                 {
                     "key": candidate["key"],
                     "error": str(relay.get("error") or relay.get("reason") or relay),
                 }
             )
-        trashed.append({k: v for k, v in candidate.items() if k != "record"} | {"relay": relay})
+        trashed.append(
+            {k: v for k, v in candidate.items() if k != "record"} | {"relay": relay}
+        )
 
     result = _cleanup_result(
         metadata=metadata,
         dry_run=dry_run,
-        candidates=[{k: v for k, v in candidate.items() if k != "record"} for candidate in candidates],
+        candidates=[
+            {k: v for k, v in candidate.items() if k != "record"}
+            for candidate in candidates
+        ],
         trashed=trashed,
     )
     result["keep_key"] = keep_key
@@ -110,10 +134,12 @@ def cleanup_source_html_library(
     affected = 0
     total_candidates = 0
     results: list[dict[str, Any]] = []
-    for metadata in store.iter_regular_items(max_items=max_items, collection=collection):
+    for metadata in store.iter_regular_items(
+        max_items=max_items, collection=collection
+    ):
         scanned += 1
         inventory = store.full_text_inventory(metadata)
-        result = cleanup_source_html_records(
+        raw_result = cleanup_source_html_records(
             metadata=metadata,
             records=inventory.attachments,
             storage_dir=store.config.resolved_storage_dir,
@@ -121,11 +147,18 @@ def cleanup_source_html_library(
             dry_run=dry_run,
             delete_webdav=delete_webdav,
         )
-        if result["candidate_count"]:
-            affected += 1
-            total_candidates += int(result["candidate_count"])
+        result, candidate_count = _validated_source_html_record_cleanup_result(
+            raw_result
+        )
+        if candidate_count is None:
             results.append(result)
-    ok = all(bool(result.get("ok", True)) for result in results)
+            continue
+        if candidate_count > 0:
+            affected += 1
+            total_candidates += candidate_count
+        if candidate_count > 0 or result["ok"] is not True:
+            results.append(result)
+    ok = all(result.get("ok") is True for result in results)
     return {
         "ok": ok,
         "mode": "source_html_cleanup",
@@ -141,7 +174,9 @@ def cleanup_source_html_library(
     }
 
 
-def _source_html_records_from_inventory(inventory: dict[str, object]) -> list[FullTextAttachmentRecord]:
+def _source_html_records_from_inventory(
+    inventory: dict[str, object],
+) -> list[FullTextAttachmentRecord]:
     raw = inventory.get("attachments")
     if not isinstance(raw, list):
         return []
@@ -183,13 +218,17 @@ def _source_html_rank(record: FullTextAttachmentRecord) -> tuple[int, int, str]:
     return (size, mtime, record.key)
 
 
-def _should_trash_source_html(record: FullTextAttachmentRecord, *, keep_key: str | None) -> bool:
+def _should_trash_source_html(
+    record: FullTextAttachmentRecord, *, keep_key: str | None
+) -> bool:
     if record.exists is False:
         return True
     return keep_key is not None and record.key != keep_key
 
 
-def _cleanup_candidate(record: FullTextAttachmentRecord, *, keep_key: str | None) -> dict[str, Any]:
+def _cleanup_candidate(
+    record: FullTextAttachmentRecord, *, keep_key: str | None
+) -> dict[str, Any]:
     return {
         "key": record.key,
         "reason": "missing_file" if record.exists is False else "duplicate_source_html",
@@ -219,7 +258,9 @@ def _record_attachment(
         link_mode=None,
         content_type=record.content_type or "text/html",
         zotero_path=record.path,
-        file_path=Path(record.file_path) if record.file_path else storage_dir / record.key,
+        file_path=Path(record.file_path)
+        if record.file_path
+        else storage_dir / record.key,
         parent_key=metadata.key,
     )
 
@@ -243,7 +284,53 @@ def _cleanup_result(
     }
 
 
+def _validated_source_html_record_cleanup_result(
+    value: object,
+) -> tuple[dict[str, Any], int | None]:
+    if not isinstance(value, dict):
+        return (
+            _invalid_source_html_record_cleanup_result(
+                value,
+                error=f"expected mapping, got {type(value).__name__}",
+            ),
+            None,
+        )
+    if not isinstance(value.get("ok"), bool):
+        return (
+            _invalid_source_html_record_cleanup_result(
+                value,
+                error="ok must be a JSON boolean",
+            ),
+            None,
+        )
+    candidate_count = value.get("candidate_count")
+    if (
+        not isinstance(candidate_count, int)
+        or isinstance(candidate_count, bool)
+        or candidate_count < 0
+    ):
+        return (
+            _invalid_source_html_record_cleanup_result(
+                value,
+                error="candidate_count must be a nonnegative JSON integer",
+            ),
+            None,
+        )
+    return value, candidate_count
+
+
+def _invalid_source_html_record_cleanup_result(
+    value: object,
+    *,
+    error: str,
+) -> dict[str, Any]:
+    return {
+        "ok": False,
+        "reason": "invalid_source_html_record_cleanup_result",
+        "error": error,
+        "result_type": type(value).__name__,
+    }
+
+
 def _optional_bool(value: object) -> bool | None:
-    if value is None:
-        return None
-    return bool(value)
+    return value if isinstance(value, bool) else None

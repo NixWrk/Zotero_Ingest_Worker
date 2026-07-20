@@ -12,6 +12,7 @@ from hashlib import sha256
 from itertools import islice
 from pathlib import Path
 from typing import TYPE_CHECKING, Any, Callable
+from uuid import uuid4
 
 from .state_schema import (
     PIPELINE_STATE_SCHEMA_VERSION as PIPELINE_STATE_SCHEMA_VERSION,
@@ -38,6 +39,10 @@ _COMPACT_PREVIEW_MAX_ITEMS = 8
 _COMPACT_PREVIEW_MAX_STRING_CHARS = 1_024
 _MAX_DOWNSTREAM_REFS = 64
 _MAX_COMPACT_SCAN_NODES = 200_000
+_MAX_JOB_LEASE_SECONDS = 604_800
+_MAX_JOB_ATTEMPTS = 2_147_483_647
+DEFAULT_FULL_RUN_STALE_AFTER_SECONDS = 300
+MAX_FULL_RUN_EVENT_LIMIT = 1_000
 
 if TYPE_CHECKING:
     from .state_repositories import (
@@ -198,7 +203,9 @@ class PipelineStateStore:
             rows = connection.execute("select * from watch_state").fetchall()
         return {str(row["source_path"]): dict(row) for row in rows}
 
-    def is_watched_file_unchanged(self, source_path: Path, signature: FileSignature) -> bool:
+    def is_watched_file_unchanged(
+        self, source_path: Path, signature: FileSignature
+    ) -> bool:
         row = self.get_watched_file(source_path)
         if row is None:
             return False
@@ -428,6 +435,7 @@ class PipelineStateStore:
         max_attempts: int = 3,
         last_error: str | None = None,
     ) -> dict[str, Any]:
+        max_attempts = _validated_max_attempts(max_attempts)
         now = _utc_now()
         dedupe_key = _job_dedupe_key(
             library_id=library_id,
@@ -435,13 +443,17 @@ class PipelineStateStore:
             signature=signature,
             force=force,
         )
+        if force:
+            dedupe_key = f"{dedupe_key}:request={uuid4().hex}"
         existing = self.get_job_by_dedupe_key(dedupe_key)
         if existing is not None:
             return {**existing, "created": False}
 
-        job_id = f"job_{now.strftime('%Y%m%dT%H%M%S%fZ')}_{attachment_key}"
+        job_id = (
+            f"job_{now.strftime('%Y%m%dT%H%M%S%fZ')}_{attachment_key}_{uuid4().hex}"
+        )
         with self._connect() as connection:
-            connection.execute(
+            cursor = connection.execute(
                 """
                 insert into ocr_jobs (
                   job_id,
@@ -463,6 +475,7 @@ class PipelineStateStore:
                   updated_at
                 )
                 values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)
+                on conflict(dedupe_key) do nothing
                 """,
                 (
                     job_id,
@@ -483,6 +496,16 @@ class PipelineStateStore:
                     now.isoformat(),
                 ),
             )
+            if cursor.rowcount != 1:
+                row = connection.execute(
+                    "select * from ocr_jobs where dedupe_key = ?",
+                    (dedupe_key,),
+                ).fetchone()
+                if row is None:
+                    raise RuntimeError(
+                        "OCR deduplication conflict did not preserve an existing job."
+                    )
+                return {**dict(row), "created": False}
             self._add_job_event(
                 connection,
                 job_id=job_id,
@@ -574,6 +597,7 @@ class PipelineStateStore:
         max_attempts: int = 3,
         last_error: str | None = None,
     ) -> dict[str, Any]:
+        max_attempts = _validated_max_attempts(max_attempts)
         now = _utc_now()
         dedupe_key = _html_job_dedupe_key(
             library_id=library_id,
@@ -582,13 +606,17 @@ class PipelineStateStore:
             force=force,
             pipeline_key=pipeline_key,
         )
+        if force:
+            dedupe_key = f"{dedupe_key}:request={uuid4().hex}"
         existing = self.get_html_job_by_dedupe_key(dedupe_key)
         if existing is not None:
             return {**existing, "created": False}
 
-        job_id = f"html_{now.strftime('%Y%m%dT%H%M%S%fZ')}_{attachment_key}"
+        job_id = (
+            f"html_{now.strftime('%Y%m%dT%H%M%S%fZ')}_{attachment_key}_{uuid4().hex}"
+        )
         with self._connect() as connection:
-            connection.execute(
+            cursor = connection.execute(
                 """
                 insert into html_jobs (
                   job_id,
@@ -612,6 +640,7 @@ class PipelineStateStore:
                   updated_at
                 )
                 values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)
+                on conflict(dedupe_key) do nothing
                 """,
                 (
                     job_id,
@@ -634,6 +663,16 @@ class PipelineStateStore:
                     now.isoformat(),
                 ),
             )
+            if cursor.rowcount != 1:
+                row = connection.execute(
+                    "select * from html_jobs where dedupe_key = ?",
+                    (dedupe_key,),
+                ).fetchone()
+                if row is None:
+                    raise RuntimeError(
+                        "HTML deduplication conflict did not preserve an existing job."
+                    )
+                return {**dict(row), "created": False}
             self._add_html_job_event(
                 connection,
                 job_id=job_id,
@@ -779,10 +818,14 @@ class PipelineStateStore:
                 )
         return recovered
 
-    def lease_next_html_job(self, *, owner: str, lease_seconds: int) -> dict[str, Any] | None:
+    def lease_next_html_job(
+        self, *, owner: str, lease_seconds: int
+    ) -> dict[str, Any] | None:
+        normalized_owner = _validated_lease_owner(owner)
+        safe_lease_seconds = _validated_lease_seconds(lease_seconds)
         self.recover_expired_html_jobs()
         now = _utc_now()
-        leased_until = now + timedelta(seconds=lease_seconds)
+        leased_until = now + timedelta(seconds=safe_lease_seconds)
         with self._connect() as connection:
             connection.execute("begin immediate")
             exhausted_rows = connection.execute(
@@ -845,7 +888,12 @@ class PipelineStateStore:
                   and status = 'queued'
                   and (max_attempts <= 0 or attempts < max_attempts)
                 """,
-                (owner, leased_until.isoformat(), now.isoformat(), job["job_id"]),
+                (
+                    normalized_owner,
+                    leased_until.isoformat(),
+                    now.isoformat(),
+                    job["job_id"],
+                ),
             )
             if cursor.rowcount != 1:
                 return None
@@ -853,7 +901,7 @@ class PipelineStateStore:
                 connection,
                 job_id=job["job_id"],
                 event="leased",
-                message=f"HTML job leased by {owner}.",
+                message=f"HTML job leased by {normalized_owner}.",
             )
         return self.get_html_job(str(job["job_id"]))
 
@@ -871,7 +919,7 @@ class PipelineStateStore:
         owner: str | None = None,
     ) -> dict[str, Any]:
         now = _utc_now().isoformat()
-        owner_clause, owner_params = _terminal_owner_clause(owner)
+        owner_clause, owner_params = _terminal_owner_clause(owner, now=now)
         with self._connect() as connection:
             cursor = connection.execute(
                 f"""
@@ -928,7 +976,7 @@ class PipelineStateStore:
         owner: str | None = None,
     ) -> dict[str, Any]:
         now = _utc_now().isoformat()
-        owner_clause, owner_params = _terminal_owner_clause(owner)
+        owner_clause, owner_params = _terminal_owner_clause(owner, now=now)
         with self._connect() as connection:
             cursor = connection.execute(
                 f"""
@@ -979,7 +1027,7 @@ class PipelineStateStore:
             else "failed_final"
         )
         now = _utc_now().isoformat()
-        owner_clause, owner_params = _terminal_owner_clause(owner)
+        owner_clause, owner_params = _terminal_owner_clause(owner, now=now)
         with self._connect() as connection:
             cursor = connection.execute(
                 f"""
@@ -1015,8 +1063,10 @@ class PipelineStateStore:
         owner: str,
         lease_seconds: int,
     ) -> bool:
+        normalized_owner = _validated_lease_owner(owner)
+        safe_lease_seconds = _validated_lease_seconds(lease_seconds)
         now = _utc_now()
-        leased_until = now + timedelta(seconds=max(1, int(lease_seconds)))
+        leased_until = now + timedelta(seconds=safe_lease_seconds)
         with self._connect() as connection:
             cursor = connection.execute(
                 """
@@ -1026,12 +1076,22 @@ class PipelineStateStore:
                 where job_id = ?
                   and status = 'running'
                   and lease_owner = ?
+                  and leased_until is not null
+                  and leased_until >= ?
                 """,
-                (leased_until.isoformat(), now.isoformat(), job_id, str(owner)),
+                (
+                    leased_until.isoformat(),
+                    now.isoformat(),
+                    job_id,
+                    normalized_owner,
+                    now.isoformat(),
+                ),
             )
         return cursor.rowcount == 1
 
-    def retry_html_job(self, job_id: str, *, reset_attempts: bool = False) -> dict[str, Any]:
+    def retry_html_job(
+        self, job_id: str, *, reset_attempts: bool = False
+    ) -> dict[str, Any]:
         now = _utc_now().isoformat()
         with self._connect() as connection:
             connection.execute("begin immediate")
@@ -1148,6 +1208,7 @@ class PipelineStateStore:
         max_attempts: int = 3,
         last_error: str | None = None,
     ) -> dict[str, Any]:
+        max_attempts = _validated_max_attempts(max_attempts)
         now = _utc_now()
         dedupe_key = _metadata_job_dedupe_key(
             job_type=job_type,
@@ -1157,14 +1218,19 @@ class PipelineStateStore:
             force=force,
             queue_key=queue_key,
         )
+        if force:
+            dedupe_key = f"{dedupe_key}:request={uuid4().hex}"
         existing = self.get_metadata_job_by_dedupe_key(dedupe_key)
         if existing is not None:
             return {**existing, "created": False}
 
         safe_job_type = _safe_job_type(job_type)
-        job_id = f"meta_{safe_job_type}_{now.strftime('%Y%m%dT%H%M%S%fZ')}_{attachment_key}"
+        job_id = (
+            f"meta_{safe_job_type}_{now.strftime('%Y%m%dT%H%M%S%fZ')}_"
+            f"{attachment_key}_{uuid4().hex}"
+        )
         with self._connect() as connection:
-            connection.execute(
+            cursor = connection.execute(
                 """
                 insert into metadata_jobs (
                   job_id,
@@ -1190,6 +1256,7 @@ class PipelineStateStore:
                   updated_at
                 )
                 values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, 0, ?, ?, ?, ?, ?)
+                on conflict(dedupe_key) do nothing
                 """,
                 (
                     job_id,
@@ -1214,6 +1281,16 @@ class PipelineStateStore:
                     now.isoformat(),
                 ),
             )
+            if cursor.rowcount != 1:
+                row = connection.execute(
+                    "select * from metadata_jobs where dedupe_key = ?",
+                    (dedupe_key,),
+                ).fetchone()
+                if row is None:
+                    raise RuntimeError(
+                        "Metadata deduplication conflict did not preserve an existing job."
+                    )
+                return {**dict(row), "created": False}
             self._add_metadata_job_event(
                 connection,
                 job_id=job_id,
@@ -1313,10 +1390,16 @@ class PipelineStateStore:
             clauses.append(f"status in ({placeholders})")
             params.extend(sorted(statuses))
         scoped_library_ids = sorted(
-            {str(value).strip() for value in (library_ids or set()) if str(value).strip()}
+            {
+                str(value).strip()
+                for value in (library_ids or set())
+                if str(value).strip()
+            }
         )
         if scoped_library_ids:
-            clauses.append(f"library_id in ({','.join('?' for _ in scoped_library_ids)})")
+            clauses.append(
+                f"library_id in ({','.join('?' for _ in scoped_library_ids)})"
+            )
             params.extend(scoped_library_ids)
         where = f"where {' and '.join(clauses)}" if clauses else ""
         safe_offset = max(0, int(offset or 0))
@@ -1352,10 +1435,16 @@ class PipelineStateStore:
             clauses.append("job_type = ?")
             params.append(job_type)
         scoped_library_ids = sorted(
-            {str(value).strip() for value in (library_ids or set()) if str(value).strip()}
+            {
+                str(value).strip()
+                for value in (library_ids or set())
+                if str(value).strip()
+            }
         )
         if scoped_library_ids:
-            clauses.append(f"library_id in ({','.join('?' for _ in scoped_library_ids)})")
+            clauses.append(
+                f"library_id in ({','.join('?' for _ in scoped_library_ids)})"
+            )
             params.extend(scoped_library_ids)
         where = f"where {' and '.join(clauses)}" if clauses else ""
         with self._connect() as connection:
@@ -1516,9 +1605,11 @@ class PipelineStateStore:
         owner: str,
         lease_seconds: int,
     ) -> dict[str, Any] | None:
+        normalized_owner = _validated_lease_owner(owner)
+        safe_lease_seconds = _validated_lease_seconds(lease_seconds)
         self.recover_expired_metadata_jobs(job_type=job_type)
         now = _utc_now()
-        leased_until = now + timedelta(seconds=lease_seconds)
+        leased_until = now + timedelta(seconds=safe_lease_seconds)
         with self._connect() as connection:
             connection.execute("begin immediate")
             exhausted_rows = connection.execute(
@@ -1585,7 +1676,12 @@ class PipelineStateStore:
                   and status = 'queued'
                   and (max_attempts <= 0 or attempts < max_attempts)
                 """,
-                (owner, leased_until.isoformat(), now.isoformat(), job["job_id"]),
+                (
+                    normalized_owner,
+                    leased_until.isoformat(),
+                    now.isoformat(),
+                    job["job_id"],
+                ),
             )
             if cursor.rowcount != 1:
                 return None
@@ -1593,7 +1689,7 @@ class PipelineStateStore:
                 connection,
                 job_id=job["job_id"],
                 event="leased",
-                message=f"Metadata job leased by {owner}.",
+                message=f"Metadata job leased by {normalized_owner}.",
             )
         return self.get_metadata_job(str(job["job_id"]))
 
@@ -1606,9 +1702,12 @@ class PipelineStateStore:
         output_path: str | None = None,
         relay_result: Any = None,
         owner: str | None = None,
+        attempt: int | None = None,
     ) -> dict[str, Any]:
         now = _utc_now().isoformat()
-        owner_clause, owner_params = _terminal_owner_clause(owner)
+        owner_clause, owner_params = _terminal_owner_clause(
+            owner, now=now, attempt=attempt
+        )
         result_json = _json_or_none(result)
         stored_result_json = _compact_metadata_result_json(result_json)
         completed = False
@@ -1663,9 +1762,12 @@ class PipelineStateStore:
         message: str,
         result: Any = None,
         owner: str | None = None,
+        attempt: int | None = None,
     ) -> dict[str, Any]:
         now = _utc_now().isoformat()
-        owner_clause, owner_params = _terminal_owner_clause(owner)
+        owner_clause, owner_params = _terminal_owner_clause(
+            owner, now=now, attempt=attempt
+        )
         result_json = _json_or_none(result)
         stored_result_json = _compact_metadata_result_json(result_json)
         completed = False
@@ -1709,7 +1811,10 @@ class PipelineStateStore:
         job_id: str,
         message: str,
         retryable: bool,
+        result: Any = None,
+        relay_result: Any = None,
         owner: str | None = None,
+        attempt: int | None = None,
     ) -> dict[str, Any]:
         job = self.get_metadata_job(job_id)
         if job is None:
@@ -1722,7 +1827,12 @@ class PipelineStateStore:
             else "failed_final"
         )
         now = _utc_now().isoformat()
-        owner_clause, owner_params = _terminal_owner_clause(owner)
+        owner_clause, owner_params = _terminal_owner_clause(
+            owner, now=now, attempt=attempt
+        )
+        result_json = _json_or_none(result)
+        stored_result_json = _compact_metadata_result_json(result_json)
+        completed = False
         with self._connect() as connection:
             cursor = connection.execute(
                 f"""
@@ -1732,11 +1842,23 @@ class PipelineStateStore:
                     lease_owner = null,
                     leased_until = null,
                     last_error = ?,
+                    result_json = ?,
+                    relay_status = ?,
+                    relay_result = ?,
                     updated_at = ?
                 where job_id = ?
                   {owner_clause}
                 """,
-                (status, message, now, job_id, *owner_params),
+                (
+                    status,
+                    message,
+                    stored_result_json,
+                    _metadata_relay_status(relay_result),
+                    _json_or_none(relay_result),
+                    now,
+                    job_id,
+                    *owner_params,
+                ),
             )
             if cursor.rowcount != 1:
                 self._add_metadata_job_event(
@@ -1746,10 +1868,14 @@ class PipelineStateStore:
                     message=_stale_job_update_message("metadata", owner),
                 )
             else:
+                completed = True
                 self._add_metadata_job_event(
                     connection, job_id=job_id, event=status, message=message
                 )
-        return self.get_metadata_job(job_id) or {}
+        job = self.get_metadata_job(job_id) or {}
+        if completed and result_json != stored_result_json:
+            job["result_json"] = result_json
+        return job
 
     def heartbeat_metadata_job(
         self,
@@ -1757,24 +1883,44 @@ class PipelineStateStore:
         job_id: str,
         owner: str,
         lease_seconds: int,
+        attempt: int | None = None,
     ) -> bool:
+        normalized_owner = _validated_lease_owner(owner)
+        safe_lease_seconds = _validated_lease_seconds(lease_seconds)
+        safe_attempt = _validated_attempt(attempt)
         now = _utc_now()
-        leased_until = now + timedelta(seconds=max(1, int(lease_seconds)))
+        leased_until = now + timedelta(seconds=safe_lease_seconds)
+        attempt_clause = ""
+        params: list[Any] = [
+            leased_until.isoformat(),
+            now.isoformat(),
+            job_id,
+            normalized_owner,
+        ]
+        if safe_attempt is not None:
+            attempt_clause = "and attempts = ?"
+            params.append(safe_attempt)
+        params.append(now.isoformat())
         with self._connect() as connection:
             cursor = connection.execute(
-                """
+                f"""
                 update metadata_jobs
                 set leased_until = ?,
                     updated_at = ?
                 where job_id = ?
                   and status = 'running'
                   and lease_owner = ?
+                  and leased_until is not null
+                  {attempt_clause}
+                  and leased_until >= ?
                 """,
-                (leased_until.isoformat(), now.isoformat(), job_id, str(owner)),
+                params,
             )
         return cursor.rowcount == 1
 
-    def retry_metadata_job(self, job_id: str, *, reset_attempts: bool = False) -> dict[str, Any]:
+    def retry_metadata_job(
+        self, job_id: str, *, reset_attempts: bool = False
+    ) -> dict[str, Any]:
         now = _utc_now().isoformat()
         with self._connect() as connection:
             connection.execute("begin immediate")
@@ -1920,10 +2066,14 @@ class PipelineStateStore:
                 )
         return recovered
 
-    def lease_next_job(self, *, owner: str, lease_seconds: int) -> dict[str, Any] | None:
+    def lease_next_job(
+        self, *, owner: str, lease_seconds: int
+    ) -> dict[str, Any] | None:
+        normalized_owner = _validated_lease_owner(owner)
+        safe_lease_seconds = _validated_lease_seconds(lease_seconds)
         self.recover_expired_jobs()
         now = _utc_now()
-        leased_until = now + timedelta(seconds=lease_seconds)
+        leased_until = now + timedelta(seconds=safe_lease_seconds)
         with self._connect() as connection:
             connection.execute("begin immediate")
             exhausted_rows = connection.execute(
@@ -1986,7 +2136,12 @@ class PipelineStateStore:
                   and status = 'queued'
                   and (max_attempts <= 0 or attempts < max_attempts)
                 """,
-                (owner, leased_until.isoformat(), now.isoformat(), job["job_id"]),
+                (
+                    normalized_owner,
+                    leased_until.isoformat(),
+                    now.isoformat(),
+                    job["job_id"],
+                ),
             )
             if cursor.rowcount != 1:
                 return None
@@ -1994,7 +2149,7 @@ class PipelineStateStore:
                 connection,
                 job_id=job["job_id"],
                 event="leased",
-                message=f"Job leased by {owner}.",
+                message=f"Job leased by {normalized_owner}.",
             )
         return self.get_job(str(job["job_id"]))
 
@@ -2009,7 +2164,7 @@ class PipelineStateStore:
         owner: str | None = None,
     ) -> dict[str, Any]:
         now = _utc_now().isoformat()
-        owner_clause, owner_params = _terminal_owner_clause(owner)
+        owner_clause, owner_params = _terminal_owner_clause(owner, now=now)
         with self._connect() as connection:
             cursor = connection.execute(
                 f"""
@@ -2030,7 +2185,7 @@ class PipelineStateStore:
                 (
                     result_path,
                     backup_path,
-                    "succeeded" if relay_result is not None else None,
+                    _ocr_relay_status(relay_result),
                     _json_or_none(relay_result),
                     now,
                     job_id,
@@ -2069,7 +2224,7 @@ class PipelineStateStore:
             else "failed_final"
         )
         now = _utc_now().isoformat()
-        owner_clause, owner_params = _terminal_owner_clause(owner)
+        owner_clause, owner_params = _terminal_owner_clause(owner, now=now)
         with self._connect() as connection:
             cursor = connection.execute(
                 f"""
@@ -2106,7 +2261,7 @@ class PipelineStateStore:
         owner: str | None = None,
     ) -> dict[str, Any]:
         now = _utc_now().isoformat()
-        owner_clause, owner_params = _terminal_owner_clause(owner)
+        owner_clause, owner_params = _terminal_owner_clause(owner, now=now)
         with self._connect() as connection:
             cursor = connection.execute(
                 f"""
@@ -2143,7 +2298,7 @@ class PipelineStateStore:
         owner: str | None = None,
     ) -> dict[str, Any]:
         now = _utc_now().isoformat()
-        owner_clause, owner_params = _terminal_owner_clause(owner)
+        owner_clause, owner_params = _terminal_owner_clause(owner, now=now)
         with self._connect() as connection:
             cursor = connection.execute(
                 f"""
@@ -2280,25 +2435,32 @@ class PipelineStateStore:
         owner: str | None = None,
         lease_seconds: int | None = None,
     ) -> dict[str, Any]:
-        normalized_owner = str(owner or "").strip()
-        if not normalized_owner:
+        if not isinstance(owner, str) or not owner.strip():
             raise ValueError("OCR job progress requires a non-empty lease owner.")
-        now = _utc_now()
-        leased_until = (
-            now + timedelta(seconds=max(1, int(lease_seconds)))
+        normalized_owner = owner.strip()
+        safe_lease_seconds = (
+            _validated_lease_seconds(lease_seconds)
             if lease_seconds is not None
             else None
         )
-        owner_clause = "and status = 'running' and lease_owner = ?"
+        now = _utc_now()
+        leased_until = (
+            now + timedelta(seconds=safe_lease_seconds)
+            if safe_lease_seconds is not None
+            else None
+        )
         with self._connect() as connection:
             cursor = connection.execute(
-                f"""
+                """
                 update ocr_jobs
                 set phase = ?,
                     leased_until = coalesce(?, leased_until),
                     updated_at = ?
                 where job_id = ?
-                  {owner_clause}
+                  and status = 'running'
+                  and lease_owner = ?
+                  and leased_until is not null
+                  and leased_until >= ?
                 """,
                 (
                     phase,
@@ -2306,6 +2468,7 @@ class PipelineStateStore:
                     now.isoformat(),
                     job_id,
                     normalized_owner,
+                    now.isoformat(),
                 ),
             )
             if cursor.rowcount != 1:
@@ -2321,23 +2484,113 @@ class PipelineStateStore:
                 )
         return self.get_job(job_id) or {}
 
-    def create_full_run(self, *, options: dict[str, Any]) -> dict[str, Any]:
-        now = _utc_now()
-        run_id = f"full_{now.strftime('%Y%m%dT%H%M%S%fZ')}"
+    def create_full_run(
+        self,
+        *,
+        options: dict[str, Any],
+        stale_after_seconds: int = DEFAULT_FULL_RUN_STALE_AFTER_SECONDS,
+    ) -> dict[str, Any]:
+        if type(stale_after_seconds) is not int or stale_after_seconds <= 0:
+            raise ValueError("full run stale_after_seconds must be a positive integer")
         order_mode = str(options.get("order") or options.get("mode") or "ingest")
         with self._connect() as connection:
+            connection.execute("begin immediate")
+            now = _utc_now()
+            active_rows = connection.execute(
+                """
+                select *
+                from full_runs
+                where status in ('running', 'stopping')
+                  and finished_at is null
+                order by started_at desc, run_id desc
+                """
+            ).fetchall()
+            fresh_rows = [
+                row
+                for row in active_rows
+                if _full_run_heartbeat_is_fresh(
+                    row["heartbeat_at"],
+                    now=now,
+                    stale_after_seconds=stale_after_seconds,
+                )
+            ]
+            preserved = (
+                max(fresh_rows, key=_full_run_heartbeat_sort_key)
+                if fresh_rows
+                else None
+            )
+            preserved_run_id = (
+                str(preserved["run_id"]) if preserved is not None else None
+            )
+
+            for row in active_rows:
+                run_id = str(row["run_id"])
+                if run_id == preserved_run_id:
+                    continue
+                metadata: dict[str, Any]
+                if preserved_run_id is None:
+                    message = (
+                        "Full run was interrupted because its heartbeat expired before "
+                        "a new run was claimed."
+                    )
+                    metadata = {"stale_after_seconds": stale_after_seconds}
+                else:
+                    message = (
+                        "Duplicate active full run was interrupted while preserving the "
+                        f"freshest active run {preserved_run_id}."
+                    )
+                    metadata = {"preserved_run_id": preserved_run_id}
+                cursor = connection.execute(
+                    """
+                    update full_runs
+                    set status = 'interrupted',
+                        phase = 'interrupted',
+                        current_job_kind = null,
+                        current_job_id = null,
+                        last_error = ?,
+                        finished_at = ?,
+                        heartbeat_at = ?,
+                        updated_at = ?
+                    where run_id = ?
+                      and status in ('running', 'stopping')
+                      and finished_at is null
+                    """,
+                    (
+                        message,
+                        now.isoformat(),
+                        now.isoformat(),
+                        now.isoformat(),
+                        run_id,
+                    ),
+                )
+                if cursor.rowcount != 1:
+                    raise RuntimeError(
+                        f"active full run changed during claim: {run_id}"
+                    )
+                self._add_full_run_event(
+                    connection,
+                    run_id=run_id,
+                    event="interrupted",
+                    message=message,
+                    metadata=metadata,
+                )
+
+            if preserved is not None:
+                return {**dict(preserved), "created": False}
+
+            run_id = f"full_{now.strftime('%Y%m%dT%H%M%S%fZ')}"
             connection.execute(
                 """
                 insert into full_runs (
-                  run_id,
-                  status,
-                  phase,
-                  order_mode,
-                  options,
-                  stop_requested,
-                  started_at,
-                  updated_at,
-                  heartbeat_at
+                    run_id,
+                    status,
+                    phase,
+                    order_mode,
+                    options,
+                    stop_requested,
+                    started_at,
+                    updated_at,
+                    heartbeat_at
                 )
                 values (?, 'running', 'starting', ?, ?, 0, ?, ?, ?)
                 """,
@@ -2357,7 +2610,29 @@ class PipelineStateStore:
                 message=f"Full run started with order {order_mode}.",
                 metadata=options,
             )
-        return self.get_full_run(run_id) or {}
+            row = connection.execute(
+                "select * from full_runs where run_id = ?",
+                (run_id,),
+            ).fetchone()
+            if row is None:
+                raise RuntimeError(f"created full run is missing: {run_id}")
+            return {**dict(row), "created": True}
+
+    def heartbeat_full_run(self, run_id: str) -> bool:
+        now = _utc_now().isoformat()
+        with self._connect() as connection:
+            cursor = connection.execute(
+                """
+                update full_runs
+                set heartbeat_at = ?,
+                    updated_at = ?
+                where run_id = ?
+                  and status in ('running', 'stopping')
+                  and finished_at is null
+                """,
+                (now, now, run_id),
+            )
+        return cursor.rowcount == 1
 
     def get_full_run(self, run_id: str) -> dict[str, Any] | None:
         with self._connect() as connection:
@@ -2477,7 +2752,10 @@ class PipelineStateStore:
         row = self.get_full_run(run_id)
         return bool(row and int(row.get("stop_requested") or 0))
 
-    def list_full_run_events(self, run_id: str, *, limit: int = 100) -> list[dict[str, Any]]:
+    def list_full_run_events(
+        self, run_id: str, *, limit: int = 100
+    ) -> list[dict[str, Any]]:
+        safe_limit = _full_run_event_limit(limit)
         with self._connect() as connection:
             rows = connection.execute(
                 """
@@ -2487,7 +2765,7 @@ class PipelineStateStore:
                 order by event_id desc
                 limit ?
                 """,
-                (run_id, limit),
+                (run_id, safe_limit),
             ).fetchall()
         return [dict(row) for row in rows]
 
@@ -2703,7 +2981,14 @@ class PipelineStateStore:
             from full_runs
             where run_id = ?
             """,
-            (run_id, event, message, _json_or_none(metadata), _utc_now().isoformat(), run_id),
+            (
+                run_id,
+                event,
+                message,
+                _json_or_none(metadata),
+                _utc_now().isoformat(),
+                run_id,
+            ),
         )
         if cursor.rowcount == 1:
             _maybe_maintain_state_history(connection)
@@ -2993,7 +3278,9 @@ def _compact_metadata_result_json(
             "reason": "terminal_metadata_result_limit",
             "original_bytes": _json_bytes(raw),
             "original_sha256": sha256(raw.encode("utf-8")).hexdigest(),
-            "original_type": type(payload).__name__ if payload is not None else "invalid_json",
+            "original_type": type(payload).__name__
+            if payload is not None
+            else "invalid_json",
             "top_level_keys": top_level_keys,
             "omitted_top_level_key_count": (
                 max(0, len(payload) - len(top_level_keys))
@@ -3245,11 +3532,58 @@ def _is_transient_sqlite_error(exc: sqlite3.Error) -> bool:
     )
 
 
-def _terminal_owner_clause(owner: str | None) -> tuple[str, tuple[str, ...]]:
-    normalized = str(owner or "").strip()
-    if not normalized:
+def _terminal_owner_clause(
+    owner: str | None,
+    *,
+    now: str,
+    attempt: int | None = None,
+) -> tuple[str, tuple[Any, ...]]:
+    safe_attempt = _validated_attempt(attempt)
+    if owner is None:
+        if safe_attempt is not None:
+            raise ValueError("metadata attempt requires a lease owner")
         return "", ()
-    return "and status = 'running' and lease_owner = ?", (normalized,)
+    normalized = _validated_lease_owner(owner)
+    attempt_clause = ""
+    params: tuple[Any, ...] = (normalized, now)
+    if safe_attempt is not None:
+        attempt_clause = " and attempts = ?"
+        params = (*params, safe_attempt)
+    return (
+        "and status = 'running' and lease_owner = ? "
+        f"and leased_until is not null and leased_until >= ?{attempt_clause}",
+        params,
+    )
+
+
+def _validated_lease_owner(value: object) -> str:
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError("lease owner must be a non-empty string")
+    return value.strip()
+
+
+def _validated_lease_seconds(value: object) -> int:
+    if type(value) is not int or not 1 <= value <= _MAX_JOB_LEASE_SECONDS:
+        raise ValueError(
+            f"lease_seconds must be an integer between 1 and {_MAX_JOB_LEASE_SECONDS}"
+        )
+    return value
+
+
+def _validated_max_attempts(value: object) -> int:
+    if type(value) is not int or not 0 <= value <= _MAX_JOB_ATTEMPTS:
+        raise ValueError(
+            f"max_attempts must be an integer between 0 and {_MAX_JOB_ATTEMPTS}"
+        )
+    return value
+
+
+def _validated_attempt(value: object) -> int | None:
+    if value is None:
+        return None
+    if type(value) is not int or value < 1:
+        raise ValueError("metadata attempt must be a positive integer")
+    return value
 
 
 def _stale_job_update_message(queue_name: str, owner: str | None) -> str:
@@ -3264,6 +3598,47 @@ def _stale_job_update_message(queue_name: str, owner: str | None) -> str:
 
 def _utc_now() -> datetime:
     return datetime.now(UTC)
+
+
+def _full_run_heartbeat_is_fresh(
+    value: object,
+    *,
+    now: datetime,
+    stale_after_seconds: int,
+) -> bool:
+    heartbeat = _full_run_heartbeat_timestamp(value)
+    if heartbeat is None:
+        return False
+    age_seconds = (now - heartbeat).total_seconds()
+    return -stale_after_seconds <= age_seconds <= stale_after_seconds
+
+
+def _full_run_heartbeat_timestamp(value: object) -> datetime | None:
+    if not isinstance(value, str) or not value.strip():
+        return None
+    try:
+        heartbeat = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    if heartbeat.tzinfo is None:
+        return None
+    return heartbeat.astimezone(UTC)
+
+
+def _full_run_heartbeat_sort_key(row: sqlite3.Row) -> tuple[datetime, str, str]:
+    heartbeat = _full_run_heartbeat_timestamp(row["heartbeat_at"])
+    if heartbeat is None:
+        heartbeat = datetime.min.replace(tzinfo=UTC)
+    return heartbeat, str(row["started_at"]), str(row["run_id"])
+
+
+def _full_run_event_limit(value: object) -> int:
+    if type(value) is not int or not 0 <= value <= MAX_FULL_RUN_EVENT_LIMIT:
+        raise ValueError(
+            "full run event limit must be an integer between "
+            f"0 and {MAX_FULL_RUN_EVENT_LIMIT}"
+        )
+    return value
 
 
 def _row_dict(row: sqlite3.Row | None) -> dict[str, Any] | None:
@@ -3315,43 +3690,121 @@ def _windows_pid_alive(pid: int) -> bool:
 def _json_or_none(value: Any) -> str | None:
     if value is None:
         return None
-    return str(value) if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
+    serialized = json.dumps(
+        value,
+        ensure_ascii=False,
+        allow_nan=False,
+    )
+    serialized.encode("utf-8")
+    return serialized
+
+
+def _ocr_relay_status(value: Any) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, dict):
+        return "invalid"
+    for field in ("dryRun", "skipped"):
+        if field in value and not isinstance(value[field], bool):
+            return "invalid"
+    ok = value.get("ok")
+    if ok is False:
+        return "failed"
+    if ok is not True:
+        return "invalid"
+    if value.get("dryRun") is True:
+        return "dry_run"
+    if value.get("skipped") is True:
+        return "skipped"
+    return "succeeded"
 
 
 def _html_relay_status(value: Any) -> str | None:
     if value is None:
         return None
-    if isinstance(value, dict):
-        attachments = value.get("attachments")
-        if isinstance(attachments, dict):
-            if not attachments:
-                return "skipped"
-            failed_optional = False
-            for result in attachments.values():
-                if not isinstance(result, dict):
-                    continue
-                if result.get("ok") is False:
-                    failed_optional = True
-                    continue
-                relay = result.get("relay")
-                if isinstance(relay, dict) and relay.get("ok") is False:
-                    failed_optional = True
-            return "failed_optional" if failed_optional else "succeeded"
-        if value.get("ok") is False:
-            return "failed_optional"
-    return "succeeded"
+    if not isinstance(value, dict):
+        return "invalid"
+    if not _html_relay_booleans_are_exact(value, ("dryRun", "skipped")):
+        return "invalid"
+
+    outer_failed = False
+    if "ok" in value:
+        ok = value["ok"]
+        if not isinstance(ok, bool):
+            return "invalid"
+        outer_failed = not ok
+
+    if "attachments" in value:
+        attachments = value["attachments"]
+        if not isinstance(attachments, dict):
+            return "invalid"
+        if not attachments:
+            return "failed_optional" if outer_failed else "skipped"
+        failed_optional = outer_failed
+        for key, result in attachments.items():
+            if not isinstance(key, str) or not key.strip():
+                return "invalid"
+            status = _html_attachment_relay_status(result)
+            if status == "invalid":
+                return "invalid"
+            if status == "failed_optional":
+                failed_optional = True
+        return "failed_optional" if failed_optional else "succeeded"
+
+    if "ok" not in value:
+        return "invalid"
+    return "failed_optional" if outer_failed else "succeeded"
+
+
+def _html_attachment_relay_status(value: object) -> str:
+    if not isinstance(value, dict):
+        return "invalid"
+    if not _html_relay_booleans_are_exact(value, ("required", "skipped", "dryRun")):
+        return "invalid"
+    failed_optional = False
+    if "ok" in value:
+        ok = value["ok"]
+        if not isinstance(ok, bool):
+            return "invalid"
+        failed_optional = not ok
+    if "relay" in value:
+        relay = value["relay"]
+        if not isinstance(relay, dict) or not isinstance(relay.get("ok"), bool):
+            return "invalid"
+        if not _html_relay_booleans_are_exact(relay, ("dryRun", "skipped")):
+            return "invalid"
+        failed_optional = failed_optional or relay["ok"] is False
+    elif "ok" not in value:
+        return "invalid"
+    return "failed_optional" if failed_optional else "succeeded"
+
+
+def _html_relay_booleans_are_exact(
+    value: dict[Any, Any],
+    fields: tuple[str, ...],
+) -> bool:
+    return all(field not in value or isinstance(value[field], bool) for field in fields)
 
 
 def _metadata_relay_status(value: Any) -> str | None:
     if value is None:
         return None
-    if isinstance(value, dict):
-        if value.get("ok") is False:
-            return "failed"
-        if value.get("dryRun"):
-            return "dry_run"
-        if value.get("skipped") is True:
-            return "skipped"
+    if not isinstance(value, dict):
+        return "invalid"
+    if value.get("ok") is False:
+        return "failed"
+    if value.get("ok") is not True:
+        return "invalid"
+    dry_run = value.get("dryRun")
+    if dry_run is True:
+        return "dry_run"
+    if dry_run is not None and dry_run is not False:
+        return "invalid"
+    skipped = value.get("skipped")
+    if skipped is True:
+        return "skipped"
+    if skipped is not None and skipped is not False:
+        return "invalid"
     return "succeeded"
 
 
@@ -3427,4 +3880,7 @@ def _metadata_job_dedupe_key(
 
 
 def _safe_job_type(value: str) -> str:
-    return "".join(ch if ch.isalnum() else "_" for ch in str(value or "job")).strip("_") or "job"
+    return (
+        "".join(ch if ch.isalnum() else "_" for ch in str(value or "job")).strip("_")
+        or "job"
+    )

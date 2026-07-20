@@ -11,6 +11,9 @@ from .models import LocalAttachment
 from .storage import write_arxiv_html_artifact
 
 
+MAX_VALIDATE_HTML_BYTES = 16_000_000
+
+
 def main(argv: list[str] | None = None) -> int:
     if hasattr(sys.stdout, "reconfigure"):
         sys.stdout.reconfigure(encoding="utf-8")
@@ -22,7 +25,9 @@ def main(argv: list[str] | None = None) -> int:
     lookup_group.add_argument("--arxiv-id")
     lookup_group.add_argument("--title")
 
-    fetch_parser = subparsers.add_parser("fetch", help="Fetch arXiv HTML and write a local artifact.")
+    fetch_parser = subparsers.add_parser(
+        "fetch", help="Fetch arXiv HTML and write a local artifact."
+    )
     fetch_parser.add_argument("--arxiv-id", required=True)
     fetch_parser.add_argument("--output-root", required=True, type=Path)
     fetch_parser.add_argument("--library-id", required=True)
@@ -38,16 +43,28 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "lookup":
         client = ArxivLookupClient()
-        candidate = client.by_id(args.arxiv_id) if args.arxiv_id else client.by_title(args.title)
-        print(json.dumps(candidate.to_dict() if candidate else None, ensure_ascii=False, indent=2))
+        candidate = (
+            client.by_id(args.arxiv_id)
+            if args.arxiv_id
+            else client.by_title(args.title)
+        )
+        print(
+            json.dumps(
+                candidate.to_dict() if candidate else None, ensure_ascii=False, indent=2
+            )
+        )
         return 0
 
     if args.command == "fetch":
         filename = args.filename or args.source_pdf.name
         attachment = LocalAttachment(
             library_id=args.library_id,
-            data_dir=args.source_pdf.parent.parent.parent if len(args.source_pdf.parts) >= 3 else args.source_pdf.parent,
-            storage_dir=args.source_pdf.parent.parent if len(args.source_pdf.parts) >= 2 else args.source_pdf.parent,
+            data_dir=args.source_pdf.parent.parent.parent
+            if len(args.source_pdf.parts) >= 3
+            else args.source_pdf.parent,
+            storage_dir=args.source_pdf.parent.parent
+            if len(args.source_pdf.parts) >= 2
+            else args.source_pdf.parent,
             key=args.attachment_key,
             file_path=args.source_pdf,
         )
@@ -76,7 +93,7 @@ def main(argv: list[str] | None = None) -> int:
 
     if args.command == "validate":
         result = validate_arxiv_html(
-            args.html.read_text(encoding="utf-8"),
+            _read_validate_html(args.html),
             min_text_chars=args.min_text_chars,
         )
         print(json.dumps(result, ensure_ascii=False, indent=2))
@@ -86,6 +103,16 @@ def main(argv: list[str] | None = None) -> int:
     return 0
 
 
+def _read_validate_html(path: Path) -> str:
+    try:
+        with path.open("rb") as stream:
+            payload = stream.read(MAX_VALIDATE_HTML_BYTES + 1)
+    except OSError as exc:
+        raise OSError(f"Could not read HTML file: {path}") from exc
+    if len(payload) > MAX_VALIDATE_HTML_BYTES:
+        raise ValueError(f"HTML file exceeds {MAX_VALIDATE_HTML_BYTES} bytes: {path}")
+    return payload.decode("utf-8")
+
+
 if __name__ == "__main__":
     raise SystemExit(main())
-

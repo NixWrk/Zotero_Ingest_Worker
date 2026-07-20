@@ -189,5 +189,8 @@ class FullRunRepository:
     def stop_requested(self, *args: Any, **kwargs: Any) -> bool:
         return self.store.full_run_stop_requested(*args, **kwargs)
 
+    def heartbeat(self, *args: Any, **kwargs: Any) -> bool:
+        return self.store.heartbeat_full_run(*args, **kwargs)
+
     def events(self, *args: Any, **kwargs: Any) -> list[dict[str, Any]]:
         return self.store.list_full_run_events(*args, **kwargs)

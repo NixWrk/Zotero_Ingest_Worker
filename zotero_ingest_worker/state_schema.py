@@ -7,6 +7,13 @@ PIPELINE_STATE_SCHEMA_VERSION = 3
 
 
 def initialize_pipeline_state_schema(connection: sqlite3.Connection) -> None:
+    current_version = int(connection.execute("pragma user_version").fetchone()[0])
+    if current_version > PIPELINE_STATE_SCHEMA_VERSION:
+        raise RuntimeError(
+            f"Pipeline state schema {current_version} is newer than supported "
+            f"version {PIPELINE_STATE_SCHEMA_VERSION}."
+        )
+
     connection.execute(
         """
         create table if not exists ocr_state (
@@ -204,11 +211,15 @@ def initialize_pipeline_state_schema(connection: sqlite3.Connection) -> None:
         )
         """
     )
-    connection.execute("create index if not exists idx_ocr_jobs_status on ocr_jobs(status)")
+    connection.execute(
+        "create index if not exists idx_ocr_jobs_status on ocr_jobs(status)"
+    )
     connection.execute(
         "create index if not exists idx_ocr_jobs_attachment on ocr_jobs(library_id, attachment_key)"
     )
-    connection.execute("create index if not exists idx_html_jobs_status on html_jobs(status)")
+    connection.execute(
+        "create index if not exists idx_html_jobs_status on html_jobs(status)"
+    )
     connection.execute(
         "create index if not exists idx_html_jobs_attachment on html_jobs(library_id, attachment_key)"
     )
@@ -268,7 +279,9 @@ def initialize_pipeline_state_schema(connection: sqlite3.Connection) -> None:
         )
         """
     )
-    connection.execute("create index if not exists idx_full_runs_status on full_runs(status)")
+    connection.execute(
+        "create index if not exists idx_full_runs_status on full_runs(status)"
+    )
     connection.execute(
         "create index if not exists idx_ocr_job_events_entity on ocr_job_events(job_id, event_id)"
     )
@@ -296,7 +309,6 @@ def initialize_pipeline_state_schema(connection: sqlite3.Connection) -> None:
         "create index if not exists idx_full_run_events_created on full_run_events(created_at, event_id)"
     )
 
-    current_version = int(connection.execute("pragma user_version").fetchone()[0])
     if current_version < PIPELINE_STATE_SCHEMA_VERSION:
         connection.execute(f"pragma user_version = {PIPELINE_STATE_SCHEMA_VERSION}")
 

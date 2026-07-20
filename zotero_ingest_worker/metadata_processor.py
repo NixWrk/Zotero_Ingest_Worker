@@ -2,8 +2,8 @@ from __future__ import annotations
 
 import asyncio
 import os
-import shutil
 import threading
+import time
 import urllib.error
 import urllib.parse
 from concurrent.futures import ThreadPoolExecutor, as_completed
@@ -31,7 +31,7 @@ from .arxiv_html import (
     parse_arxiv_atom,
     validate_arxiv_html,
 )
-from .config import WorkerConfig
+from .config import MAX_OPERATION_ITEMS, WorkerConfig
 from .metadata_backlog_scanner import (
     attachment_backlog_scan as scan_attachment_backlog,
     full_text_backlog_scan as scan_full_text_backlog,
@@ -42,8 +42,11 @@ from .full_text_attachment import (
     _best_successful_html_download,
     _html_attachment_source_with_embedded_assets,
     local_attachment_from_relay,
+    _relay_attachment_key,
+    _validated_zotero_attachment_key,
     write_parent_attachment_local_copy,
 )
+from .full_run_options import MAX_FULL_RUN_DRAIN_ITEMS
 from . import full_text_discovery
 from .full_text_inventory import (
     inventory_fingerprint,
@@ -94,6 +97,7 @@ from .metadata_processor_helpers import (
     _researchgate_result_retryable,
     _researchgate_url_from_job,
     _safe_filename,
+    _bounded_scihub_query_candidates,
     _scihub_doi_from_job,
     _scihub_query_candidates,
     _scihub_query_from_job,
@@ -102,8 +106,14 @@ from .metadata_processor_helpers import (
     _scihub_result_retryable,
     _title_for_lookup,
 )
-from .relay_client import ZoteroRelayClient, relay_url_candidates as _relay_url_candidates
-from .researchgate_pdf import ResearchGatePdfOptions, download_and_attach_researchgate_pdf
+from .relay_client import (
+    ZoteroRelayClient,
+    relay_url_candidates as _relay_url_candidates,
+)
+from .researchgate_pdf import (
+    ResearchGatePdfOptions,
+    download_and_attach_researchgate_pdf,
+)
 from .scihub_pdf import SciHubPdfOptions, download_and_attach_scihub_pdf
 from .source_html_maintenance import cleanup_source_html_library
 from .state import FileSignature, PipelineStateStore
@@ -143,11 +153,16 @@ __all__ = [
 ]
 
 
+class _MetadataJobLeaseLost(RuntimeError):
+    pass
+
+
 class ZoteroMetadataProcessor:
     def __init__(self, config: WorkerConfig):
         self.config = config
         self.state = PipelineStateStore(config.state_db_path)
         self._provider_events: list[dict[str, Any]] = []
+        self._active_metadata_lease_lost: threading.Event | None = None
 
     def queue(
         self,
@@ -277,13 +292,18 @@ class ZoteroMetadataProcessor:
     ) -> dict[str, Any]:
         if not dry_run and not confirm:
             raise RuntimeError("source-html-cleanup apply mode requires confirm=true.")
-        max_scan = int(max_items or limit or 10000)
+        max_scan = _source_html_cleanup_limit(
+            max_items=max_items,
+            limit=limit,
+        )
         results: list[dict[str, Any]] = []
         scanned = 0
         affected = 0
         candidates = 0
-        for library_config in self._library_configs(library_id=library_id, data_dir=data_dir):
-            result = cleanup_source_html_library(
+        for library_config in self._library_configs(
+            library_id=library_id, data_dir=data_dir
+        ):
+            raw_result = cleanup_source_html_library(
                 store=LocalZoteroStore(library_config),
                 trash_attachment=self._trash_attachment_via_relay,
                 max_items=max_scan,
@@ -291,11 +311,15 @@ class ZoteroMetadataProcessor:
                 delete_webdav=delete_webdav,
                 collection=collection,
             )
-            scanned += int(result["scanned"])
-            affected += int(result["affected_parents"])
-            candidates += int(result["candidate_count"])
+            result, counts = _validated_source_html_cleanup_result(raw_result)
             results.append(result)
-        ok = all(bool(result.get("ok", True)) for result in results)
+            if counts is None:
+                continue
+            library_scanned, library_affected, library_candidates = counts
+            scanned += library_scanned
+            affected += library_affected
+            candidates += library_candidates
+        ok = all(result.get("ok") is True for result in results)
         return {
             "ok": ok,
             "mode": "source_html_cleanup",
@@ -343,12 +367,13 @@ class ZoteroMetadataProcessor:
         *,
         limit: int = 1,
         dry_run: bool = False,
+        require_relay: bool = True,
     ) -> dict[str, Any]:
         return self._drain_queue(
             job_type=METADATA_JOB_FULL_TEXT,
             limit=limit,
             dry_run=dry_run,
-            require_relay=False,
+            require_relay=require_relay,
             policy=None,
         )
 
@@ -394,7 +419,9 @@ class ZoteroMetadataProcessor:
         signature = FileSignature.from_path(attachment.file_path)
         parent_metadata = zotero.get_parent_metadata_for_attachment(attachment)
         title = _title_for_lookup(parent_metadata, attachment)
-        arxiv_id = extract_arxiv_id_from_text(_metadata_haystack(parent_metadata, attachment))
+        arxiv_id = extract_arxiv_id_from_text(
+            _metadata_haystack(parent_metadata, attachment)
+        )
 
         if job_type == METADATA_JOB_ARXIV_HTML and not arxiv_id and not title:
             return _enqueue_result(
@@ -405,7 +432,9 @@ class ZoteroMetadataProcessor:
             )
 
         queue_key = self._queue_key(job_type)
-        parent_item_key = parent_metadata.key if parent_metadata else attachment.parent_key
+        parent_item_key = (
+            parent_metadata.key if parent_metadata else attachment.parent_key
+        )
         parent_version = parent_metadata.version if parent_metadata else None
         if job_type == METADATA_JOB_ENRICH and parent_item_key and not force:
             existing = self.state.get_metadata_job_by_parent_scope(
@@ -415,7 +444,14 @@ class ZoteroMetadataProcessor:
                 parent_version=parent_version,
                 queue_key=queue_key,
                 force=False,
-                statuses={"queued", "running", "succeeded", "skipped", "failed_retryable", "failed_final"},
+                statuses={
+                    "queued",
+                    "running",
+                    "succeeded",
+                    "skipped",
+                    "failed_retryable",
+                    "failed_final",
+                },
             )
             if existing is not None:
                 return _enqueue_result(
@@ -467,7 +503,13 @@ class ZoteroMetadataProcessor:
                 parent_version=metadata.version,
                 queue_key=queue_key,
                 force=False,
-                statuses={"queued", "running", "succeeded", "failed_retryable", "failed_final"},
+                statuses={
+                    "queued",
+                    "running",
+                    "succeeded",
+                    "failed_retryable",
+                    "failed_final",
+                },
             )
             if existing is not None:
                 return _enqueue_item_result(
@@ -521,7 +563,13 @@ class ZoteroMetadataProcessor:
                 parent_version=metadata.version,
                 queue_key=queue_key,
                 force=False,
-                statuses={"queued", "running", "succeeded", "failed_retryable", "failed_final"},
+                statuses={
+                    "queued",
+                    "running",
+                    "succeeded",
+                    "failed_retryable",
+                    "failed_final",
+                },
             )
             if existing is not None:
                 return {
@@ -568,7 +616,7 @@ class ZoteroMetadataProcessor:
         if researchgate_enqueue is not None:
             return None
         inventory = payload.get("existing_full_text_inventory")
-        if isinstance(inventory, dict) and inventory.get("has_pdf"):
+        if isinstance(inventory, dict) and inventory.get("has_pdf") is True:
             return None
         if _first_successful_pdf_download(payload.get("pdf_downloads")) is not None:
             return None
@@ -579,7 +627,10 @@ class ZoteroMetadataProcessor:
             force=False,
         )
         if not result.get("queued") and not result.get("jobs"):
-            return {"classification": result["classification"], "reason": result.get("message")}
+            return {
+                "classification": result["classification"],
+                "reason": result.get("message"),
+            }
         return result
 
     def _enqueue_scihub_pdf_jobs_for_item(
@@ -592,12 +643,17 @@ class ZoteroMetadataProcessor:
     ) -> dict[str, Any]:
         candidates = _scihub_query_candidates(metadata)
         if not candidates:
-            return _enqueue_item_result(
-                metadata,
-                "missing_identifier",
-                message="No DOI, PMID, PMCID, arXiv id, or URL is available for Sci-Hub lookup.",
-                inventory=inventory,
-            )
+            return {
+                **_enqueue_item_result(
+                    metadata,
+                    "missing_identifier",
+                    message="No DOI, PMID, PMCID, arXiv id, or URL is available for Sci-Hub lookup.",
+                    inventory=inventory,
+                ),
+                "queued": 0,
+                "jobs": [],
+                "scihub_queries": [],
+            }
 
         enqueue = self._enqueue_scihub_pdf_query_job(
             metadata=metadata,
@@ -606,7 +662,11 @@ class ZoteroMetadataProcessor:
             force=force,
         )
         jobs = [enqueue] if enqueue is not None else []
-        queued = 1 if enqueue is not None and enqueue.get("classification") == "queued" else 0
+        queued = (
+            1
+            if enqueue is not None and enqueue.get("classification") == "queued"
+            else 0
+        )
 
         classification = "queued" if queued else "already_known"
         return _enqueue_item_result(
@@ -629,14 +689,7 @@ class ZoteroMetadataProcessor:
         reason: str,
         force: bool,
     ) -> dict[str, Any] | None:
-        candidates = [
-            {
-                "type": _normalize_identifier(str(candidate.get("type") or "")),
-                "query": _normalize_identifier(str(candidate.get("query") or "")),
-            }
-            for candidate in candidates
-        ]
-        candidates = [candidate for candidate in candidates if candidate["type"] and candidate["query"]]
+        candidates = _bounded_scihub_query_candidates(candidates)
         if not candidates:
             return None
 
@@ -654,7 +707,13 @@ class ZoteroMetadataProcessor:
                 parent_version=metadata.version,
                 queue_key=queue_key,
                 force=force,
-                statuses={"queued", "running", "succeeded", "failed_retryable", "failed_final"},
+                statuses={
+                    "queued",
+                    "running",
+                    "succeeded",
+                    "failed_retryable",
+                    "failed_final",
+                },
             )
             if existing is not None:
                 return {
@@ -691,11 +750,12 @@ class ZoteroMetadataProcessor:
         require_relay: bool,
         policy: str | None,
     ) -> dict[str, Any]:
+        safe_limit = _validated_metadata_drain_limit(limit)
         if dry_run:
             jobs = self.state.list_metadata_jobs(
                 job_type=job_type,
                 statuses={"queued"},
-                limit=max(limit, 1),
+                limit=safe_limit,
             )
             return {
                 "ok": True,
@@ -706,14 +766,22 @@ class ZoteroMetadataProcessor:
                 "jobs": jobs,
             }
 
-        if job_type == METADATA_JOB_ENRICH and require_relay and not self.config.zotero_relay_url:
+        if (
+            job_type == METADATA_JOB_ENRICH
+            and require_relay
+            and not self.config.zotero_relay_url
+        ):
             return {
                 "ok": False,
                 "error": "ZOTERO_RELAY_URL is required before metadata can be written back.",
                 "queue": self.state.metadata_queue_summary(job_type=job_type),
             }
 
-        if job_type == METADATA_JOB_ARXIV_HTML and require_relay and self.config.arxiv_html_attach:
+        if (
+            job_type == METADATA_JOB_ARXIV_HTML
+            and require_relay
+            and self.config.arxiv_html_attach
+        ):
             if not self.config.zotero_relay_url:
                 return {
                     "ok": False,
@@ -721,14 +789,33 @@ class ZoteroMetadataProcessor:
                     "queue": self.state.metadata_queue_summary(job_type=job_type),
                 }
 
-        if job_type == METADATA_JOB_RESEARCHGATE_PDF and require_relay and not self.config.zotero_relay_url:
+        if (
+            job_type == METADATA_JOB_FULL_TEXT
+            and require_relay
+            and not getattr(self.config, "zotero_relay_url", "")
+        ):
+            return {
+                "ok": False,
+                "error": "ZOTERO_RELAY_URL is required before full text can be attached.",
+                "queue": self.state.metadata_queue_summary(job_type=job_type),
+            }
+
+        if (
+            job_type == METADATA_JOB_RESEARCHGATE_PDF
+            and require_relay
+            and not self.config.zotero_relay_url
+        ):
             return {
                 "ok": False,
                 "error": "ZOTERO_RELAY_URL is required before ResearchGate PDFs can be attached.",
                 "queue": self.state.metadata_queue_summary(job_type=job_type),
             }
 
-        if job_type == METADATA_JOB_SCIHUB_PDF and require_relay and not self.config.zotero_relay_url:
+        if (
+            job_type == METADATA_JOB_SCIHUB_PDF
+            and require_relay
+            and not self.config.zotero_relay_url
+        ):
             return {
                 "ok": False,
                 "error": "ZOTERO_RELAY_URL is required before Sci-Hub PDFs can be attached.",
@@ -740,9 +827,11 @@ class ZoteroMetadataProcessor:
         results: list[dict[str, Any]] = []
         recovered = self.state.recover_expired_metadata_jobs(job_type=job_type)
         owner = metadata_job_owner()
-        lease_seconds = max(int(getattr(self.config, "metadata_job_lease_seconds", 900)), 60)
-        effective_limit = limit if limit > 0 else None
-        workers = self._drain_worker_count(limit=effective_limit)
+        lease_seconds = max(
+            int(getattr(self.config, "metadata_job_lease_seconds", 900)), 60
+        )
+        effective_limit = safe_limit
+        workers = self._drain_worker_count(limit=safe_limit)
 
         if workers == 1:
             results = self._drain_leased_jobs_sequential(
@@ -836,7 +925,7 @@ class ZoteroMetadataProcessor:
             nonlocal leased_slots
             processor = self._new_drain_worker_processor()
             local_results: list[dict[str, Any]] = []
-            worker_owner = f"{owner}-{worker_index + 1}"
+            worker_owner = f"{owner}:worker={worker_index + 1}:{os.getpid()}"
             while True:
                 if limit is not None:
                     with counter_lock:
@@ -877,37 +966,58 @@ class ZoteroMetadataProcessor:
         require_relay: bool,
         policy: str | None,
     ) -> dict[str, Any]:
+        raw_job_id = job.get("job_id")
+        job_id = raw_job_id.strip() if isinstance(raw_job_id, str) else ""
         owner = _metadata_job_lease_owner(job)
-        lease_seconds = max(int(getattr(self.config, "metadata_job_lease_seconds", 900)), 60)
-        if owner and not self.state.heartbeat_metadata_job(
-            job_id=str(job["job_id"]),
+        attempt = _metadata_job_attempt(job)
+        if not job_id or owner is None or attempt is None:
+            current = self.state.get_metadata_job(job_id) if job_id else None
+            current = current or {}
+            return {
+                "job_id": job_id,
+                "status": current.get("status", "invalid_lease"),
+                "invalid_lease": True,
+                "error": (
+                    "Metadata job requires exact nonempty job_id and lease_owner strings "
+                    "plus a positive integer attempt token."
+                ),
+                "job": current,
+            }
+
+        lease_seconds = max(
+            int(getattr(self.config, "metadata_job_lease_seconds", 900)), 60
+        )
+        if not self.state.heartbeat_metadata_job(
+            job_id=job_id,
             owner=owner,
             lease_seconds=lease_seconds,
+            attempt=attempt,
         ):
-            current = self.state.get_metadata_job(str(job["job_id"])) or {}
+            current = self.state.get_metadata_job(job_id) or {}
             return {
-                "job_id": str(job["job_id"]),
+                "job_id": job_id,
                 "status": current.get("status", "stale_lease"),
                 "stale_lease": True,
                 "job": current,
             }
 
-        heartbeat_stop: threading.Event | None = None
-        heartbeat_thread: threading.Thread | None = None
-        if owner:
-            heartbeat_stop = threading.Event()
-            heartbeat_thread = threading.Thread(
-                target=self._heartbeat_metadata_job_until_stopped,
-                kwargs={
-                    "job_id": str(job["job_id"]),
-                    "owner": owner,
-                    "lease_seconds": lease_seconds,
-                    "stop": heartbeat_stop,
-                },
-                name=f"metadata-heartbeat-{job['job_id']}",
-                daemon=True,
-            )
-            heartbeat_thread.start()
+        heartbeat_stop = threading.Event()
+        lease_lost = threading.Event()
+        self._active_metadata_lease_lost = lease_lost
+        heartbeat_thread = threading.Thread(
+            target=self._heartbeat_metadata_job_until_stopped,
+            kwargs={
+                "job_id": job_id,
+                "owner": owner,
+                "lease_seconds": lease_seconds,
+                "attempt": attempt,
+                "stop": heartbeat_stop,
+                "lease_lost": lease_lost,
+            },
+            name=f"metadata-heartbeat-{job_id}",
+            daemon=True,
+        )
+        heartbeat_thread.start()
         try:
             return self._dispatch_leased_metadata_job(
                 job_type=job_type,
@@ -916,10 +1026,9 @@ class ZoteroMetadataProcessor:
                 policy=policy,
             )
         finally:
-            if heartbeat_stop is not None:
-                heartbeat_stop.set()
-            if heartbeat_thread is not None:
-                heartbeat_thread.join(timeout=1.0)
+            heartbeat_stop.set()
+            heartbeat_thread.join(timeout=1.0)
+            self._active_metadata_lease_lost = None
 
     def _dispatch_leased_metadata_job(
         self,
@@ -957,19 +1066,35 @@ class ZoteroMetadataProcessor:
         owner: str,
         lease_seconds: int,
         stop: threading.Event,
+        lease_lost: threading.Event,
+        attempt: int | None = None,
     ) -> None:
         interval = self._metadata_job_heartbeat_interval_seconds(lease_seconds)
+        lease_deadline = time.monotonic() + max(1, lease_seconds)
         while not stop.wait(interval):
             try:
                 alive = self.state.heartbeat_metadata_job(
                     job_id=job_id,
                     owner=owner,
                     lease_seconds=lease_seconds,
+                    attempt=attempt,
                 )
             except Exception:
-                return
+                if time.monotonic() >= lease_deadline:
+                    lease_lost.set()
+                    return
+                continue
             if not alive:
+                lease_lost.set()
                 return
+            lease_deadline = time.monotonic() + max(1, lease_seconds)
+
+    def _ensure_metadata_job_lease_active(self) -> None:
+        lease_lost = getattr(self, "_active_metadata_lease_lost", None)
+        if lease_lost is not None and lease_lost.is_set():
+            raise _MetadataJobLeaseLost(
+                "Metadata job lease was lost before publication."
+            )
 
     @staticmethod
     def _metadata_job_heartbeat_interval_seconds(lease_seconds: int) -> float:
@@ -999,6 +1124,7 @@ class ZoteroMetadataProcessor:
         return self.state.mark_metadata_job_succeeded(
             **kwargs,
             owner=_metadata_job_lease_owner(job),
+            attempt=_metadata_job_attempt(job),
         )
 
     def _mark_metadata_job_skipped(
@@ -1009,6 +1135,7 @@ class ZoteroMetadataProcessor:
         return self.state.mark_metadata_job_skipped(
             **kwargs,
             owner=_metadata_job_lease_owner(job),
+            attempt=_metadata_job_attempt(job),
         )
 
     def _mark_metadata_job_failed(
@@ -1019,6 +1146,7 @@ class ZoteroMetadataProcessor:
         return self.state.mark_metadata_job_failed(
             **kwargs,
             owner=_metadata_job_lease_owner(job),
+            attempt=_metadata_job_attempt(job),
         )
 
     def _mark_metadata_job_failed_or_skipped_for_exception(
@@ -1028,6 +1156,18 @@ class ZoteroMetadataProcessor:
         exc: Exception,
         job: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
+        if isinstance(exc, _MetadataJobLeaseLost):
+            try:
+                current = self.state.get_metadata_job(job_id) or {}
+            except Exception:
+                current = {}
+            return {
+                "job_id": job_id,
+                "status": current.get("status", "stale_lease"),
+                "stale_lease": True,
+                "error": str(exc),
+                "job": current,
+            }
         reason = _nonactionable_metadata_exception_reason(exc)
         if reason:
             return self._mark_metadata_job_skipped(
@@ -1054,9 +1194,11 @@ class ZoteroMetadataProcessor:
         try:
             attachment = self._attachment_for_job(job)
             zotero = LocalZoteroStore(self._config_for_job(job))
-            attachment, metadata, parent_preflight = self._ensure_parent_metadata_context(
-                zotero=zotero,
-                attachment=attachment,
+            attachment, metadata, parent_preflight = (
+                self._ensure_parent_metadata_context(
+                    zotero=zotero,
+                    attachment=attachment,
+                )
             )
             if metadata is None:
                 return self._mark_metadata_job_skipped(
@@ -1071,7 +1213,9 @@ class ZoteroMetadataProcessor:
                 )
 
             self._provider_events = []
-            candidate = self._lookup_metadata_candidate(metadata=metadata, attachment=attachment)
+            candidate = self._lookup_metadata_candidate(
+                metadata=metadata, attachment=attachment
+            )
             if candidate is None:
                 return self._mark_metadata_job_skipped(
                     job,
@@ -1085,8 +1229,12 @@ class ZoteroMetadataProcessor:
                     },
                 )
 
-            diff = build_metadata_diff(candidate, current_fields=metadata.fields, policy=policy)
-            diff = filter_metadata_diff_for_item_type(diff, item_type=metadata.item_type)
+            diff = build_metadata_diff(
+                candidate, current_fields=metadata.fields, policy=policy
+            )
+            diff = filter_metadata_diff_for_item_type(
+                diff, item_type=metadata.item_type
+            )
             patch = diff["patch"]
             if not patch:
                 return self._mark_metadata_job_skipped(
@@ -1101,7 +1249,9 @@ class ZoteroMetadataProcessor:
                         "provider_events": list(self._provider_events),
                     },
                 )
-            if metadata.version is None and not getattr(self.config, "zotero_relay_url", ""):
+            if metadata.version is None and not getattr(
+                self.config, "zotero_relay_url", ""
+            ):
                 return self._mark_metadata_job_failed(
                     job,
                     job_id=job_id,
@@ -1111,6 +1261,7 @@ class ZoteroMetadataProcessor:
 
             relay_result: dict[str, Any] | None = None
             if self.config.zotero_relay_url:
+                self._ensure_metadata_job_lease_active()
                 relay_result = self._patch_parent_metadata_via_relay(
                     attachment=attachment,
                     metadata=metadata,
@@ -1118,9 +1269,41 @@ class ZoteroMetadataProcessor:
                     policy=policy,
                 )
             elif require_relay:
-                raise RuntimeError("ZOTERO_RELAY_URL is required before metadata can be written back.")
+                raise RuntimeError(
+                    "ZOTERO_RELAY_URL is required before metadata can be written back."
+                )
+            if relay_result is not None and (
+                not isinstance(relay_result, dict) or relay_result.get("ok") is not True
+            ):
+                relay_ok = (
+                    relay_result.get("ok") if isinstance(relay_result, dict) else None
+                )
+                reason = (
+                    "relay_metadata_patch_failed"
+                    if relay_ok is False
+                    else "relay_metadata_patch_invalid_result"
+                )
+                return self._mark_metadata_job_failed(
+                    job,
+                    job_id=job_id,
+                    message=(
+                        "Zotero relay metadata patch did not return exact success."
+                    ),
+                    retryable=True,
+                    result={
+                        "reason": reason,
+                        "candidate": candidate.to_dict(),
+                        "diff": diff,
+                        "patch": patch,
+                        "policy": policy,
+                        "parent_preflight": parent_preflight,
+                        "provider_events": list(self._provider_events),
+                        "relay": relay_result,
+                    },
+                    relay_result=relay_result,
+                )
             local_metadata: dict[str, Any] | None = None
-            if relay_result is not None and relay_result.get("ok"):
+            if relay_result is not None and relay_result.get("ok") is True:
                 if metadata.item_id <= 0:
                     local_metadata = {
                         "ok": True,
@@ -1141,6 +1324,40 @@ class ZoteroMetadataProcessor:
                             "error": str(exc),
                             "item_key": metadata.key,
                         }
+            if local_metadata is not None and (
+                not isinstance(local_metadata, dict)
+                or local_metadata.get("ok") is not True
+            ):
+                local_ok = (
+                    local_metadata.get("ok")
+                    if isinstance(local_metadata, dict)
+                    else None
+                )
+                reason = (
+                    "local_metadata_sync_failed"
+                    if local_ok is False
+                    else "local_metadata_sync_invalid_result"
+                )
+                return self._mark_metadata_job_failed(
+                    job,
+                    job_id=job_id,
+                    message=(
+                        "Local Zotero metadata sync did not return exact success."
+                    ),
+                    retryable=True,
+                    result={
+                        "reason": reason,
+                        "candidate": candidate.to_dict(),
+                        "diff": diff,
+                        "patch": patch,
+                        "policy": policy,
+                        "parent_preflight": parent_preflight,
+                        "provider_events": list(self._provider_events),
+                        "relay": relay_result,
+                        "local_metadata": local_metadata,
+                    },
+                    relay_result=relay_result,
+                )
 
             result = {
                 "attachment_key": attachment.key,
@@ -1170,7 +1387,11 @@ class ZoteroMetadataProcessor:
                     job,
                     job_id=job_id,
                     message=f"HTTP {exc.code} while enriching metadata: {body}",
-                    result={"reason": skip_reason, "http_status": exc.code, "body": body},
+                    result={
+                        "reason": skip_reason,
+                        "http_status": exc.code,
+                        "body": body,
+                    },
                 )
             return self._mark_metadata_job_failed(
                 job,
@@ -1196,9 +1417,13 @@ class ZoteroMetadataProcessor:
                 )
             attachment, metadata, inventory, source_path, context_kind = context
             output_dir = (
-                self._full_text_output_dir_for_item(metadata=metadata, source_path=source_path)
+                self._full_text_output_dir_for_item(
+                    metadata=metadata, source_path=source_path
+                )
                 if context_kind == "parent_item"
-                else self._full_text_output_dir(attachment=attachment, source_pdf=source_path)
+                else self._full_text_output_dir(
+                    attachment=attachment, source_pdf=source_path
+                )
             )
             arxiv_service = ArxivHtmlJobService(self.config)
             payload = full_text_discovery.FullTextDiscoveryOrchestrator(
@@ -1236,6 +1461,26 @@ class ZoteroMetadataProcessor:
             )
             if scihub_enqueue is not None:
                 payload["scihub_pdf_enqueue"] = scihub_enqueue
+            if attach_result is not None and attach_result.get("ok") is not True:
+                attachment_status = str(
+                    attach_result.get("status")
+                    or attach_result.get("reason")
+                    or "attachment_failed"
+                ).strip()
+                relay_result = attach_result.get("relay")
+                return self._mark_metadata_job_failed(
+                    job,
+                    job_id=job_id,
+                    message=(
+                        "Full-text discovery produced an unusable attachment "
+                        f"result: {attachment_status}."
+                    ),
+                    retryable=True,
+                    result=payload,
+                    relay_result=relay_result
+                    if isinstance(relay_result, dict)
+                    else None,
+                )
             return self._mark_metadata_job_succeeded(
                 job,
                 job_id=job_id,
@@ -1266,15 +1511,21 @@ class ZoteroMetadataProcessor:
                     message="ResearchGate PDF job has no URL.",
                     result={"reason": "missing_researchgate_url", "job": job},
                 )
-            item_key = str(job.get("parent_item_key") or job.get("attachment_key") or "").strip()
+            item_key = str(
+                job.get("parent_item_key") or job.get("attachment_key") or ""
+            ).strip()
             if not item_key:
                 return self._mark_metadata_job_skipped(
                     job,
                     job_id=job_id,
                     message="ResearchGate PDF job has no parent item key.",
-                    result={"reason": "missing_parent_item_key", "url": url, "job": job},
+                    result={
+                        "reason": "missing_parent_item_key",
+                        "url": url,
+                        "job": job,
+                    },
                 )
-            result = asyncio.run(
+            raw_result = asyncio.run(
                 download_and_attach_researchgate_pdf(
                     self.config,
                     ResearchGatePdfOptions(
@@ -1283,10 +1534,15 @@ class ZoteroMetadataProcessor:
                         data_dir=str(job.get("data_dir") or ""),
                         headless=True,
                         manual_timeout_seconds=0,
+                        ensure_active=self._ensure_metadata_job_lease_active,
                     ),
                 )
             )
-            if result.get("ok"):
+            result = _normalized_metadata_adapter_result(
+                raw_result,
+                adapter_name="ResearchGate",
+            )
+            if result.get("ok") is True:
                 download = result.get("download")
                 output_path = None
                 if isinstance(download, dict):
@@ -1297,13 +1553,20 @@ class ZoteroMetadataProcessor:
                     message=f"ResearchGate PDF job finished with status {result.get('status')}.",
                     result=result,
                     output_path=output_path,
-                    relay_result=result.get("attach") if isinstance(result.get("attach"), dict) else None,
+                    relay_result=result.get("attach")
+                    if isinstance(result.get("attach"), dict)
+                    else None,
                 )
             return self._mark_metadata_job_failed(
                 job,
                 job_id=job_id,
-                message=str(result.get("error") or result.get("status") or "ResearchGate PDF download failed."),
+                message=str(
+                    result.get("error")
+                    or result.get("status")
+                    or "ResearchGate PDF download failed."
+                ),
                 retryable=_researchgate_result_retryable(result),
+                result=result,
             )
         except Exception as exc:
             return self._mark_metadata_job_failed_or_skipped_for_exception(
@@ -1318,8 +1581,15 @@ class ZoteroMetadataProcessor:
             # does not fan out into duplicate fallback tasks.
             queries = _scihub_queries_from_job(job)
             if not queries:
-                queries = [{"type": _scihub_query_type_from_job(job), "query": _scihub_query_from_job(job)}]
-            item_key = str(job.get("parent_item_key") or job.get("attachment_key") or "").strip()
+                queries = [
+                    {
+                        "type": _scihub_query_type_from_job(job),
+                        "query": _scihub_query_from_job(job),
+                    }
+                ]
+            item_key = str(
+                job.get("parent_item_key") or job.get("attachment_key") or ""
+            ).strip()
             if not item_key:
                 return self._mark_metadata_job_skipped(
                     job,
@@ -1335,7 +1605,9 @@ class ZoteroMetadataProcessor:
             attempts: list[dict[str, Any]] = []
             for candidate in queries:
                 query = _normalize_identifier(str(candidate.get("query") or ""))
-                query_type = _normalize_identifier(str(candidate.get("type") or "")) or "doi"
+                query_type = (
+                    _normalize_identifier(str(candidate.get("type") or "")) or "doi"
+                )
                 # The query may be a DOI, PMID, PMCID, URL, or other identifier.
                 # When it is absent the adapter derives the best DOI from metadata.
                 result = download_and_attach_scihub_pdf(
@@ -1346,23 +1618,31 @@ class ZoteroMetadataProcessor:
                         data_dir=str(job.get("data_dir") or ""),
                         # Download under the shared OCR data root so the file is
                         # visible to zotero-file-relay (see shared_relay_path).
-                        output_dir=Path(self.config.ingest_data_root) / "scihub_downloads",
+                        output_dir=Path(self.config.ingest_data_root)
+                        / "scihub_downloads",
                         mirrors=tuple(self.config.scihub_mirrors),
                         user_agent=self.config.scihub_user_agent,
                         timeout_seconds=self.config.scihub_request_timeout_seconds,
-                        force_attach=bool(job.get("force")),
+                        force_attach=_sqlite_bool(job.get("force")),
+                        ensure_active=self._ensure_metadata_job_lease_active,
                     ),
+                )
+                result = _normalized_metadata_adapter_result(
+                    result,
+                    adapter_name="Sci-Hub",
                 )
                 result["query"] = query
                 result["query_type"] = query_type
                 attempts.append(dict(result))
-                if result.get("ok"):
+                if result.get("ok") is True:
                     success_result = dict(result)
                     success_result["attempts"] = attempts
                     download = result.get("download")
                     output_path = None
                     if isinstance(download, dict):
-                        output_path = str(download.get("output_path") or "").strip() or None
+                        output_path = (
+                            str(download.get("output_path") or "").strip() or None
+                        )
                     return self._mark_metadata_job_succeeded(
                         job,
                         job_id=job_id,
@@ -1374,7 +1654,11 @@ class ZoteroMetadataProcessor:
                         else None,
                     )
 
-            result = dict(attempts[-1]) if attempts else {"ok": False, "status": "missing_query"}
+            result = (
+                dict(attempts[-1])
+                if attempts
+                else {"ok": False, "status": "missing_query"}
+            )
             result["ok"] = False
             result["attempts"] = attempts
             retryable = any(_scihub_result_retryable(attempt) for attempt in attempts)
@@ -1402,15 +1686,22 @@ class ZoteroMetadataProcessor:
             return self._mark_metadata_job_failed(
                 job,
                 job_id=job_id,
-                message=str(result.get("error") or result.get("status") or "Sci-Hub PDF download failed."),
+                message=str(
+                    result.get("error")
+                    or result.get("status")
+                    or "Sci-Hub PDF download failed."
+                ),
                 retryable=retryable,
+                result=result,
             )
         except Exception as exc:
             return self._mark_metadata_job_failed_or_skipped_for_exception(
                 job_id=job_id, exc=exc, job=job
             )
 
-    def _drain_arxiv_html_job(self, job: dict[str, Any], *, require_relay: bool) -> dict[str, Any]:
+    def _drain_arxiv_html_job(
+        self, job: dict[str, Any], *, require_relay: bool
+    ) -> dict[str, Any]:
         job_id = str(job["job_id"])
         try:
             attachment = self._attachment_for_job(job)
@@ -1418,9 +1709,11 @@ class ZoteroMetadataProcessor:
             metadata = zotero.get_parent_metadata_for_attachment(attachment)
             parent_preflight: dict[str, Any] | None = None
             if metadata is None and self.config.arxiv_html_attach:
-                attachment, metadata, parent_preflight = self._ensure_parent_metadata_context(
-                    zotero=zotero,
-                    attachment=attachment,
+                attachment, metadata, parent_preflight = (
+                    self._ensure_parent_metadata_context(
+                        zotero=zotero,
+                        attachment=attachment,
+                    )
                 )
             if metadata is None and self.config.arxiv_html_attach:
                 return self._mark_metadata_job_skipped(
@@ -1434,7 +1727,9 @@ class ZoteroMetadataProcessor:
                     },
                 )
             arxiv_service = ArxivHtmlJobService(self.config)
-            candidate = arxiv_service.lookup_candidate(metadata=metadata, attachment=attachment)
+            candidate = arxiv_service.lookup_candidate(
+                metadata=metadata, attachment=attachment
+            )
             if candidate is None:
                 return self._mark_metadata_job_skipped(
                     job,
@@ -1457,10 +1752,14 @@ class ZoteroMetadataProcessor:
                         job,
                         job_id=job_id,
                         message=f"arXiv has no HTML endpoint for {arxiv_id}.",
-                        result={"reason": "arxiv_html_404", "candidate": candidate.to_dict()},
+                        result={
+                            "reason": "arxiv_html_404",
+                            "candidate": candidate.to_dict(),
+                        },
                     )
                 raise
 
+            self._ensure_metadata_job_lease_active()
             output_path = arxiv_service.write_html_file(
                 attachment=attachment,
                 source_pdf=Path(str(job.get("source_path") or attachment.file_path)),
@@ -1470,7 +1769,9 @@ class ZoteroMetadataProcessor:
             relay_result: dict[str, Any] | None = None
             if self.config.arxiv_html_attach:
                 if metadata is None:
-                    raise RuntimeError("Parent metadata disappeared before arXiv HTML attach.")
+                    raise RuntimeError(
+                        "Parent metadata disappeared before arXiv HTML attach."
+                    )
                 if self.config.zotero_relay_url:
                     filename = arxiv_html_filename(attachment.filename)
                     existing = self._existing_html_sibling_by_filename(
@@ -1486,6 +1787,7 @@ class ZoteroMetadataProcessor:
                             "filename": existing.filename,
                         }
                     else:
+                        self._ensure_metadata_job_lease_active()
                         relay_result = self._create_html_sibling_via_relay(
                             attachment=attachment,
                             source_path=output_path,
@@ -1512,7 +1814,9 @@ class ZoteroMetadataProcessor:
                             "local_metadata": local_metadata,
                         }
                 elif require_relay:
-                    raise RuntimeError("ZOTERO_RELAY_URL is required before arXiv HTML can be attached.")
+                    raise RuntimeError(
+                        "ZOTERO_RELAY_URL is required before arXiv HTML can be attached."
+                    )
 
             result = {
                 "attachment_key": attachment.key,
@@ -1567,9 +1871,13 @@ class ZoteroMetadataProcessor:
         return candidate
 
     def _metadata_enricher(self) -> MetadataEnricher:
-        return MetadataEnricher(EnricherConfig(**metadata_enricher_config_kwargs(self.config)))
+        return MetadataEnricher(
+            EnricherConfig(**metadata_enricher_config_kwargs(self.config))
+        )
 
-    def _full_text_output_dir(self, *, attachment: LocalAttachment, source_pdf: Path) -> Path:
+    def _full_text_output_dir(
+        self, *, attachment: LocalAttachment, source_pdf: Path
+    ) -> Path:
         source = source_pdf if source_pdf.exists() else attachment.file_path
         signature = FileSignature.from_path(source)
         stem = _safe_filename(Path(attachment.filename).stem or "article")
@@ -1607,26 +1915,34 @@ class ZoteroMetadataProcessor:
         zotero = LocalZoteroStore(self._config_for_job(job))
         parent_key = str(job.get("parent_item_key") or "").strip()
         attachment_key = str(job.get("attachment_key") or "").strip()
-        source_path = Path(str(job.get("source_path") or zotero.config.zotero_sqlite_path))
+        source_path = Path(
+            str(job.get("source_path") or zotero.config.zotero_sqlite_path)
+        )
 
         if parent_key and attachment_key == parent_key:
             try:
                 metadata = zotero.get_item_metadata(parent_key)
             except FileNotFoundError:
                 return None
-            attachment = self._synthetic_attachment_for_item(zotero=zotero, metadata=metadata)
+            attachment = self._synthetic_attachment_for_item(
+                zotero=zotero, metadata=metadata
+            )
             return (
                 attachment,
                 metadata,
                 zotero.item_full_text_inventory(metadata),
-                source_path if source_path.exists() else zotero.config.zotero_sqlite_path,
+                source_path
+                if source_path.exists()
+                else zotero.config.zotero_sqlite_path,
                 "parent_item",
             )
 
         attachment = self._attachment_for_job(job)
-        attachment, parent_metadata, _parent_preflight = self._ensure_parent_metadata_context(
-            zotero=zotero,
-            attachment=attachment,
+        attachment, parent_metadata, _parent_preflight = (
+            self._ensure_parent_metadata_context(
+                zotero=zotero,
+                attachment=attachment,
+            )
         )
         if parent_metadata is None:
             return None
@@ -1655,18 +1971,29 @@ class ZoteroMetadataProcessor:
         if not getattr(self.config, "zotero_parent_preflight_enabled", True):
             return attachment, None, {"ok": True, "skipped": True, "reason": "disabled"}
         if not getattr(self.config, "zotero_relay_url", ""):
-            return attachment, None, {"ok": True, "skipped": True, "reason": "relay_not_configured"}
+            return (
+                attachment,
+                None,
+                {"ok": True, "skipped": True, "reason": "relay_not_configured"},
+            )
 
+        self._ensure_metadata_job_lease_active()
         parent_preflight = self._ensure_parent_via_relay(attachment)
-        parent_key = str(parent_preflight.get("parentItemKey") or "").strip()
+        if parent_preflight.get("ok") is not True:
+            return attachment, None, parent_preflight
+        parent_key = _validated_zotero_attachment_key(
+            parent_preflight.get("parentItemKey")
+        )
         if not parent_key:
             return attachment, None, parent_preflight
         parent_preflight = self._sync_ensured_parent_locally(
             attachment=attachment,
             parent_preflight=parent_preflight,
         )
-        attachment = dataclass_replace(attachment, parent_key=parent_key)
         local_sync = parent_preflight.get("local_sync")
+        if not isinstance(local_sync, dict) or local_sync.get("ok") is not True:
+            return attachment, None, parent_preflight
+        attachment = dataclass_replace(attachment, parent_key=parent_key)
         if isinstance(local_sync, dict) and local_sync.get("parentItemId"):
             attachment = dataclass_replace(
                 attachment,
@@ -1716,7 +2043,11 @@ class ZoteroMetadataProcessor:
     ) -> LocalItemMetadata:
         parent_created = parent_preflight.get("parentCreated")
         parent_payload = parent_created if isinstance(parent_created, dict) else {}
-        title = str(parent_payload.get("title") or Path(attachment.filename).stem or "Untitled PDF")
+        title = str(
+            parent_payload.get("title")
+            or Path(attachment.filename).stem
+            or "Untitled PDF"
+        )
         return LocalItemMetadata(
             library_id=attachment.library_id,
             data_dir=attachment.data_dir,
@@ -1833,6 +2164,7 @@ class ZoteroMetadataProcessor:
             enqueue_pdf_for_html=self._enqueue_attached_pdf_for_html,
             enqueue_html_for_translation=self._enqueue_attached_html_for_translation,
             trash_source_html_attachment=self._trash_attachment_via_relay,
+            ensure_active=self._ensure_metadata_job_lease_active,
             allow_raw_html_fallback=bool(
                 getattr(self.config, "full_text_attach_raw_html_fallback", False)
             ),
@@ -1854,6 +2186,7 @@ class ZoteroMetadataProcessor:
         content_type: str,
         probe_attachment_key: str | None,
         dedupe_prefix: str,
+        source_sha256: str | None = None,
     ) -> dict[str, Any]:
         return ZoteroRelayClient(self.config).create_parent_attachment(
             metadata=metadata,
@@ -1863,6 +2196,7 @@ class ZoteroMetadataProcessor:
             content_type=content_type,
             probe_attachment_key=probe_attachment_key,
             dedupe_prefix=dedupe_prefix,
+            source_sha256=source_sha256,
         )
 
     def _trash_attachment_via_relay(
@@ -2014,20 +2348,20 @@ class ZoteroMetadataProcessor:
         filename: str,
         relay_result: dict[str, Any],
     ) -> dict[str, Any]:
-        sibling_key = str(
-            relay_result.get("siblingKey")
-            or relay_result.get("newAttachmentKey")
-            or ""
-        ).strip()
-        if not sibling_key:
-            raise RuntimeError("zotero-file-relay HTML sibling did not return siblingKey.")
-        target_dir = attachment.storage_dir / sibling_key
-        target_dir.mkdir(parents=True, exist_ok=True)
-        target_path = target_dir / Path(filename).name
-        temp_path = target_dir / f".{target_path.name}.html-tmp"
-        shutil.copy2(source_path, temp_path)
-        os.replace(temp_path, target_path)
-        return {"ok": True, "siblingKey": sibling_key, "path": str(target_path)}
+        if relay_result.get("ok") is not True:
+            raise RuntimeError(
+                "zotero-file-relay HTML sibling did not report exact success."
+            )
+        local_copy = write_parent_attachment_local_copy(
+            attachment=attachment,
+            source_path=source_path,
+            filename=filename,
+            relay_result=relay_result,
+        )
+        return {
+            **local_copy,
+            "siblingKey": local_copy["attachmentKey"],
+        }
 
     def _sync_html_sibling_local_metadata(
         self,
@@ -2075,9 +2409,8 @@ class ZoteroMetadataProcessor:
         if not source_path.exists():
             return attachment
         signature = FileSignature.from_path(source_path)
-        if (
-            signature.size == int(job["source_size"])
-            and signature.mtime_ns == int(job["source_mtime_ns"])
+        if signature.size == int(job["source_size"]) and signature.mtime_ns == int(
+            job["source_mtime_ns"]
         ):
             return dataclass_replace(attachment, file_path=source_path)
         return attachment
@@ -2115,7 +2448,9 @@ class ZoteroMetadataProcessor:
         library_id: str | None = None,
         data_dir: str | None = None,
     ) -> list[WorkerConfig]:
-        translated_data_dir = self.config.translate_zotero_input_path(data_dir) if data_dir else None
+        translated_data_dir = (
+            self.config.translate_zotero_input_path(data_dir) if data_dir else None
+        )
         configs: list[WorkerConfig] = []
         for candidate_data_dir in self.config.zotero_data_dirs:
             library_config = dataclass_replace(
@@ -2127,7 +2462,10 @@ class ZoteroMetadataProcessor:
             zotero = LocalZoteroStore(library_config)
             if library_id and zotero.library_id != library_id:
                 continue
-            if translated_data_dir and candidate_data_dir.resolve() != translated_data_dir.resolve():
+            if (
+                translated_data_dir
+                and candidate_data_dir.resolve() != translated_data_dir.resolve()
+            ):
                 continue
             configs.append(library_config)
         return configs
@@ -2171,15 +2509,105 @@ def _enrichment_attachment(attachment: LocalAttachment) -> EnrichmentLocalAttach
 
 
 def _relay_result_with_attachment_key(relay_result: dict[str, Any]) -> dict[str, Any]:
-    attachment_key = str(
-        relay_result.get("newAttachmentKey")
-        or relay_result.get("attachmentKey")
-        or relay_result.get("siblingKey")
-        or ""
-    ).strip()
+    attachment_key = _relay_attachment_key(relay_result)
     if not attachment_key:
         return relay_result
     return {**relay_result, "newAttachmentKey": attachment_key}
+
+
+def _source_html_cleanup_limit(
+    *,
+    max_items: object,
+    limit: object,
+) -> int:
+    for field, value in (("max_items", max_items), ("limit", limit)):
+        if value is None:
+            continue
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ValueError(f"{field} must be a JSON integer.")
+        if not 0 <= value <= MAX_OPERATION_ITEMS:
+            raise ValueError(f"{field} must be between 0 and {MAX_OPERATION_ITEMS}.")
+    if max_items is not None:
+        return cast(int, max_items)
+    if limit is not None:
+        return cast(int, limit)
+    return 10_000
+
+
+def _validated_metadata_drain_limit(value: object) -> int:
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise ValueError("limit must be a JSON integer.")
+    if not 1 <= value <= MAX_FULL_RUN_DRAIN_ITEMS:
+        raise ValueError(f"limit must be between 1 and {MAX_FULL_RUN_DRAIN_ITEMS}.")
+    return value
+
+
+def _sqlite_bool(value: object) -> bool:
+    return value is True or (type(value) is int and value == 1)
+
+
+def _validated_source_html_cleanup_result(
+    value: object,
+) -> tuple[dict[str, Any], tuple[int, int, int] | None]:
+    if not isinstance(value, dict):
+        return (
+            _invalid_source_html_cleanup_result(
+                value,
+                error=f"expected mapping, got {type(value).__name__}",
+            ),
+            None,
+        )
+    if not isinstance(value.get("ok"), bool):
+        return (
+            _invalid_source_html_cleanup_result(
+                value,
+                error="ok must be a JSON boolean",
+            ),
+            None,
+        )
+
+    counts: dict[str, int] = {}
+    for field in ("scanned", "affected_parents", "candidate_count"):
+        raw_count = value.get(field)
+        if (
+            not isinstance(raw_count, int)
+            or isinstance(raw_count, bool)
+            or raw_count < 0
+        ):
+            return (
+                _invalid_source_html_cleanup_result(
+                    value,
+                    error=f"{field} must be a nonnegative JSON integer",
+                ),
+                None,
+            )
+        counts[field] = raw_count
+
+    scanned = counts["scanned"]
+    affected = counts["affected_parents"]
+    candidates = counts["candidate_count"]
+    if affected > scanned or affected > candidates:
+        return (
+            _invalid_source_html_cleanup_result(
+                value,
+                error="cleanup counters violate aggregate invariants",
+            ),
+            None,
+        )
+    return value, (scanned, affected, candidates)
+
+
+def _invalid_source_html_cleanup_result(value: object, *, error: str) -> dict[str, Any]:
+    result: dict[str, Any] = {
+        "ok": False,
+        "mode": "source_html_cleanup",
+        "reason": "invalid_source_html_cleanup_result",
+        "error": error,
+        "result_type": type(value).__name__,
+    }
+    if isinstance(value, dict) and isinstance(value.get("library_id"), str):
+        result["library_id"] = value["library_id"]
+    return result
 
 
 def _optional_int(value: object) -> int | None:
@@ -2214,14 +2642,56 @@ def _nonactionable_metadata_http_error_reason(code: int, body: str) -> str | Non
     return None
 
 
+def _normalized_metadata_adapter_result(
+    value: object,
+    *,
+    adapter_name: str,
+) -> dict[str, Any]:
+    if not isinstance(value, dict):
+        return {
+            "ok": False,
+            "status": "invalid_result",
+            "error": f"{adapter_name} returned {type(value).__name__}; expected mapping.",
+            "result_type": type(value).__name__,
+        }
+    result = dict(value)
+    upstream_ok = result.get("ok")
+    if isinstance(upstream_ok, bool):
+        return result
+    return {
+        **result,
+        "ok": False,
+        "status": "invalid_result",
+        "error": f"{adapter_name} result ok must be a JSON boolean.",
+        "upstream_ok": upstream_ok,
+        "upstream_status": result.get("status"),
+    }
+
+
 def _metadata_job_attempts_exhausted(job: dict[str, Any]) -> bool:
-    try:
-        attempts = int(job.get("attempts") or 0)
-        max_attempts = int(job.get("max_attempts") or 0)
-    except (TypeError, ValueError):
+    attempts = job.get("attempts")
+    max_attempts = job.get("max_attempts")
+    if (
+        not isinstance(attempts, int)
+        or isinstance(attempts, bool)
+        or attempts < 0
+        or not isinstance(max_attempts, int)
+        or isinstance(max_attempts, bool)
+        or max_attempts < 0
+    ):
         return False
     return max_attempts > 0 and attempts >= max_attempts
 
 
 def _metadata_job_lease_owner(job: dict[str, Any] | None) -> str | None:
-    return str((job or {}).get("lease_owner") or "").strip() or None
+    owner = (job or {}).get("lease_owner")
+    if not isinstance(owner, str):
+        return None
+    return owner.strip() or None
+
+
+def _metadata_job_attempt(job: dict[str, Any] | None) -> int | None:
+    attempt = (job or {}).get("attempts")
+    if isinstance(attempt, bool) or not isinstance(attempt, int):
+        return None
+    return attempt if attempt > 0 else None

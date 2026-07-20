@@ -9,6 +9,15 @@ from typing import Any
 
 from .models import ArxivCandidate, ArxivHtmlArtifact, LocalAttachment
 
+_WINDOWS_RESERVED_FILENAME_STEMS = frozenset(
+    {"CON", "PRN", "AUX", "NUL", "CLOCK$", "CONIN$", "CONOUT$"}
+    | {
+        f"{prefix}{suffix}"
+        for prefix in ("COM", "LPT")
+        for suffix in (*map(str, range(1, 10)), "\u00b9", "\u00b2", "\u00b3")
+    }
+)
+
 
 def write_arxiv_html_artifact(
     *,
@@ -21,7 +30,9 @@ def write_arxiv_html_artifact(
 ) -> ArxivHtmlArtifact:
     source = source_pdf or attachment.file_path
     signature = file_signature(source)
-    stem = safe_filename(Path(attachment.filename).stem or candidate.arxiv_id or "article")
+    stem = safe_filename(
+        Path(attachment.filename).stem or candidate.arxiv_id or "article"
+    )
     target_dir = root / attachment.library_id / attachment.key / signature / stem
     target_dir.mkdir(parents=True, exist_ok=True)
     output_path = target_dir / arxiv_html_filename(attachment.filename)
@@ -40,7 +51,9 @@ def write_arxiv_html_artifact(
         "created_at": datetime.now(UTC).isoformat(),
     }
     manifest_path = target_dir / "manifest.json"
-    manifest_path.write_text(json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8")
+    manifest_path.write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2), encoding="utf-8"
+    )
     return ArxivHtmlArtifact(
         path=output_path,
         manifest_path=manifest_path,
@@ -63,7 +76,9 @@ def copy_relay_sibling_local(
     filename: str,
     relay_result: dict[str, Any],
 ) -> dict[str, Any]:
-    sibling_key = str(relay_result.get("siblingKey") or relay_result.get("newAttachmentKey") or "").strip()
+    sibling_key = str(
+        relay_result.get("siblingKey") or relay_result.get("newAttachmentKey") or ""
+    ).strip()
     if not sibling_key:
         raise RuntimeError("Relay result did not include siblingKey.")
     target_dir = attachment.storage_dir / sibling_key
@@ -82,6 +97,9 @@ def file_signature(path: Path) -> str:
 
 def safe_filename(value: str) -> str:
     value = re.sub(r"[<>:\"/\\|?*\x00-\x1f]+", "_", str(value or "document"))
-    value = re.sub(r"\s+", " ", value).strip(" .")
-    return value[:160] or "document"
-
+    value = re.sub(r"\s+", " ", value).strip(" .") or "document"
+    candidate = value[:160].rstrip(" .") or "document"
+    stem = candidate.split(".", 1)[0].rstrip(" .").upper()
+    if stem in _WINDOWS_RESERVED_FILENAME_STEMS:
+        candidate = f"_{candidate}"[:160].rstrip(" .")
+    return candidate or "_"

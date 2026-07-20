@@ -26,7 +26,8 @@ from .full_text_article import (
     arxiv_abs_ids_from_html_downloads,
 )
 from .full_text_attachment import _best_successful_html_download
-from .full_text_inventory import pdf_download_limit
+from .filename_safety import safe_filename_component
+from .full_text_inventory import inventory_has_pdf, pdf_download_limit
 from .local_zotero import LocalAttachment, LocalItemMetadata
 
 
@@ -75,7 +76,9 @@ class FullTextDiscoveryOrchestrator:
         )
         raw_payload = result.to_dict()
         if not isinstance(raw_payload, dict):
-            raise TypeError("Full-text discovery result must serialize to a dictionary.")
+            raise TypeError(
+                "Full-text discovery result must serialize to a dictionary."
+            )
         payload: dict[str, Any] = raw_payload
         self._append_arxiv_html_candidates_from_abs_landings(
             payload=payload,
@@ -92,7 +95,9 @@ class FullTextDiscoveryOrchestrator:
         )
         payload["source_context"] = source_context
         payload["existing_full_text_inventory"] = inventory
-        payload["browser_fallbacks"] = researchgate_browser_fallbacks(payload, inventory=inventory)
+        payload["browser_fallbacks"] = researchgate_browser_fallbacks(
+            payload, inventory=inventory
+        )
         standardize_accepted_html_downloads(
             payload,
             metadata=metadata,
@@ -118,15 +123,14 @@ class FullTextDiscoveryOrchestrator:
         if _best_successful_html_download(downloads) is not None:
             return
 
-        existing_urls = {
-            str(item.get("url") or "").strip()
-            for item in downloads
-            if isinstance(item, dict)
-        } | {
-            str(item.get("final_url") or "").strip()
-            for item in downloads
-            if isinstance(item, dict)
-        }
+        existing_urls: set[str] = set()
+        for item in downloads:
+            if not isinstance(item, dict):
+                continue
+            for key in ("url", "final_url"):
+                existing_url = _nonempty_string(item.get(key))
+                if existing_url is not None:
+                    existing_urls.add(existing_url)
         for arxiv_id in arxiv_abs_ids_from_html_downloads(downloads):
             url = f"https://arxiv.org/html/{urllib.parse.quote(arxiv_id, safe='/')}"
             if url in existing_urls:
@@ -139,14 +143,16 @@ class FullTextDiscoveryOrchestrator:
                     expected_title=metadata.title,
                     profile="arxiv",
                 ).to_dict()
-                if not article.get("ok"):
+                if article.get("ok") is not True:
                     downloads.append(
                         {
                             "source": "arxiv",
                             "url": url,
                             "kind": "html",
                             "ok": False,
-                            "status": str(article.get("reason") or "article_validator_rejected"),
+                            "status": str(
+                                article.get("reason") or "article_validator_rejected"
+                            ),
                             "final_url": url,
                             "content_type": "text/html; charset=utf-8",
                             "size": len(body),
@@ -157,7 +163,9 @@ class FullTextDiscoveryOrchestrator:
                     continue
                 html_dir = output_dir / "html"
                 html_dir.mkdir(parents=True, exist_ok=True)
-                output_path = _arxiv_rescue_html_path(html_dir, arxiv_id, index=len(downloads) + 1)
+                output_path = _arxiv_rescue_html_path(
+                    html_dir, arxiv_id, index=len(downloads) + 1
+                )
                 assets = package_write_html_snapshot(
                     body,
                     base_url=url,
@@ -221,7 +229,7 @@ class FullTextDiscoveryOrchestrator:
             return
         if _best_successful_html_download(payload.get("html_downloads")) is not None:
             return
-        if inventory.get("has_pdf"):
+        if inventory_has_pdf(inventory):
             return
         if discovery is None or not hasattr(discovery, "locations"):
             return
@@ -292,7 +300,7 @@ def standardize_accepted_html_downloads(
             source_context=source_context,
         )
         item["standard_package"] = package
-        if package.get("ok"):
+        if package.get("ok") is True:
             item["standard_article_html_path"] = package.get("article_html_path")
         standardized.append(package)
     payload["article_standard"] = {
@@ -319,8 +327,12 @@ def researchgate_browser_fallbacks(
     *,
     inventory: dict[str, object] | None = None,
 ) -> list[dict[str, Any]]:
-    inventory = inventory if isinstance(inventory, dict) else payload.get("existing_full_text_inventory")
-    if isinstance(inventory, dict) and inventory.get("has_pdf"):
+    inventory = (
+        inventory
+        if isinstance(inventory, dict)
+        else payload.get("existing_full_text_inventory")
+    )
+    if isinstance(inventory, dict) and inventory_has_pdf(inventory):
         return []
     if _successful_pdf_downloads(payload):
         return []
@@ -328,16 +340,20 @@ def researchgate_browser_fallbacks(
     fallbacks: list[dict[str, Any]] = []
     seen: set[str] = set()
 
-    def add(*, source: str, url: str, kind: str) -> None:
-        url = str(url or "").strip()
-        if not url or url in seen or not _is_researchgate_url(url):
+    def add(*, source: object, url: object, kind: object) -> None:
+        normalized_url = _nonempty_string(url)
+        if (
+            normalized_url is None
+            or normalized_url in seen
+            or not _is_researchgate_url(normalized_url)
+        ):
             return
-        seen.add(url)
+        seen.add(normalized_url)
         fallbacks.append(
             {
-                "source": source or "researchgate",
-                "url": url,
-                "kind": kind or "landing",
+                "source": _nonempty_string(source) or "researchgate",
+                "url": normalized_url,
+                "kind": _nonempty_string(kind) or "landing",
                 "status": "browser_pdf_fallback_available",
                 "reason": "researchgate_requires_browser",
             }
@@ -350,9 +366,9 @@ def researchgate_browser_fallbacks(
             if not isinstance(item, dict):
                 continue
             add(
-                source=str(item.get("source") or "researchgate"),
-                url=str(item.get("url") or ""),
-                kind=str(item.get("kind") or "landing"),
+                source=item.get("source"),
+                url=item.get("url"),
+                kind=item.get("kind"),
             )
 
     for download_key in ("html_downloads", "pdf_downloads"):
@@ -362,10 +378,10 @@ def researchgate_browser_fallbacks(
         for item in downloads:
             if not isinstance(item, dict):
                 continue
-            source = str(item.get("source") or "researchgate")
-            kind = str(item.get("kind") or "landing")
-            add(source=source, url=str(item.get("url") or ""), kind=kind)
-            add(source=source, url=str(item.get("final_url") or ""), kind=kind)
+            source = item.get("source")
+            kind = item.get("kind")
+            add(source=source, url=item.get("url"), kind=kind)
+            add(source=source, url=item.get("final_url"), kind=kind)
 
     return fallbacks
 
@@ -376,26 +392,28 @@ def _first_full_text_output_path_from_summary(
     accepted_html: tuple[dict[str, Any], ...],
     successful_pdf: tuple[dict[str, Any], ...],
 ) -> str | None:
-    relay_source = (payload.get("relay_attachment") or {}).get("source")
-    if isinstance(relay_source, dict):
-        output_path = str(relay_source.get("output_path") or "").strip()
-        if output_path:
-            return output_path
+    relay_attachment = payload.get("relay_attachment")
+    if isinstance(relay_attachment, dict):
+        relay_source = relay_attachment.get("source")
+        if isinstance(relay_source, dict):
+            output_path = _nonempty_string(relay_source.get("output_path"))
+            if output_path is not None:
+                return output_path
     html = _best_successful_html_download(list(accepted_html))
     if html is not None:
-        output_path = str(html.get("output_path") or "").strip()
-        if output_path:
+        output_path = _nonempty_string(html.get("output_path"))
+        if output_path is not None:
             return output_path
     for item in successful_pdf:
-        output_path = str(item.get("output_path") or "").strip()
-        if output_path:
+        output_path = _nonempty_string(item.get("output_path"))
+        if output_path is not None:
             return output_path
     existing_pdf_enqueue = payload.get("existing_pdf_enqueue")
     if isinstance(existing_pdf_enqueue, dict):
         attachment = existing_pdf_enqueue.get("attachment")
         if isinstance(attachment, dict):
-            file_path = str(attachment.get("file_path") or "").strip()
-            if file_path:
+            file_path = _nonempty_string(attachment.get("file_path"))
+            if file_path is not None:
                 return file_path
     return None
 
@@ -426,7 +444,8 @@ def _full_text_worker_status_from_summary(
         return "browser_pdf_fallback_available"
     if rejected_html:
         return "html_rejected"
-    return str(payload.get("status") or "unresolved")
+    status = _nonempty_string(payload.get("status"))
+    return status or "unresolved"
 
 
 def _existing_pdf_enqueue_status(payload: dict[str, Any]) -> str | None:
@@ -434,21 +453,34 @@ def _existing_pdf_enqueue_status(payload: dict[str, Any]) -> str | None:
     if not isinstance(existing_pdf_enqueue, dict):
         return None
     if existing_pdf_enqueue.get("ok") is False:
-        return str(existing_pdf_enqueue.get("status") or "existing_pdf_missing")
+        return (
+            _nonempty_string(existing_pdf_enqueue.get("status"))
+            or "existing_pdf_missing"
+        )
+    if existing_pdf_enqueue.get("ok") is not True:
+        return None
     ocr_enqueue = existing_pdf_enqueue.get("ocr_enqueue")
     if isinstance(ocr_enqueue, dict):
         ocr_job = ocr_enqueue.get("job")
-        if isinstance(ocr_job, dict) and ocr_job.get("job_id"):
+        if isinstance(ocr_job, dict) and _nonempty_string(ocr_job.get("job_id")):
             return "existing_pdf_ocr_queued"
         classification = _safe_status_suffix(ocr_enqueue.get("classification"))
-        return f"existing_pdf_ocr_{classification}" if classification else "existing_pdf_ocr_not_queued"
+        return (
+            f"existing_pdf_ocr_{classification}"
+            if classification
+            else "existing_pdf_ocr_not_queued"
+        )
     html_enqueue = existing_pdf_enqueue.get("html_enqueue")
     if isinstance(html_enqueue, dict):
         html_job = html_enqueue.get("job")
-        if isinstance(html_job, dict) and html_job.get("job_id"):
+        if isinstance(html_job, dict) and _nonempty_string(html_job.get("job_id")):
             return "existing_pdf_html_queued"
         classification = _safe_status_suffix(html_enqueue.get("classification"))
-        return f"existing_pdf_html_{classification}" if classification else "existing_pdf_html_not_queued"
+        return (
+            f"existing_pdf_html_{classification}"
+            if classification
+            else "existing_pdf_html_not_queued"
+        )
     return None
 
 
@@ -458,10 +490,11 @@ def _accepted_html_downloads(payload: dict[str, Any]) -> list[dict[str, Any]]:
         return []
     annotate_html_download_article_verdicts(downloads)
     return [
-        item for item in downloads
+        item
+        for item in downloads
         if isinstance(item, dict)
-        and item.get("ok")
-        and str(item.get("output_path") or "").strip()
+        and item.get("ok") is True
+        and _nonempty_string(item.get("output_path")) is not None
         and isinstance(item.get("article_verdict"), dict)
         and item["article_verdict"].get("ok") is True
     ]
@@ -473,9 +506,10 @@ def _rejected_html_downloads(payload: dict[str, Any]) -> list[dict[str, Any]]:
         return []
     annotate_html_download_article_verdicts(downloads)
     return [
-        item for item in downloads
+        item
+        for item in downloads
         if isinstance(item, dict)
-        and item.get("ok")
+        and item.get("ok") is True
         and isinstance(item.get("article_verdict"), dict)
         and item["article_verdict"].get("ok") is False
     ]
@@ -485,16 +519,24 @@ def _successful_pdf_downloads(payload: dict[str, Any]) -> list[dict[str, Any]]:
     downloads = payload.get("pdf_downloads")
     if not isinstance(downloads, list):
         return []
-    return [item for item in downloads if isinstance(item, dict) and item.get("ok")]
+    return [
+        item
+        for item in downloads
+        if isinstance(item, dict)
+        and item.get("ok") is True
+        and _nonempty_string(item.get("output_path")) is not None
+    ]
 
 
-def _ocr_candidates_from_pdf_downloads(downloads: tuple[dict[str, Any], ...]) -> list[str]:
+def _ocr_candidates_from_pdf_downloads(
+    downloads: tuple[dict[str, Any], ...],
+) -> list[str]:
     result: list[str] = []
     for item in downloads:
         if not _pdf_download_needs_ocr(item):
             continue
-        output_path = str(item.get("output_path") or "").strip()
-        if output_path:
+        output_path = _nonempty_string(item.get("output_path"))
+        if output_path is not None:
             result.append(output_path)
     return result
 
@@ -510,8 +552,11 @@ def _browser_fallback_entries(payload: dict[str, Any]) -> list[dict[str, Any]]:
 
 def _is_researchgate_url(value: str) -> bool:
     try:
-        host = urllib.parse.urlparse(value).netloc.casefold()
-    except Exception:
+        parsed = urllib.parse.urlparse(value)
+        if parsed.scheme.casefold() not in {"http", "https"}:
+            return False
+        host = (parsed.hostname or "").rstrip(".").casefold()
+    except (TypeError, ValueError):
         return False
     return host == "researchgate.net" or host.endswith(".researchgate.net")
 
@@ -520,18 +565,24 @@ def _pdf_download_needs_ocr(item: dict[str, Any]) -> bool:
     if item.get("status") == "downloaded_needs_ocr":
         return True
     identity = item.get("identity")
-    return isinstance(identity, dict) and bool(identity.get("needs_ocr"))
+    return isinstance(identity, dict) and identity.get("needs_ocr") is True
 
 
 def _safe_status_suffix(value: Any) -> str:
-    text = str(value or "").strip().lower()
+    text = _nonempty_string(value)
+    if text is None:
+        return ""
+    text = text.lower()
     return re.sub(r"[^a-z0-9]+", "_", text).strip("_")
 
 
+def _nonempty_string(value: object) -> str | None:
+    text = value.strip() if isinstance(value, str) else ""
+    return text or None
+
+
 def _safe_filename(value: str) -> str:
-    value = re.sub(r"[<>:\"/\\|?*\x00-\x1f]+", "_", str(value or "document"))
-    value = re.sub(r"\s+", " ", value).strip(" .")
-    return value[:160] or "document"
+    return safe_filename_component(value, default="document", max_chars=160)
 
 
 def _arxiv_rescue_html_path(html_dir: Path, arxiv_id: str, *, index: int) -> Path:

@@ -2,19 +2,418 @@ from __future__ import annotations
 
 import json
 import os
-import shutil
+import socket
 import sqlite3
+import stat
+import uuid
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
+from .article_standard import (
+    _copy_file_bounded_with_owner,
+    _unlink_owned_regular_file,
+)
 from .local_zotero import LocalAttachment, LocalItemMetadata
 
 
+ZOTERO_CONNECTOR_HOST = "127.0.0.1"
+ZOTERO_CONNECTOR_PORT = 23119
+ZOTERO_LOCAL_MIRROR_ENV = "ZOTERO_LOCAL_MIRROR"
+_ZOTERO_CONNECTOR_TIMEOUT_SECONDS = 0.2
+
+
+def _validated_zotero_key(value: object) -> str:
+    if not isinstance(value, str):
+        return ""
+    key = value.strip()
+    if not 1 <= len(key) <= 64 or not key.isascii() or not key.isalnum():
+        return ""
+    return key
+
+
+def _relay_attachment_key(relay_result: dict[str, Any]) -> str:
+    for field in ("newAttachmentKey", "attachmentKey"):
+        value = relay_result.get(field)
+        if value is None or (isinstance(value, str) and not value.strip()):
+            continue
+        return _validated_zotero_key(value)
+    return ""
+
+
+def _invalid_parent_preflight_contract(field: str) -> dict[str, Any]:
+    return {
+        "ok": False,
+        "updated": False,
+        "reason": "invalid_parent_preflight_contract",
+        "field": field,
+    }
+
+
+def _invalid_parent_attachment_contract(
+    field: str,
+    *,
+    attachment_key: str,
+) -> dict[str, Any]:
+    return {
+        "ok": False,
+        "updated": False,
+        "reason": "invalid_parent_attachment_contract",
+        "field": field,
+        "attachmentKey": attachment_key,
+    }
+
+
+def _invalid_parent_metadata_contract(
+    field: str,
+    *,
+    item_key: str,
+) -> dict[str, Any]:
+    return {
+        "ok": False,
+        "updated": False,
+        "reason": "invalid_parent_metadata_contract",
+        "field": field,
+        "item_key": item_key,
+    }
+
+
+def _exact_nonnegative_int(value: object) -> int | None:
+    return value if type(value) is int and value >= 0 else None
+
+
+def _validated_ensured_parent_details(
+    *,
+    attachment: LocalAttachment,
+    relay_result: dict[str, Any],
+) -> dict[str, Any]:
+    if relay_result.get("ok") is not True:
+        return _invalid_parent_preflight_contract("ok")
+
+    parent_key = _validated_zotero_key(relay_result.get("parentItemKey"))
+    if not parent_key:
+        return _invalid_parent_preflight_contract("parentItemKey")
+
+    already_had_parent = relay_result.get("alreadyHadParent")
+    if type(already_had_parent) is not bool:
+        return _invalid_parent_preflight_contract("alreadyHadParent")
+
+    parent_created = relay_result.get("parentCreated")
+    pdf_parent_patch = relay_result.get("pdfParentPatch")
+    if already_had_parent:
+        if parent_created is not None:
+            return _invalid_parent_preflight_contract("parentCreated")
+        if pdf_parent_patch is not None:
+            return _invalid_parent_preflight_contract("pdfParentPatch")
+        return {
+            "ok": True,
+            "parent_key": parent_key,
+            "parent_title": Path(attachment.filename).stem or "Untitled PDF",
+            "parent_type": "document",
+            "parent_version": None,
+            "pdf_version": None,
+            "collection_keys": [],
+        }
+
+    if not isinstance(parent_created, dict):
+        return _invalid_parent_preflight_contract("parentCreated")
+    created_parent_key = _validated_zotero_key(parent_created.get("key"))
+    if not created_parent_key or created_parent_key != parent_key:
+        return _invalid_parent_preflight_contract("parentCreated.key")
+
+    title_value = parent_created.get("title")
+    if not isinstance(title_value, str) or not title_value.strip():
+        return _invalid_parent_preflight_contract("parentCreated.title")
+    parent_title = title_value.strip()
+
+    item_type_value = parent_created.get("itemType")
+    if not isinstance(item_type_value, str) or not item_type_value.strip():
+        return _invalid_parent_preflight_contract("parentCreated.itemType")
+    parent_type = item_type_value.strip()
+
+    parent_version = _exact_nonnegative_int(parent_created.get("version"))
+    if parent_version is None:
+        return _invalid_parent_preflight_contract("parentCreated.version")
+
+    reused_existing = parent_created.get("reusedExistingParent")
+    if reused_existing is not None and type(reused_existing) is not bool:
+        return _invalid_parent_preflight_contract("parentCreated.reusedExistingParent")
+
+    collections_value = parent_created.get("collections")
+    if not isinstance(collections_value, list):
+        return _invalid_parent_preflight_contract("parentCreated.collections")
+    collection_keys: list[str] = []
+    for value in collections_value:
+        collection_key = _validated_zotero_key(value)
+        if not collection_key:
+            return _invalid_parent_preflight_contract("parentCreated.collections")
+        collection_keys.append(collection_key)
+
+    if not isinstance(pdf_parent_patch, dict):
+        return _invalid_parent_preflight_contract("pdfParentPatch")
+    if pdf_parent_patch.get("ok") is not True:
+        return _invalid_parent_preflight_contract("pdfParentPatch.ok")
+
+    pdf_key = _validated_zotero_key(pdf_parent_patch.get("pdfKey"))
+    if not pdf_key or pdf_key != _validated_zotero_key(attachment.key):
+        return _invalid_parent_preflight_contract("pdfParentPatch.pdfKey")
+    patched_parent_key = _validated_zotero_key(pdf_parent_patch.get("parentItemKey"))
+    if not patched_parent_key or patched_parent_key != parent_key:
+        return _invalid_parent_preflight_contract("pdfParentPatch.parentItemKey")
+    if _exact_nonnegative_int(pdf_parent_patch.get("oldVersion")) is None:
+        return _invalid_parent_preflight_contract("pdfParentPatch.oldVersion")
+    pdf_version = _exact_nonnegative_int(pdf_parent_patch.get("newVersion"))
+    if pdf_version is None:
+        return _invalid_parent_preflight_contract("pdfParentPatch.newVersion")
+    if type(pdf_parent_patch.get("clearedCollections")) is not bool:
+        return _invalid_parent_preflight_contract("pdfParentPatch.clearedCollections")
+
+    return {
+        "ok": True,
+        "parent_key": parent_key,
+        "parent_title": parent_title,
+        "parent_type": parent_type,
+        "parent_version": parent_version,
+        "pdf_version": pdf_version,
+        "collection_keys": collection_keys,
+    }
+
+
+def _local_sqlite_mirror_gate() -> dict[str, Any]:
+    mode = (
+        str(os.environ.get(ZOTERO_LOCAL_MIRROR_ENV, "auto") or "auto").strip().lower()
+    )
+    if mode == "off":
+        return {
+            "allowed": False,
+            "local_mirror_mode": "off",
+            "reason": "local_mirror_disabled",
+        }
+    if mode != "auto":
+        mode = "auto"
+    if _zotero_desktop_connector_running():
+        return {
+            "allowed": False,
+            "local_mirror_mode": mode,
+            "reason": "zotero_desktop_running",
+            "zotero_connector_port": ZOTERO_CONNECTOR_PORT,
+        }
+    return {"allowed": True, "local_mirror_mode": mode}
+
+
+def _zotero_desktop_connector_running() -> bool:
+    try:
+        with socket.create_connection(
+            (ZOTERO_CONNECTOR_HOST, ZOTERO_CONNECTOR_PORT),
+            timeout=_ZOTERO_CONNECTOR_TIMEOUT_SECONDS,
+        ):
+            return True
+    except OSError:
+        return False
+
+
+def _local_sqlite_mirror_skip_result(
+    *,
+    sqlite_path: Path,
+    gate: dict[str, Any],
+    **extra: Any,
+) -> dict[str, Any]:
+    return {
+        "ok": True,
+        "updated": False,
+        "sqlite_path": str(sqlite_path),
+        **{key: value for key, value in gate.items() if key != "allowed"},
+        **extra,
+    }
+
+
+def _validated_child_dir(root: Path, child: str) -> Path:
+    if root.is_symlink():
+        raise OSError(f"Local storage root is a symlink: {root}")
+    root.mkdir(parents=True, exist_ok=True)
+    if root.is_symlink() or not root.is_dir():
+        raise OSError(f"Local storage root is invalid: {root}")
+    resolved_root = root.resolve(strict=True)
+    target = root / child
+    if target.is_symlink():
+        raise OSError(f"Local storage directory is a symlink: {target}")
+    target.mkdir(exist_ok=True)
+    if target.is_symlink() or not target.is_dir():
+        raise OSError(f"Local storage directory is invalid: {target}")
+    resolved_target = target.resolve(strict=True)
+    try:
+        resolved_target.relative_to(resolved_root)
+    except ValueError as exc:
+        raise OSError(f"Local storage directory escapes its root: {target}") from exc
+    return resolved_target
+
+
+def _safe_backup_component(value: object) -> str:
+    safe = "".join(
+        char if char.isascii() and (char.isalnum() or char in {"-", "_"}) else "_"
+        for char in str(value or "")
+    ).strip("._")
+    return safe[:180] or "attachment"
+
+
+def _regular_file_owner(path: Path) -> tuple[int, int] | None:
+    try:
+        observed = path.lstat()
+    except FileNotFoundError:
+        return None
+    if not stat.S_ISREG(observed.st_mode):
+        raise OSError(f"Local publication path is not a regular file: {path}")
+    return int(observed.st_dev), int(observed.st_ino)
+
+
+def _remove_owned_regular_file(path: Path, *, owner: tuple[int, int]) -> bool:
+    try:
+        current_owner = _regular_file_owner(path)
+    except OSError:
+        return False
+    if current_owner is None:
+        return True
+    if current_owner != owner:
+        return False
+    _unlink_owned_regular_file(
+        path,
+        device=owner[0],
+        inode=owner[1],
+    )
+    try:
+        return _regular_file_owner(path) is None
+    except OSError:
+        return False
+
+
+def _restore_owned_regular_file_claim(
+    claim_path: Path,
+    *,
+    target_path: Path,
+    owner: tuple[int, int],
+) -> bool:
+    try:
+        if _regular_file_owner(claim_path) != owner:
+            return False
+        os.link(claim_path, target_path)
+        if _regular_file_owner(target_path) != owner:
+            _unlink_owned_regular_file(
+                target_path,
+                device=owner[0],
+                inode=owner[1],
+            )
+            return False
+    except OSError:
+        return False
+    return _remove_owned_regular_file(claim_path, owner=owner)
+
+
+def _claim_owned_regular_file(
+    path: Path,
+    *,
+    expected_owner: tuple[int, int],
+    purpose: str,
+) -> Path:
+    claim_path = path.with_name(f".{path.name}.{purpose}-claim-{uuid.uuid4().hex}")
+    try:
+        os.rename(path, claim_path)
+    except FileNotFoundError as exc:
+        raise OSError(
+            f"Local target disappeared before local publication: {path}"
+        ) from exc
+    try:
+        claim_owner = _regular_file_owner(claim_path)
+    except OSError as exc:
+        raise OSError(
+            f"Local target became invalid before local publication; "
+            f"recovery path: {claim_path}"
+        ) from exc
+    if claim_owner != expected_owner:
+        restored = claim_owner is not None and _restore_owned_regular_file_claim(
+            claim_path,
+            target_path=path,
+            owner=claim_owner,
+        )
+        recovery = "" if restored else f"; recovery path: {claim_path}"
+        raise OSError(
+            f"Local target changed before local publication: {path}{recovery}"
+        )
+    return claim_path
+
+
+def _publish_bounded_copy_no_clobber(
+    source_path: Path,
+    target_path: Path,
+    *,
+    max_bytes: int | None,
+) -> bool:
+    staging_path = target_path.with_name(
+        f".{target_path.name}.local-publish-{uuid.uuid4().hex}"
+    )
+    publication = _copy_file_bounded_with_owner(
+        source_path,
+        staging_path,
+        max_bytes=max_bytes,
+    )
+    if publication is None:
+        return False
+    owner = publication.target_device, publication.target_inode
+    try:
+        os.link(staging_path, target_path)
+        if _regular_file_owner(target_path) != owner:
+            raise OSError(
+                f"Published local target ownership could not be verified: {target_path}"
+            )
+    except BaseException:
+        _unlink_owned_regular_file(
+            target_path,
+            device=owner[0],
+            inode=owner[1],
+        )
+        _unlink_owned_regular_file(
+            staging_path,
+            device=owner[0],
+            inode=owner[1],
+        )
+        raise
+    if not _remove_owned_regular_file(staging_path, owner=owner):
+        raise OSError(
+            "Local publication succeeded, but its staging link could not be removed: "
+            f"{staging_path}"
+        )
+    return True
+
+
 def replace_original_file(*, source_path: Path, output_pdf: Path) -> None:
-    temp_path = source_path.with_name(f".{source_path.name}.ocr-tmp")
-    shutil.copy2(output_pdf, temp_path)
-    os.replace(temp_path, source_path)
+    expected_owner = _regular_file_owner(source_path)
+    if expected_owner is None:
+        raise OSError(f"Original local PDF is missing: {source_path}")
+    claim_path = _claim_owned_regular_file(
+        source_path,
+        expected_owner=expected_owner,
+        purpose="replace",
+    )
+    try:
+        if not _publish_bounded_copy_no_clobber(
+            output_pdf,
+            source_path,
+            max_bytes=None,
+        ):
+            raise OSError(f"OCR output changed while replacing local PDF: {output_pdf}")
+    except BaseException as exc:
+        restored = _restore_owned_regular_file_claim(
+            claim_path,
+            target_path=source_path,
+            owner=expected_owner,
+        )
+        if not restored:
+            exc.add_note(f"Original local PDF is preserved at: {claim_path}")
+        raise
+    if not _remove_owned_regular_file(claim_path, owner=expected_owner):
+        raise OSError(
+            "Local PDF replacement succeeded, but the previous PDF remains at: "
+            f"{claim_path}"
+        )
 
 
 def write_new_attachment_local_copy(
@@ -24,34 +423,91 @@ def write_new_attachment_local_copy(
     relay_result: dict[str, Any],
     backups_root: Path,
 ) -> dict[str, Any]:
-    new_key = str(relay_result.get("newAttachmentKey") or "").strip()
+    new_key = _validated_zotero_key(relay_result.get("newAttachmentKey"))
     if not new_key:
         raise RuntimeError(
-            "zotero-file-relay OCR replacement did not return newAttachmentKey."
+            "zotero-file-relay OCR replacement returned invalid newAttachmentKey."
         )
 
-    filename = str(relay_result.get("filename") or source_path.name).strip()
+    filename_value = relay_result.get("filename")
+    if filename_value is not None and not isinstance(filename_value, str):
+        raise RuntimeError(
+            "zotero-file-relay OCR replacement returned an invalid filename."
+        )
+    filename = (filename_value or source_path.name).strip()
     safe_filename = Path(filename).name
-    if not safe_filename:
+    if not safe_filename or safe_filename != filename or safe_filename in {".", ".."}:
         raise RuntimeError(
             "zotero-file-relay OCR replacement did not return a usable filename."
         )
 
-    target_dir = attachment.storage_dir / new_key
-    target_dir.mkdir(parents=True, exist_ok=True)
+    target_dir = _validated_child_dir(attachment.storage_dir, new_key)
     target_path = target_dir / safe_filename
-    temp_path = target_dir / f".{safe_filename}.ocr-tmp"
 
+    expected_owner = _regular_file_owner(target_path)
     backup_path: Path | None = None
-    if target_path.exists():
+    if expected_owner is not None:
         stamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
-        backup_dir = backups_root / f"{attachment.library_id}_{new_key}"
-        backup_dir.mkdir(parents=True, exist_ok=True)
-        backup_path = backup_dir / f"{stamp}_{safe_filename}"
-        shutil.copy2(target_path, backup_path)
+        backup_dir = _validated_child_dir(
+            backups_root,
+            _safe_backup_component(f"{attachment.library_id}_{new_key}"),
+        )
+        backup_path = backup_dir / f"{stamp}_{uuid.uuid4().hex}_{safe_filename}"
+        backup = _copy_file_bounded_with_owner(
+            target_path,
+            backup_path,
+            max_bytes=None,
+        )
+        if backup is None:
+            raise OSError(
+                f"Existing local attachment changed during backup: {target_path}"
+            )
+        copied_owner = backup.source.device, backup.source.inode
+        backup_owner = backup.target_device, backup.target_inode
+        if copied_owner != expected_owner:
+            _unlink_owned_regular_file(
+                backup_path,
+                device=backup_owner[0],
+                inode=backup_owner[1],
+            )
+            raise OSError(
+                f"Existing local attachment changed during backup: {target_path}"
+            )
 
-    shutil.copy2(source_path, temp_path)
-    os.replace(temp_path, target_path)
+    claim_path: Path | None = None
+    if expected_owner is not None:
+        claim_path = _claim_owned_regular_file(
+            target_path,
+            expected_owner=expected_owner,
+            purpose="replace",
+        )
+
+    try:
+        if not _publish_bounded_copy_no_clobber(
+            source_path,
+            target_path,
+            max_bytes=None,
+        ):
+            raise OSError(f"OCR source changed during local publication: {source_path}")
+    except BaseException as exc:
+        if claim_path is not None and expected_owner is not None:
+            restored = _restore_owned_regular_file_claim(
+                claim_path,
+                target_path=target_path,
+                owner=expected_owner,
+            )
+            if not restored:
+                exc.add_note(f"Previous local attachment is preserved at: {claim_path}")
+        raise
+    if (
+        claim_path is not None
+        and expected_owner is not None
+        and not _remove_owned_regular_file(claim_path, owner=expected_owner)
+    ):
+        raise OSError(
+            "Local attachment publication succeeded, but the previous target "
+            f"remains at: {claim_path}"
+        )
     return {
         "ok": True,
         "newAttachmentKey": new_key,
@@ -67,24 +523,45 @@ def sync_local_zotero_storage_metadata(
 ) -> dict[str, Any]:
     webdav = relay_result.get("webDav")
     if not isinstance(webdav, dict):
-        raise RuntimeError("Relay result is missing WebDAV metadata for local Zotero sync.")
-    storage_hash = str(webdav.get("md5") or "").strip()
-    storage_mtime = webdav.get("mtime")
-    if not storage_hash or storage_mtime is None:
-        raise RuntimeError("Relay WebDAV result is missing md5/mtime.")
+        raise RuntimeError(
+            "Relay result is missing WebDAV metadata for local Zotero sync."
+        )
+    if webdav.get("ok") is not True:
+        raise RuntimeError("Relay result is missing a successful WebDAV upload.")
+    storage_hash_value = webdav.get("md5")
+    if not isinstance(storage_hash_value, str) or not storage_hash_value.strip():
+        raise RuntimeError("Relay WebDAV result requires a non-empty string md5.")
+    storage_hash = storage_hash_value.strip()
+    storage_mtime = _exact_nonnegative_int(webdav.get("mtime"))
+    if storage_mtime is None:
+        raise RuntimeError("Relay WebDAV mtime must be an exact non-negative integer.")
     metadata_patch = webdav.get("metadataPatch")
-    if not isinstance(metadata_patch, dict) or not metadata_patch.get("ok"):
+    if not isinstance(metadata_patch, dict) or metadata_patch.get("ok") is not True:
         raise RuntimeError(
             "Relay result is missing a successful Zotero Web API metadata patch. "
             "Headless replacement needs Zotero API md5/mtime to be updated."
         )
-    zotero_version = metadata_patch.get("newVersion")
+    zotero_version = _exact_nonnegative_int(metadata_patch.get("newVersion"))
     if zotero_version is None:
-        raise RuntimeError("Relay metadata patch did not return the new Zotero item version.")
+        raise RuntimeError(
+            "Relay metadata patch newVersion must be an exact non-negative integer."
+        )
     if attachment.item_id is None:
         raise RuntimeError(f"Attachment has no local Zotero item id: {attachment.key}")
 
     sqlite_path = attachment.data_dir / "zotero.sqlite"
+    gate = _local_sqlite_mirror_gate()
+    if gate.get("allowed") is not True:
+        return _local_sqlite_mirror_skip_result(
+            sqlite_path=sqlite_path,
+            gate=gate,
+            attachmentKey=attachment.key,
+            item_id=attachment.item_id,
+            zotero_version=int(zotero_version),
+            storage_hash=storage_hash,
+            storage_mtime=int(storage_mtime),
+        )
+
     connection = sqlite3.connect(str(sqlite_path), timeout=30)
     connection.row_factory = sqlite3.Row
     try:
@@ -108,7 +585,9 @@ def sync_local_zotero_storage_metadata(
             (attachment.item_id,),
         ).fetchone()
         if before_row is None:
-            raise RuntimeError(f"Attachment metadata row was not found: {attachment.key}")
+            raise RuntimeError(
+                f"Attachment metadata row was not found: {attachment.key}"
+            )
         before_sync_cache = connection.execute(
             """
             select version, data
@@ -218,13 +697,88 @@ def sync_parent_attachment_local(
     content_type: str,
     relay_result: dict[str, Any],
 ) -> dict[str, Any]:
-    new_key = str(
-        relay_result.get("newAttachmentKey") or relay_result.get("attachmentKey") or ""
-    ).strip()
+    new_key = _relay_attachment_key(relay_result)
     if not new_key:
-        return {"ok": False, "reason": "missing_attachment_key"}
+        has_key_value = any(
+            relay_result.get(field) is not None
+            for field in ("newAttachmentKey", "attachmentKey")
+        )
+        return {
+            "ok": False,
+            "reason": "invalid_attachment_key"
+            if has_key_value
+            else "missing_attachment_key",
+        }
+
+    raw_zotero_version = relay_result.get("newAttachmentVersion")
+    if raw_zotero_version is None:
+        return {
+            "ok": False,
+            "reason": "missing_zotero_version",
+            "attachmentKey": new_key,
+        }
+    zotero_version = _exact_nonnegative_int(raw_zotero_version)
+    if zotero_version is None:
+        return _invalid_parent_attachment_contract(
+            "newAttachmentVersion",
+            attachment_key=new_key,
+        )
+
+    storage_hash = ""
+    storage_mtime: int | None = None
+    webdav = relay_result.get("webDav")
+    if webdav is not None:
+        if not isinstance(webdav, dict):
+            return _invalid_parent_attachment_contract(
+                "webDav",
+                attachment_key=new_key,
+            )
+        if webdav.get("ok") is not True:
+            return _invalid_parent_attachment_contract(
+                "webDav.ok",
+                attachment_key=new_key,
+            )
+        storage_hash_value = webdav.get("md5")
+        if not isinstance(storage_hash_value, str) or not storage_hash_value.strip():
+            return _invalid_parent_attachment_contract(
+                "webDav.md5",
+                attachment_key=new_key,
+            )
+        storage_hash = storage_hash_value.strip()
+        storage_mtime = _exact_nonnegative_int(webdav.get("mtime"))
+        if storage_mtime is None:
+            return _invalid_parent_attachment_contract(
+                "webDav.mtime",
+                attachment_key=new_key,
+            )
+        metadata_patch = webdav.get("metadataPatch")
+        if not isinstance(metadata_patch, dict):
+            return _invalid_parent_attachment_contract(
+                "webDav.metadataPatch",
+                attachment_key=new_key,
+            )
+        if metadata_patch.get("ok") is not True:
+            return _invalid_parent_attachment_contract(
+                "webDav.metadataPatch.ok",
+                attachment_key=new_key,
+            )
+        patched_version = _exact_nonnegative_int(metadata_patch.get("newVersion"))
+        if patched_version is None or patched_version != zotero_version:
+            return _invalid_parent_attachment_contract(
+                "webDav.metadataPatch.newVersion",
+                attachment_key=new_key,
+            )
 
     sqlite_path = metadata.data_dir / "zotero.sqlite"
+    gate = _local_sqlite_mirror_gate()
+    if gate.get("allowed") is not True:
+        return _local_sqlite_mirror_skip_result(
+            sqlite_path=sqlite_path,
+            gate=gate,
+            attachmentKey=new_key,
+            parentKey=metadata.key,
+        )
+
     if not sqlite_path.exists():
         return {
             "ok": True,
@@ -234,18 +788,6 @@ def sync_parent_attachment_local(
             "sqlite_path": str(sqlite_path),
         }
 
-    webdav = relay_result.get("webDav")
-    webdav_data = webdav if isinstance(webdav, dict) else {}
-    metadata_patch = webdav_data.get("metadataPatch")
-    metadata_patch_data = metadata_patch if isinstance(metadata_patch, dict) else {}
-    zotero_version = _optional_int(
-        relay_result.get("newAttachmentVersion") or metadata_patch_data.get("newVersion")
-    )
-    storage_hash = str(webdav_data.get("md5") or "").strip()
-    storage_mtime = _optional_int(webdav_data.get("mtime"))
-    if zotero_version is None:
-        return {"ok": False, "reason": "missing_zotero_version", "attachmentKey": new_key}
-
     now = datetime.now(UTC)
     sqlite_timestamp = now.strftime("%Y-%m-%d %H:%M:%S")
     api_timestamp = now.strftime("%Y-%m-%dT%H:%M:%SZ")
@@ -254,7 +796,14 @@ def sync_parent_attachment_local(
     connection.row_factory = sqlite3.Row
     try:
         existing = connection.execute(
-            "select itemID from items where key = ? limit 1",
+            """
+            select items.itemID
+            from items
+            left join deletedItems di on di.itemID = items.itemID
+            where items.key = ?
+              and di.itemID is null
+            limit 1
+            """,
             (new_key,),
         ).fetchone()
         if existing is not None:
@@ -276,6 +825,32 @@ def sync_parent_attachment_local(
                 "reason": "parent_missing",
                 "attachmentKey": new_key,
                 "parentKey": metadata.key,
+            }
+
+        storage_path = f"storage:{safe_filename}"
+        existing_sibling = connection.execute(
+            """
+            select child.itemID, child.key, ia.path
+            from itemAttachments ia
+            join items child on child.itemID = ia.itemID
+            left join deletedItems di on di.itemID = child.itemID
+            where ia.parentItemID = ?
+              and lower(coalesce(ia.path, '')) = lower(?)
+              and di.itemID is null
+            limit 1
+            """,
+            (int(parent["itemID"]), storage_path),
+        ).fetchone()
+        if existing_sibling is not None:
+            return {
+                "ok": True,
+                "updated": False,
+                "reason": "html_sibling_already_exists",
+                "attachmentKey": str(existing_sibling["key"]),
+                "requestedAttachmentKey": new_key,
+                "parentKey": metadata.key,
+                "item_id": int(existing_sibling["itemID"]),
+                "path": str(existing_sibling["path"] or storage_path),
             }
 
         item_type = connection.execute(
@@ -330,7 +905,7 @@ def sync_parent_attachment_local(
                 item_id,
                 int(parent["itemID"]),
                 content_type,
-                f"storage:{safe_filename}",
+                storage_path,
                 storage_mtime,
                 storage_hash or None,
             ),
@@ -340,7 +915,9 @@ def sync_parent_attachment_local(
             field_id = _field_id(connection, "title")
             if field_id is not None:
                 value_id = _item_data_value_id(connection, title)
-                _upsert_item_data(connection, item_id=item_id, field_id=field_id, value_id=value_id)
+                _upsert_item_data(
+                    connection, item_id=item_id, field_id=field_id, value_id=value_id
+                )
 
         sync_payload = {
             "key": new_key,
@@ -406,11 +983,34 @@ def sync_ensured_parent_local(
     attachment: LocalAttachment,
     relay_result: dict[str, Any],
 ) -> dict[str, Any]:
-    parent_key = str(relay_result.get("parentItemKey") or "").strip()
+    contract = _validated_ensured_parent_details(
+        attachment=attachment,
+        relay_result=relay_result,
+    )
+    if contract.get("ok") is not True:
+        return contract
+    parent_key_value = relay_result.get("parentItemKey")
+    parent_key = _validated_zotero_key(parent_key_value)
     if not parent_key:
-        return {"ok": False, "reason": "missing_parent_key"}
+        return {
+            "ok": False,
+            "reason": (
+                "invalid_parent_key"
+                if parent_key_value is not None
+                else "missing_parent_key"
+            ),
+        }
 
     sqlite_path = attachment.data_dir / "zotero.sqlite"
+    gate = _local_sqlite_mirror_gate()
+    if gate.get("allowed") is not True:
+        return _local_sqlite_mirror_skip_result(
+            sqlite_path=sqlite_path,
+            gate=gate,
+            attachmentKey=attachment.key,
+            parentKey=parent_key,
+        )
+
     if not sqlite_path.exists():
         return {
             "ok": True,
@@ -424,7 +1024,9 @@ def sync_ensured_parent_local(
     parent_data = parent_created if isinstance(parent_created, dict) else {}
     pdf_parent_patch = relay_result.get("pdfParentPatch")
     pdf_patch_data = pdf_parent_patch if isinstance(pdf_parent_patch, dict) else {}
-    parent_title = str(parent_data.get("title") or Path(attachment.filename).stem or "Untitled PDF")
+    parent_title = str(
+        parent_data.get("title") or Path(attachment.filename).stem or "Untitled PDF"
+    )
     parent_type = str(parent_data.get("itemType") or "document")
     parent_version = _optional_int(parent_data.get("version"))
     pdf_version = _optional_int(pdf_patch_data.get("newVersion"))
@@ -530,11 +1132,41 @@ def sync_parent_metadata_local(
     fields: dict[str, str],
     relay_result: dict[str, Any],
 ) -> dict[str, Any]:
-    applied_fields = {
-        str(field).strip()
-        for field in (relay_result.get("appliedFields") or [])
-        if str(field).strip()
-    }
+    if relay_result.get("ok") is not True:
+        return _invalid_parent_metadata_contract("ok", item_key=metadata.key)
+
+    applied_fields_value = relay_result.get("appliedFields")
+    if not isinstance(applied_fields_value, list):
+        return _invalid_parent_metadata_contract(
+            "appliedFields",
+            item_key=metadata.key,
+        )
+    applied_fields: set[str] = set()
+    for value in applied_fields_value:
+        if not isinstance(value, str) or not value.strip():
+            return _invalid_parent_metadata_contract(
+                "appliedFields",
+                item_key=metadata.key,
+            )
+        field_name = value.strip()
+        if field_name not in fields:
+            return _invalid_parent_metadata_contract(
+                "appliedFields",
+                item_key=metadata.key,
+            )
+        if not isinstance(fields[field_name], str):
+            return _invalid_parent_metadata_contract(
+                f"fields.{field_name}",
+                item_key=metadata.key,
+            )
+        applied_fields.add(field_name)
+
+    new_version = _exact_nonnegative_int(relay_result.get("newVersion"))
+    if new_version is None:
+        return _invalid_parent_metadata_contract(
+            "newVersion",
+            item_key=metadata.key,
+        )
     if not applied_fields:
         return {
             "ok": True,
@@ -544,6 +1176,25 @@ def sync_parent_metadata_local(
         }
 
     sqlite_path = metadata.data_dir / "zotero.sqlite"
+    gate = _local_sqlite_mirror_gate()
+    if gate.get("allowed") is not True:
+        return _local_sqlite_mirror_skip_result(
+            sqlite_path=sqlite_path,
+            gate=gate,
+            item_key=metadata.key,
+            item_id=metadata.item_id,
+            applied_fields=sorted(applied_fields),
+        )
+
+    if not sqlite_path.exists():
+        return {
+            "ok": True,
+            "updated": False,
+            "reason": "sqlite_missing",
+            "item_key": metadata.key,
+            "sqlite_path": str(sqlite_path),
+        }
+
     connection = sqlite3.connect(str(sqlite_path), timeout=30)
     connection.row_factory = sqlite3.Row
     try:
@@ -558,7 +1209,7 @@ def sync_parent_metadata_local(
             if field_id is None:
                 skipped_fields[field_name] = "unknown_local_field"
                 continue
-            value_id = _item_data_value_id(connection, str(fields[field_name]))
+            value_id = _item_data_value_id(connection, fields[field_name])
             _upsert_item_data(
                 connection,
                 item_id=metadata.item_id,
@@ -567,17 +1218,15 @@ def sync_parent_metadata_local(
             )
             updated_fields.append(field_name)
 
-        new_version = _optional_int(relay_result.get("newVersion"))
-        if new_version is not None:
-            item_columns = _table_columns(connection, "items")
-            assignments = ["version = ?"]
-            values: list[object] = [new_version]
-            if "synced" in item_columns:
-                assignments.append("synced = 1")
-            connection.execute(
-                f"update items set {', '.join(assignments)} where itemID = ?",
-                (*values, metadata.item_id),
-            )
+        item_columns = _table_columns(connection, "items")
+        assignments = ["version = ?"]
+        values: list[object] = [new_version]
+        if "synced" in item_columns:
+            assignments.append("synced = 1")
+        connection.execute(
+            f"update items set {', '.join(assignments)} where itemID = ?",
+            (*values, metadata.item_id),
+        )
 
         sync_cache = _patch_parent_sync_cache(
             connection,
@@ -701,12 +1350,18 @@ def _insert_parent_item(
             "select itemTypeID from itemTypes where typeName not in ('attachment', 'note', 'annotation') limit 1",
         ).fetchone()
     if type_row is None:
-        raise RuntimeError("No suitable Zotero parent item type is available in local SQLite.")
+        raise RuntimeError(
+            "No suitable Zotero parent item type is available in local SQLite."
+        )
 
-    pdf_row = connection.execute(
-        "select * from items where itemID = ? limit 1",
-        (source_item_id,),
-    ).fetchone() if source_item_id is not None else None
+    pdf_row = (
+        connection.execute(
+            "select * from items where itemID = ? limit 1",
+            (source_item_id,),
+        ).fetchone()
+        if source_item_id is not None
+        else None
+    )
     values: dict[str, object] = {
         "itemTypeID": int(type_row["itemTypeID"]),
         "key": parent_key,
@@ -716,7 +1371,11 @@ def _insert_parent_item(
     for column in ("dateAdded", "dateModified", "clientDateModified"):
         if column in item_columns:
             values[column] = sqlite_timestamp
-    if "libraryID" in item_columns and pdf_row is not None and "libraryID" in pdf_row.keys():
+    if (
+        "libraryID" in item_columns
+        and pdf_row is not None
+        and "libraryID" in pdf_row.keys()
+    ):
         values["libraryID"] = pdf_row["libraryID"]
     elif "libraryID" in item_columns:
         library_row = connection.execute(
@@ -750,7 +1409,9 @@ def _insert_attachment_item(
         "select itemTypeID from itemTypes where typeName = 'attachment' limit 1",
     ).fetchone()
     if attachment_type is None:
-        raise RuntimeError("No Zotero attachment item type is available in local SQLite.")
+        raise RuntimeError(
+            "No Zotero attachment item type is available in local SQLite."
+        )
     parent_row = connection.execute(
         "select * from items where itemID = ? limit 1",
         (parent_item_id,),
@@ -764,7 +1425,11 @@ def _insert_attachment_item(
     for column in ("dateAdded", "dateModified", "clientDateModified"):
         if column in item_columns:
             item_values[column] = sqlite_timestamp
-    if "libraryID" in item_columns and parent_row is not None and "libraryID" in parent_row.keys():
+    if (
+        "libraryID" in item_columns
+        and parent_row is not None
+        and "libraryID" in parent_row.keys()
+    ):
         item_values["libraryID"] = parent_row["libraryID"]
     if "version" in item_columns and version is not None:
         item_values["version"] = version
@@ -790,7 +1455,9 @@ def _insert_attachment_item(
         "path": attachment.zotero_path or f"storage:{attachment.filename}",
         "syncState": 2,
     }
-    insert_columns = [column for column in attachment_values if column in attachment_columns]
+    insert_columns = [
+        column for column in attachment_values if column in attachment_columns
+    ]
     connection.execute(
         (
             f"insert into itemAttachments ({', '.join(insert_columns)}) "
@@ -845,7 +1512,9 @@ def _sync_parent_collections(
     }
 
 
-def _read_item_field_values(connection: sqlite3.Connection, item_id: int) -> dict[str, str]:
+def _read_item_field_values(
+    connection: sqlite3.Connection, item_id: int
+) -> dict[str, str]:
     rows = connection.execute(
         """
         select f.fieldName, v.value
@@ -917,18 +1586,14 @@ def _table_exists(connection: sqlite3.Connection, table_name: str) -> bool:
 def _table_columns(connection: sqlite3.Connection, table_name: str) -> set[str]:
     if not _table_exists(connection, table_name):
         return set()
-    return {str(row["name"]) for row in connection.execute(f"pragma table_info({table_name})")}
+    return {
+        str(row["name"])
+        for row in connection.execute(f"pragma table_info({table_name})")
+    }
 
 
 def _optional_int(value: object) -> int | None:
-    if value is None or value == "":
-        return None
-    if not isinstance(value, (str, bytes, bytearray, int, float)):
-        return None
-    try:
-        return int(value)
-    except (TypeError, ValueError):
-        return None
+    return _exact_nonnegative_int(value)
 
 
 def _required_lastrowid(cursor: sqlite3.Cursor) -> int:

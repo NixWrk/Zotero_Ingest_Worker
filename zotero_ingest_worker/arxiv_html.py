@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import re
 import urllib.parse
 import urllib.request
 from dataclasses import dataclass, field
@@ -38,6 +37,7 @@ from zotero_metadata_enrichment.text import (
 )
 
 from .local_zotero import LocalAttachment, LocalItemMetadata
+from .filename_safety import safe_filename_component
 from .config import WorkerConfig
 from .metadata_jobs import METADATA_JOB_ARXIV_HTML
 from .state import FileSignature
@@ -95,7 +95,9 @@ class ArxivHtmlJobService:
         if not arxiv_id:
             raise ValueError("arXiv id is empty.")
         url = f"https://arxiv.org/html/{urllib.parse.quote(arxiv_id, safe='/')}"
-        text = self._http_text(url, timeout=self.config.arxiv_html_fetch_timeout_seconds)
+        text = self._http_text(
+            url, timeout=self.config.arxiv_html_fetch_timeout_seconds
+        )
         validation = validate_arxiv_html(
             text,
             min_text_chars=self.config.arxiv_html_min_text_chars,
@@ -116,7 +118,9 @@ class ArxivHtmlJobService:
         html_text: str,
     ) -> Path:
         signature = FileSignature.from_path(source_pdf)
-        stem = safe_filename(Path(attachment.filename).stem or candidate.identifier or "article")
+        stem = safe_filename(
+            Path(attachment.filename).stem or candidate.identifier or "article"
+        )
         target_dir = (
             self.config.arxiv_html_root
             / attachment.library_id
@@ -152,7 +156,9 @@ class ArxivHtmlJobService:
         url = f"https://arxiv.org/api/query?{urllib.parse.urlencode(params)}"
         candidates = parse_arxiv_atom(self._http_text(url))
         if not candidates:
-            self._record_provider_event(provider="arxiv", status="no_match", identifier=arxiv_id)
+            self._record_provider_event(
+                provider="arxiv", status="no_match", identifier=arxiv_id
+            )
             return None
         candidate = candidates[0]
         self._record_provider_event(
@@ -276,6 +282,4 @@ def title_for_lookup(
 
 
 def safe_filename(value: str) -> str:
-    value = re.sub(r"[<>:\"/\\|?*\x00-\x1f]+", "_", str(value or "document"))
-    value = re.sub(r"\s+", " ", value).strip(" .")
-    return value[:160] or "document"
+    return safe_filename_component(value, default="document", max_chars=160)

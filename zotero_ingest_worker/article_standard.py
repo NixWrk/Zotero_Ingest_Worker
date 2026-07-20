@@ -6,6 +6,7 @@ import json
 import os
 import re
 import shutil
+import stat
 import tempfile
 import urllib.parse
 import uuid
@@ -46,6 +47,19 @@ class _FileFingerprint:
     inode: int
     mtime_ns: int
     ctime_ns: int
+
+
+@dataclass(frozen=True)
+class _BoundedFileCopy:
+    source: _FileFingerprint
+    target_device: int
+    target_inode: int
+
+
+@dataclass(frozen=True)
+class _FileBytesSnapshot:
+    payload: bytes
+    fingerprint: _FileFingerprint
 
 
 @dataclass(frozen=True)
@@ -158,21 +172,37 @@ def write_article_package(
 
         article_html = staging_dir / ARTICLE_HTML_FILENAME
         source_copy = staging_dir / "source" / source_html.name
+        polish = _web_polish_manifest(polished)
         html_text, assets = _article_html_with_standard_assets(
             source_html=source_html,
             package_dir=staging_dir,
             html_text=polished.html,
         )
-        article_html.write_text(html_text, encoding="utf-8")
-        shutil.copy2(source_html, source_copy)
+        article_fingerprint = _write_text_file_bounded(
+            article_html,
+            html_text,
+            max_bytes=ARTICLE_PACKAGE_MAX_OUTPUT_BYTES,
+        )
+        del html_text, polished
+        copied_source_fingerprint = _copy_file_bounded(
+            source_html,
+            source_copy,
+            max_bytes=ARTICLE_PACKAGE_MAX_SOURCE_BYTES,
+        )
+        if copied_source_fingerprint != source_fingerprint:
+            raise OSError(
+                "Article package source changed or exceeded its limit during copy"
+            )
         _require_source_html_unchanged(source_html, expected=source_fingerprint)
         source_copy_fingerprint = _stable_file_fingerprint(
             source_copy,
             max_bytes=ARTICLE_PACKAGE_MAX_SOURCE_BYTES,
         )
-        if not _same_file_content(source_copy_fingerprint, source_fingerprint):
+        if not _same_file_content(
+            source_copy_fingerprint,
+            source_fingerprint,
+        ):
             raise OSError("Article package source copy does not match source HTML")
-        polish = _web_polish_manifest(polished)
 
         quality = evaluate_article_html(
             article_html=article_html,
@@ -180,6 +210,12 @@ def write_article_package(
             source_download=source_download,
             article_verdict=article_verdict or {},
         )
+        evaluated_fingerprint = _stable_file_fingerprint(
+            article_html,
+            max_bytes=ARTICLE_PACKAGE_MAX_OUTPUT_BYTES,
+        )
+        if evaluated_fingerprint != article_fingerprint:
+            raise OSError("Article HTML changed while evaluating package quality")
         accepted = quality["status"] in {"passed", "warning"}
         if not accepted:
             return {
@@ -195,9 +231,10 @@ def write_article_package(
             }
 
         quality_path = staging_dir / "quality.json"
-        quality_path.write_text(
+        _write_text_file_bounded(
+            quality_path,
             json.dumps(quality, ensure_ascii=False, indent=2),
-            encoding="utf-8",
+            max_bytes=ARTICLE_PACKAGE_MAX_QUALITY_BYTES,
         )
         integrity = _article_package_integrity_manifest(
             staging_dir=staging_dir,
@@ -206,6 +243,12 @@ def write_article_package(
             quality_path=quality_path,
             assets=assets,
         )
+        article_integrity = integrity["article_html"]
+        if (
+            article_integrity["bytes"] != article_fingerprint.bytes
+            or article_integrity["sha256"] != article_fingerprint.sha256
+        ):
+            raise OSError("Article HTML changed before package integrity sealing")
         manifest = build_article_manifest(
             article_html=article_html,
             metadata=metadata,
@@ -218,9 +261,10 @@ def write_article_package(
             integrity=integrity,
         )
         manifest_path = staging_dir / "manifest.json"
-        manifest_path.write_text(
+        _write_text_file_bounded(
+            manifest_path,
             json.dumps(manifest, ensure_ascii=False, indent=2),
-            encoding="utf-8",
+            max_bytes=ARTICLE_PACKAGE_MAX_QUALITY_BYTES,
         )
         _require_source_html_unchanged(source_html, expected=source_fingerprint)
         backup_cleanup_warning = _promote_article_package_tree(staging_dir, package_dir)
@@ -246,6 +290,16 @@ def write_article_package(
             _remove_article_package_path(staging_dir)
 
 
+def _path_device_inode(path: Path) -> tuple[int, int] | None:
+    try:
+        if path.is_symlink():
+            return None
+        current = path.stat()
+    except (OSError, RuntimeError):
+        return None
+    return int(current.st_dev), int(current.st_ino)
+
+
 def _stat_identity(value: os.stat_result) -> tuple[int, int, int, int, int]:
     return (
         int(value.st_dev),
@@ -256,42 +310,41 @@ def _stat_identity(value: os.stat_result) -> tuple[int, int, int, int, int]:
     )
 
 
-def _stat_version(value: os.stat_result) -> tuple[int, int, int]:
-    return (
-        int(value.st_size),
-        int(value.st_mtime_ns),
-        int(value.st_ctime_ns),
-    )
-
-
-def _stable_file_fingerprint(path: Path, *, max_bytes: int) -> _FileFingerprint:
+def _stable_file_fingerprint(path: Path, *, max_bytes: int | None) -> _FileFingerprint:
     if path.is_symlink() or not path.is_file():
         raise OSError(f"Expected a regular file without symlinks: {path}")
-    limit = max(max_bytes, 0)
+    limit = max(max_bytes, 0) if max_bytes is not None else None
     before = path.stat()
+    expected_bytes = int(before.st_size)
+    if expected_bytes < 0:
+        raise OSError(f"File has an invalid negative size: {path}")
+    if limit is not None and expected_bytes > limit:
+        raise OSError(f"File exceeds {limit} bytes: {path}")
     digest = hashlib.sha256()
     total = 0
     with path.open("rb") as stream:
         opened_before = os.fstat(stream.fileno())
-        while True:
-            chunk = stream.read(min(1_048_576, limit - total + 1))
+        while total < expected_bytes:
+            read_size = min(1_048_576, expected_bytes - total)
+            chunk = stream.read(read_size)
             if not chunk:
                 break
             total += len(chunk)
-            if total > limit:
-                raise OSError(f"File exceeds {limit} bytes: {path}")
             digest.update(chunk)
+        growth_probe = stream.read(1)
+        if growth_probe:
+            total += len(growth_probe)
+            digest.update(growth_probe)
         opened_after = os.fstat(stream.fileno())
     if path.is_symlink():
         raise OSError(f"File became a symlink while fingerprinting: {path}")
     after = path.stat()
-    identity = _stat_identity(before)
-    if (
-        identity != _stat_identity(after)
-        or _stat_version(opened_before) != _stat_version(opened_after)
-        or total != int(before.st_size)
-        or total != int(opened_after.st_size)
-        or total != int(after.st_size)
+    if not _stat_observations_match(
+        before=before,
+        opened_before=opened_before,
+        opened_after=opened_after,
+        after=after,
+        observed_bytes=total,
     ):
         raise OSError(f"File changed while fingerprinting: {path}")
     return _FileFingerprint(
@@ -302,6 +355,103 @@ def _stable_file_fingerprint(path: Path, *, max_bytes: int) -> _FileFingerprint:
         mtime_ns=int(after.st_mtime_ns),
         ctime_ns=int(after.st_ctime_ns),
     )
+
+
+def _read_file_snapshot_bounded(path: Path, *, max_bytes: int) -> _FileBytesSnapshot:
+    if path.is_symlink() or not path.is_file():
+        raise OSError(f"Expected a regular file without symlinks: {path}")
+    limit = max(max_bytes, 0)
+    before = path.stat()
+    if int(before.st_size) > limit:
+        raise OSError(f"File exceeds {limit} bytes: {path}")
+    with path.open("rb") as stream:
+        opened_before = os.fstat(stream.fileno())
+        payload = stream.read(limit + 1)
+        opened_after = os.fstat(stream.fileno())
+    if len(payload) > limit:
+        raise OSError(f"File exceeds {limit} bytes: {path}")
+    if path.is_symlink():
+        raise OSError(f"File became a symlink while reading: {path}")
+    after = path.stat()
+    size = len(payload)
+    if not _stat_observations_match(
+        before=before,
+        opened_before=opened_before,
+        opened_after=opened_after,
+        after=after,
+        observed_bytes=size,
+    ):
+        raise OSError(f"File changed while reading: {path}")
+    return _FileBytesSnapshot(
+        payload=payload,
+        fingerprint=_FileFingerprint(
+            bytes=size,
+            sha256=hashlib.sha256(payload).hexdigest(),
+            device=int(after.st_dev),
+            inode=int(after.st_ino),
+            mtime_ns=int(after.st_mtime_ns),
+            ctime_ns=int(after.st_ctime_ns),
+        ),
+    )
+
+
+def _unlink_owned_regular_file(
+    path: Path,
+    *,
+    device: int,
+    inode: int,
+) -> None:
+    try:
+        current = path.lstat()
+        if not stat.S_ISREG(current.st_mode):
+            return
+        if (int(current.st_dev), int(current.st_ino)) != (device, inode):
+            return
+        path.unlink()
+    except OSError:
+        # Cleanup must not replace the write failure that triggered it.
+        return
+
+
+def _write_text_file_bounded(
+    path: Path,
+    text: str,
+    *,
+    max_bytes: int,
+) -> _FileFingerprint:
+    limit = max(max_bytes, 0)
+    if len(text) > limit:
+        raise OSError(f"Text exceeds {limit} bytes when encoded as UTF-8: {path}")
+    digest = hashlib.sha256()
+    created_identity: tuple[int, int] | None = None
+    total = 0
+    try:
+        with path.open("xb") as stream:
+            opened = os.fstat(stream.fileno())
+            created_identity = (int(opened.st_dev), int(opened.st_ino))
+            for offset in range(0, len(text), 262_144):
+                payload = text[offset : offset + 262_144].encode("utf-8")
+                total += len(payload)
+                if total > limit:
+                    raise OSError(
+                        f"Text exceeds {limit} bytes when encoded as UTF-8: {path}"
+                    )
+                stream.write(payload)
+                digest.update(payload)
+            stream.flush()
+            os.fsync(stream.fileno())
+        current = _stable_file_fingerprint(path, max_bytes=limit)
+        if current.bytes != total or current.sha256 != digest.hexdigest():
+            raise OSError(f"File changed after writing: {path}")
+        return current
+    except BaseException as exc:
+        if created_identity is not None:
+            _unlink_owned_regular_file(
+                path, device=created_identity[0], inode=created_identity[1]
+            )
+        if isinstance(exc, UnicodeError):
+            raise OSError(f"Text cannot be encoded as UTF-8: {path}") from exc
+        raise
 
 
 def _require_source_html_unchanged(
@@ -392,42 +542,82 @@ def _article_package_integrity_manifest(
 def _promote_article_package_tree(staging_dir: Path, package_dir: Path) -> str | None:
     if not _article_package_tree_complete(staging_dir):
         raise OSError(f"Article package staging tree is incomplete: {staging_dir}")
+    published_owner = _path_device_inode(staging_dir)
+    if published_owner is None:
+        raise OSError(f"Article package staging ownership is unstable: {staging_dir}")
     backup_dir: Path | None = None
+    backup_owner: tuple[int, int] | None = None
     published_by_this_call = False
     try:
         if package_dir.exists() or package_dir.is_symlink():
             if package_dir.is_symlink():
                 raise OSError(f"Article package target is a symlink: {package_dir}")
+            backup_owner = _path_device_inode(package_dir)
+            if backup_owner is None:
+                raise OSError(
+                    f"Article package target ownership is unstable: {package_dir}"
+                )
             backup_dir = package_dir.with_name(
                 f".{package_dir.name}.backup-{uuid.uuid4().hex}"
             )
             os.replace(package_dir, backup_dir)
+            if _path_device_inode(backup_dir) != backup_owner:
+                raise OSError(f"Article package backup ownership changed: {backup_dir}")
         os.replace(staging_dir, package_dir)
         published_by_this_call = True
+        if _path_device_inode(package_dir) != published_owner:
+            raise OSError(f"Published article package ownership changed: {package_dir}")
         if not _article_package_tree_complete(package_dir):
             raise OSError(
                 f"Published article package tree is incomplete: {package_dir}"
             )
-    except BaseException:
-        if published_by_this_call and (
-            package_dir.exists() or package_dir.is_symlink()
+        if _path_device_inode(package_dir) != published_owner:
+            raise OSError(f"Published article package ownership changed: {package_dir}")
+    except BaseException as exc:
+        recovery_errors: list[BaseException] = []
+        if (
+            published_by_this_call
+            and _path_device_inode(package_dir) == published_owner
         ):
-            _remove_article_package_path(package_dir)
-        elif (
-            package_dir.exists() or package_dir.is_symlink()
-        ) and not _article_package_tree_complete(package_dir):
-            _remove_article_package_path(package_dir)
-        if backup_dir is not None and backup_dir.exists():
-            if not package_dir.exists() and not package_dir.is_symlink():
-                os.replace(backup_dir, package_dir)
-            else:
+            try:
+                _remove_article_package_path(package_dir)
+            except BaseException as recovery_exc:
+                recovery_errors.append(recovery_exc)
+        if (
+            backup_dir is not None
+            and backup_owner is not None
+            and (backup_dir.exists() or backup_dir.is_symlink())
+            and not package_dir.exists()
+            and not package_dir.is_symlink()
+        ):
+            if _path_device_inode(backup_dir) == backup_owner:
                 try:
-                    _remove_article_package_path(backup_dir)
-                except OSError:
-                    pass
+                    os.replace(backup_dir, package_dir)
+                    if _path_device_inode(package_dir) != backup_owner:
+                        raise OSError(
+                            f"Restored article package ownership changed: {package_dir}"
+                        )
+                except BaseException as recovery_exc:
+                    recovery_errors.append(recovery_exc)
+        elif (
+            backup_dir is not None
+            and backup_owner is not None
+            and _path_device_inode(backup_dir) == backup_owner
+        ):
+            try:
+                _remove_article_package_path(backup_dir)
+            except BaseException as recovery_exc:
+                recovery_errors.append(recovery_exc)
+        for recovery_error in recovery_errors:
+            exc.add_note(
+                "Article package rollback error: "
+                f"{type(recovery_error).__name__}: {recovery_error}"
+            )
         raise
     else:
-        if backup_dir is not None and backup_dir.exists():
+        if backup_dir is not None and (backup_dir.exists() or backup_dir.is_symlink()):
+            if backup_owner is None or _path_device_inode(backup_dir) != backup_owner:
+                return (f"Article package backup ownership changed: {backup_dir}")[:500]
             try:
                 _remove_article_package_path(backup_dir)
             except OSError as exc:
@@ -436,29 +626,59 @@ def _promote_article_package_tree(staging_dir: Path, package_dir: Path) -> str |
 
 
 def _recover_interrupted_article_package(package_dir: Path) -> None:
-    backups = sorted(
+    backup_paths = sorted(
         package_dir.parent.glob(f".{package_dir.name}.backup-*"),
         key=_path_mtime_ns,
         reverse=True,
     )
+    backups = [
+        (backup, owner)
+        for backup in backup_paths
+        if (owner := _path_device_inode(backup)) is not None
+    ]
     if not backups:
         return
+    package_present = package_dir.exists() or package_dir.is_symlink()
+    package_owner = _path_device_inode(package_dir)
+    if package_present and package_owner is None:
+        raise OSError(f"Article package recovery target is unstable: {package_dir}")
     if _article_package_tree_complete(package_dir):
-        for backup in backups:
+        for backup, owner in backups:
             try:
-                _remove_article_package_path(backup)
+                _remove_owned_article_package_path(backup, owner=owner)
             except OSError:
                 pass
         return
-    for backup in backups:
+    for backup, backup_owner in backups:
         if not _article_package_tree_complete(backup):
             continue
+        if package_present:
+            if _path_device_inode(package_dir) != package_owner:
+                return
+        elif package_dir.exists() or package_dir.is_symlink():
+            return
+        if _path_device_inode(backup) != backup_owner:
+            continue
+        if package_present and package_owner is not None:
+            if not _remove_owned_article_package_path(
+                package_dir,
+                owner=package_owner,
+            ):
+                return
         if package_dir.exists() or package_dir.is_symlink():
-            _remove_article_package_path(package_dir)
+            return
+        if _path_device_inode(backup) != backup_owner:
+            return
         os.replace(backup, package_dir)
-        for stale_backup in backups:
-            if stale_backup != backup and stale_backup.exists():
-                _remove_article_package_path(stale_backup)
+        if _path_device_inode(package_dir) != backup_owner:
+            raise OSError(f"Recovered article package ownership changed: {package_dir}")
+        for stale_backup, stale_owner in backups:
+            if stale_backup == backup:
+                continue
+            _remove_owned_article_package_path(
+                stale_backup,
+                owner=stale_owner,
+            )
         return
 
 
@@ -782,12 +1002,12 @@ def _read_json_object_bounded(
             return None
         after = path.stat()
         size = len(payload)
-        if (
-            _stat_identity(before) != _stat_identity(after)
-            or _stat_version(opened_before) != _stat_version(opened_after)
-            or size != int(before.st_size)
-            or size != int(opened_after.st_size)
-            or size != int(after.st_size)
+        if not _stat_observations_match(
+            before=before,
+            opened_before=opened_before,
+            opened_after=opened_after,
+            after=after,
+            observed_bytes=size,
         ):
             return None
         parsed = json.loads(payload.decode("utf-8"))
@@ -813,6 +1033,90 @@ def _remove_article_package_path(path: Path) -> None:
         path.unlink()
     elif path.exists():
         shutil.rmtree(path)
+
+
+def _remove_owned_article_package_path(
+    path: Path,
+    *,
+    owner: tuple[int, int],
+) -> bool:
+    if _path_device_inode(path) != owner:
+        return False
+    claim_path = path.with_name(f".{path.name}.remove-claim-{uuid.uuid4().hex}")
+    try:
+        os.rename(path, claim_path)
+    except FileNotFoundError:
+        return False
+    except OSError:
+        if _path_device_inode(path) != owner:
+            return False
+        raise
+    if _path_device_inode(claim_path) != owner:
+        _restore_unowned_article_package_claim(
+            claim_path,
+            original_path=path,
+        )
+        return False
+    try:
+        _remove_article_package_path(claim_path)
+    except BaseException as exc:
+        if not _restore_owned_article_package_claim(
+            claim_path,
+            original_path=path,
+            owner=owner,
+        ):
+            exc.add_note(
+                "Owned article package claim could not be restored; "
+                f"inspect claim={claim_path} and original={path}"
+            )
+        raise
+    if claim_path.exists() or claim_path.is_symlink():
+        removal_error = OSError(
+            f"Article package removal did not remove its owned claim: {claim_path}"
+        )
+        if not _restore_owned_article_package_claim(
+            claim_path,
+            original_path=path,
+            owner=owner,
+        ):
+            removal_error.add_note(
+                "Owned article package claim could not be restored; "
+                f"inspect claim={claim_path} and original={path}"
+            )
+        raise removal_error
+    return True
+
+
+def _restore_owned_article_package_claim(
+    claim_path: Path,
+    *,
+    original_path: Path,
+    owner: tuple[int, int],
+) -> bool:
+    if _path_device_inode(claim_path) != owner:
+        return False
+    if original_path.exists() or original_path.is_symlink():
+        return False
+    try:
+        os.rename(claim_path, original_path)
+    except OSError:
+        return False
+    return _path_device_inode(original_path) == owner
+
+
+def _restore_unowned_article_package_claim(
+    claim_path: Path,
+    *,
+    original_path: Path,
+) -> None:
+    if not (claim_path.exists() or claim_path.is_symlink()):
+        return
+    if original_path.exists() or original_path.is_symlink():
+        return
+    try:
+        os.rename(claim_path, original_path)
+    except OSError:
+        return
 
 
 def _path_mtime_ns(path: Path) -> int:
@@ -886,8 +1190,14 @@ def evaluate_article_html(
     metadata: Any,
     source_download: dict[str, Any],
     article_verdict: dict[str, Any],
+    max_bytes: int = ARTICLE_PACKAGE_MAX_OUTPUT_BYTES,
 ) -> dict[str, Any]:
-    text = article_html.read_text(encoding="utf-8", errors="replace")
+    snapshot = _read_file_snapshot_bounded(article_html, max_bytes=max_bytes)
+    payload = snapshot.payload
+    snapshot_fingerprint = snapshot.fingerprint
+    del snapshot
+    text = payload.decode("utf-8", errors="replace")
+    del payload
     visible_text = _visible_text(text)
     article_text_chars = _int_value(article_verdict.get("text_chars"))
     text_chars = max(len(visible_text), article_text_chars)
@@ -908,9 +1218,7 @@ def evaluate_article_html(
     ]
     executable_payload_count = len(re.findall(r"<script\b", text, re.IGNORECASE))
     executable_payload_count += len(
-        re.findall(
-            r"<style\b(?![^>]*\bdata-z2m-style\s*=)", text, re.IGNORECASE
-        )
+        re.findall(r"<style\b(?![^>]*\bdata-z2m-style\s*=)", text, re.IGNORECASE)
     )
     active_media_count = len(
         re.findall(r"<(?:audio|video|iframe|object|embed)\b", text, re.IGNORECASE)
@@ -944,7 +1252,7 @@ def evaluate_article_html(
     if canonical_contract["status"] == "warning":
         warnings.append("canonical_contract_warning")
     status = "failed" if failures else "warning" if warnings else "passed"
-    return {
+    quality = {
         "standard": ARTICLE_HTML_STANDARD_VERSION,
         "status": status,
         "title": title,
@@ -966,6 +1274,13 @@ def evaluate_article_html(
         "failures": failures,
         "warnings": warnings,
     }
+    current_fingerprint = _stable_file_fingerprint(
+        article_html,
+        max_bytes=max_bytes,
+    )
+    if current_fingerprint != snapshot_fingerprint:
+        raise OSError(f"Article HTML changed while evaluating quality: {article_html}")
+    return quality
 
 
 def _article_html_with_standard_assets(
@@ -979,7 +1294,12 @@ def _article_html_with_standard_assets(
     max_scanned_assets: int = ARTICLE_PACKAGE_MAX_SCANNED_ASSETS,
 ) -> tuple[str, list[dict[str, Any]]]:
     if html_text is None:
-        html_text = source_html.read_text(encoding="utf-8", errors="replace")
+        source_snapshot = _read_file_snapshot_bounded(
+            source_html,
+            max_bytes=ARTICLE_PACKAGE_MAX_SOURCE_BYTES,
+        )
+        html_text = source_snapshot.payload.decode("utf-8", errors="replace")
+        del source_snapshot
     source_assets_dir = source_html.parent / f"{source_html.stem}_assets"
     target_assets_dir = package_dir / ASSETS_DIRNAME
     assets: list[dict[str, Any]] = []
@@ -1146,42 +1466,64 @@ def _copy_file_bounded(
     source: Path,
     target: Path,
     *,
-    max_bytes: int,
+    max_bytes: int | None,
 ) -> _FileFingerprint | None:
-    limit = max(max_bytes, 0)
+    publication = _copy_file_bounded_with_owner(
+        source,
+        target,
+        max_bytes=max_bytes,
+    )
+    return publication.source if publication is not None else None
+
+
+def _copy_file_bounded_with_owner(
+    source: Path,
+    target: Path,
+    *,
+    max_bytes: int | None,
+) -> _BoundedFileCopy | None:
+    limit = max(max_bytes, 0) if max_bytes is not None else None
     temp = target.with_name(f".{target.name}.article-asset-tmp-{uuid.uuid4().hex}")
     copied = 0
+    created_identity: tuple[int, int] | None = None
     try:
         if source.is_symlink() or not source.is_file():
             return None
         before = source.stat()
-        if int(before.st_size) > limit:
+        expected_bytes = int(before.st_size)
+        if expected_bytes < 0:
+            return None
+        if limit is not None and expected_bytes > limit:
             return None
         digest = hashlib.sha256()
         with source.open("rb") as source_stream, temp.open("xb") as target_stream:
             opened_before = os.fstat(source_stream.fileno())
-            while True:
-                chunk = source_stream.read(min(1_048_576, limit - copied + 1))
+            target_opened = os.fstat(target_stream.fileno())
+            created_identity = (
+                int(target_opened.st_dev),
+                int(target_opened.st_ino),
+            )
+            while copied < expected_bytes:
+                chunk = source_stream.read(min(1_048_576, expected_bytes - copied))
                 if not chunk:
                     break
                 copied += len(chunk)
-                if copied > limit:
-                    return None
                 target_stream.write(chunk)
                 digest.update(chunk)
+            if source_stream.read(1):
+                return None
             target_stream.flush()
             os.fsync(target_stream.fileno())
             opened_after = os.fstat(source_stream.fileno())
         if source.is_symlink():
             return None
         after = source.stat()
-        identity = _stat_identity(before)
-        if (
-            identity != _stat_identity(after)
-            or _stat_version(opened_before) != _stat_version(opened_after)
-            or copied != int(before.st_size)
-            or copied != int(opened_after.st_size)
-            or copied != int(after.st_size)
+        if not _stat_observations_match(
+            before=before,
+            opened_before=opened_before,
+            opened_after=opened_after,
+            after=after,
+            observed_bytes=copied,
         ):
             return None
         copied_fingerprint = _FileFingerprint(
@@ -1198,11 +1540,30 @@ def _copy_file_bounded(
         temp_fingerprint = _stable_file_fingerprint(temp, max_bytes=limit)
         if not _same_file_content(temp_fingerprint, copied_fingerprint):
             return None
+        if created_identity is None:
+            raise OSError(f"Bounded copy did not capture target ownership: {target}")
+        publication = _BoundedFileCopy(
+            source=copied_fingerprint,
+            target_device=created_identity[0],
+            target_inode=created_identity[1],
+        )
         os.replace(temp, target)
-        return copied_fingerprint
+        return publication
+    except BaseException:
+        if created_identity is not None:
+            _unlink_owned_regular_file(
+                target,
+                device=created_identity[0],
+                inode=created_identity[1],
+            )
+        raise
     finally:
-        if temp.exists() or temp.is_symlink():
-            temp.unlink()
+        if created_identity is not None:
+            _unlink_owned_regular_file(
+                temp,
+                device=created_identity[0],
+                inode=created_identity[1],
+            )
 
 
 def _skipped_asset(path: str, reason: str, *, size: int = 0) -> dict[str, Any]:
@@ -1258,14 +1619,18 @@ def _metadata_identifiers(metadata: Any) -> dict[str, str]:
 
 
 def _visible_text(text: str) -> str:
-    text = re.sub(r"<(script|style)\b[^>]*>.*?</\1>", " ", text, flags=re.IGNORECASE | re.DOTALL)
+    text = re.sub(
+        r"<(script|style)\b[^>]*>.*?</\1>", " ", text, flags=re.IGNORECASE | re.DOTALL
+    )
     text = re.sub(r"<!--.*?-->", " ", text, flags=re.DOTALL)
     text = re.sub(r"<[^>]+>", " ", text)
     return re.sub(r"\s+", " ", html.unescape(text)).strip()
 
 
 def _html_title(text: str) -> str:
-    match = re.search(r"<title[^>]*>(.*?)</title>", text, flags=re.IGNORECASE | re.DOTALL)
+    match = re.search(
+        r"<title[^>]*>(.*?)</title>", text, flags=re.IGNORECASE | re.DOTALL
+    )
     return _visible_text(match.group(1)) if match else ""
 
 
@@ -1274,7 +1639,11 @@ def _html_attr_values(text: str, tag: str, attr: str) -> list[str]:
         rf"<{tag}\b[^>]*\b{attr}\s*=\s*(['\"])(.*?)\1",
         flags=re.IGNORECASE | re.DOTALL,
     )
-    return [html.unescape(match.group(2)).strip() for match in pattern.finditer(text) if match.group(2).strip()]
+    return [
+        html.unescape(match.group(2)).strip()
+        for match in pattern.finditer(text)
+        if match.group(2).strip()
+    ]
 
 
 def _resource_refs(text: str) -> list[str]:
@@ -1310,7 +1679,9 @@ def _missing_local_refs(package_dir: Path, refs: list[str]) -> list[str]:
     package_root = package_dir.resolve(strict=False)
     for value in refs:
         lowered = value.casefold()
-        if not value or lowered.startswith(("http://", "https://", "//", "data:", "javascript:", "mailto:", "#")):
+        if not value or lowered.startswith(
+            ("http://", "https://", "//", "data:", "javascript:", "mailto:", "#")
+        ):
             continue
         if not _local_resource_exists(package_root, value):
             missing.append(value)
@@ -1345,7 +1716,11 @@ def _anchors(text: str) -> set[str]:
         r"\b(?:id|name)\s*=\s*(['\"])(.*?)\1",
         flags=re.IGNORECASE | re.DOTALL,
     )
-    return {html.unescape(match.group(2)).strip() for match in pattern.finditer(text) if match.group(2).strip()}
+    return {
+        html.unescape(match.group(2)).strip()
+        for match in pattern.finditer(text)
+        if match.group(2).strip()
+    }
 
 
 def urllib_fragment(value: str) -> str:
@@ -1353,7 +1728,11 @@ def urllib_fragment(value: str) -> str:
 
 
 def _bibliography_anchor_count(anchors: set[str]) -> int:
-    return sum(1 for anchor in anchors if re.search(r"(ref|bib|reference)", anchor, flags=re.IGNORECASE))
+    return sum(
+        1
+        for anchor in anchors
+        if re.search(r"(ref|bib|reference)", anchor, flags=re.IGNORECASE)
+    )
 
 
 def _math_strategy(text: str) -> dict[str, Any]:
@@ -1416,3 +1795,30 @@ def _int_value(value: object) -> int:
 def _safe_part(value: str) -> str:
     value = re.sub(r"[^A-Za-z0-9._-]+", "_", value.strip())
     return value.strip("._-")[:80] or "article"
+
+
+def _stat_cross_api_identity(value: os.stat_result) -> tuple[int, int, int, int]:
+    return (
+        int(value.st_dev),
+        int(value.st_ino),
+        int(value.st_size),
+        int(value.st_mtime_ns),
+    )
+
+
+def _stat_observations_match(
+    *,
+    before: os.stat_result,
+    opened_before: os.stat_result,
+    opened_after: os.stat_result,
+    after: os.stat_result,
+    observed_bytes: int,
+) -> bool:
+    return (
+        _stat_identity(before) == _stat_identity(after)
+        and _stat_identity(opened_before) == _stat_identity(opened_after)
+        and _stat_cross_api_identity(before) == _stat_cross_api_identity(opened_before)
+        and _stat_cross_api_identity(after) == _stat_cross_api_identity(opened_after)
+        and observed_bytes == int(before.st_size)
+        and observed_bytes == int(after.st_size)
+    )

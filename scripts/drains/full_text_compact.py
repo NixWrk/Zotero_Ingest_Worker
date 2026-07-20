@@ -2,10 +2,12 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import sys
 import threading
 import time
 from concurrent.futures import FIRST_COMPLETED, Future, ThreadPoolExecutor, wait
+from dataclasses import replace as dataclass_replace
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
@@ -21,7 +23,7 @@ from zotero_ingest_worker.metadata_jobs import (
     METADATA_JOB_RESEARCHGATE_PDF,
     METADATA_JOB_SCIHUB_PDF,
 )
-from zotero_ingest_worker.metadata_processor import ZoteroMetadataProcessor, metadata_job_owner
+from zotero_ingest_worker.metadata_processor import ZoteroMetadataProcessor
 
 
 FULL_TEXT_PDF_CYCLE = "full_text_pdf_cycle"
@@ -95,11 +97,14 @@ def summarize_job(job: dict[str, Any]) -> dict[str, Any]:
         "parent_item_key": job.get("parent_item_key"),
         "attachment_key": job.get("attachment_key"),
         "status": job.get("status"),
-        "full_text_status": payload.get("worker_status") or full_text_summary.worker_status,
+        "full_text_status": payload.get("worker_status")
+        or full_text_summary.worker_status,
         "relay_kind": relay_attachment.get("kind"),
         "attached_kinds": relay_attachment.get("attached_kinds"),
-        "new_attachment_key": relay.get("newAttachmentKey") or relay.get("attachmentKey"),
-        "pdf_new_attachment_key": pdf_relay.get("newAttachmentKey") or pdf_relay.get("attachmentKey"),
+        "new_attachment_key": relay.get("newAttachmentKey")
+        or relay.get("attachmentKey"),
+        "pdf_new_attachment_key": pdf_relay.get("newAttachmentKey")
+        or pdf_relay.get("attachmentKey"),
         "translation_job_id": translation_job.get("job_id"),
         "translation_status": translation_enqueue.get("classification"),
         "html_found": bool(full_text_summary.accepted_html),
@@ -110,7 +115,9 @@ def summarize_job(job: dict[str, Any]) -> dict[str, Any]:
         "existing_pdf_html_status": existing_html_enqueue.get("classification"),
         "existing_pdf_ocr_job_id": existing_ocr_job.get("job_id"),
         "existing_pdf_ocr_status": existing_ocr_enqueue.get("classification"),
-        "output_path": payload.get("output_path") or full_text_summary.output_path or job.get("output_path"),
+        "output_path": payload.get("output_path")
+        or full_text_summary.output_path
+        or job.get("output_path"),
         "error": job.get("last_error") or payload.get("error"),
     }
 
@@ -128,9 +135,10 @@ def summarize_scihub_pdf_job(job: dict[str, Any]) -> dict[str, Any]:
         relay = {}
 
     scihub_status = str(payload.get("status") or download.get("status") or "").strip()
-    attached = bool(payload.get("ok")) and scihub_status == "attached"
+    attached = payload.get("ok") is True and scihub_status == "attached"
     already_has_pdf = scihub_status == "parent_already_has_pdf"
-    downloaded = bool(download.get("ok")) and not download.get("skipped")
+    skipped = download.get("skipped")
+    downloaded = download.get("ok") is True and (skipped is None or skipped is False)
 
     return {
         "job_id": job.get("job_id"),
@@ -143,8 +151,11 @@ def summarize_scihub_pdf_job(job: dict[str, Any]) -> dict[str, Any]:
         "doi": download.get("doi") or payload.get("doi"),
         "scihub_url": download.get("scihub_url") or payload.get("scihub_url"),
         "pdf_url": download.get("pdf_url") or payload.get("pdf_url"),
-        "output_path": download.get("output_path") or payload.get("output_path") or job.get("output_path"),
-        "new_attachment_key": relay.get("newAttachmentKey") or relay.get("attachmentKey"),
+        "output_path": download.get("output_path")
+        or payload.get("output_path")
+        or job.get("output_path"),
+        "new_attachment_key": relay.get("newAttachmentKey")
+        or relay.get("attachmentKey"),
         "pdf_found": attached,
         "scihub_attached": attached,
         "scihub_downloaded": downloaded,
@@ -165,10 +176,13 @@ def summarize_researchgate_pdf_job(job: dict[str, Any]) -> dict[str, Any]:
     if not isinstance(relay, dict):
         relay = {}
 
-    researchgate_status = str(payload.get("status") or download.get("status") or "").strip()
-    attached = bool(payload.get("ok")) and researchgate_status == "attached"
+    researchgate_status = str(
+        payload.get("status") or download.get("status") or ""
+    ).strip()
+    attached = payload.get("ok") is True and researchgate_status == "attached"
     already_has_pdf = researchgate_status == "parent_already_has_pdf"
-    downloaded = bool(download.get("ok")) and not download.get("skipped")
+    skipped = download.get("skipped")
+    downloaded = download.get("ok") is True and (skipped is None or skipped is False)
 
     return {
         "job_id": job.get("job_id"),
@@ -176,9 +190,14 @@ def summarize_researchgate_pdf_job(job: dict[str, Any]) -> dict[str, Any]:
         "attachment_key": job.get("attachment_key"),
         "status": job.get("status"),
         "researchgate_status": researchgate_status or None,
-        "researchgate_url": download.get("url") or download.get("source_url") or payload.get("url"),
-        "output_path": download.get("output_path") or payload.get("output_path") or job.get("output_path"),
-        "new_attachment_key": relay.get("newAttachmentKey") or relay.get("attachmentKey"),
+        "researchgate_url": download.get("url")
+        or download.get("source_url")
+        or payload.get("url"),
+        "output_path": download.get("output_path")
+        or payload.get("output_path")
+        or job.get("output_path"),
+        "new_attachment_key": relay.get("newAttachmentKey")
+        or relay.get("attachmentKey"),
         "pdf_found": attached,
         "researchgate_attached": attached,
         "researchgate_downloaded": downloaded,
@@ -187,30 +206,65 @@ def summarize_researchgate_pdf_job(job: dict[str, Any]) -> dict[str, Any]:
     }
 
 
-def compact_batch(result: dict[str, Any], *, job_type: str = METADATA_JOB_FULL_TEXT) -> dict[str, Any]:
-    jobs = result.get("results")
-    if not isinstance(jobs, list):
-        jobs = []
-    if job_type == METADATA_JOB_SCIHUB_PDF:
-        summarized = [summarize_scihub_pdf_job(job) for job in jobs if isinstance(job, dict)]
-    elif job_type == METADATA_JOB_RESEARCHGATE_PDF:
-        summarized = [summarize_researchgate_pdf_job(job) for job in jobs if isinstance(job, dict)]
-    else:
-        summarized = [summarize_job(job) for job in jobs if isinstance(job, dict)]
-    queue = result.get("queue")
-    if not isinstance(queue, dict):
-        queue = {}
+def _nonnegative_batch_count(value: object, *, field: str) -> int:
+    if type(value) is not int or value < 0:
+        raise RuntimeError(f"batch {field} must be an exact non-negative integer")
+    return value
 
+
+def _print_json(value: dict[str, Any]) -> None:
+    print(json.dumps(value, ensure_ascii=True), flush=True)
+
+
+def compact_batch(
+    result: dict[str, Any], *, job_type: str = METADATA_JOB_FULL_TEXT
+) -> dict[str, Any]:
+    raw_jobs = result.get("results", [])
+    if not isinstance(raw_jobs, list):
+        raise RuntimeError("batch results must be an array")
+    jobs: list[dict[str, Any]] = []
+    for index, job in enumerate(raw_jobs):
+        if not isinstance(job, dict):
+            raise RuntimeError(f"batch results[{index}] must be an object")
+        jobs.append(job)
+    if job_type == METADATA_JOB_SCIHUB_PDF:
+        summarized = [summarize_scihub_pdf_job(job) for job in jobs]
+    elif job_type == METADATA_JOB_RESEARCHGATE_PDF:
+        summarized = [summarize_researchgate_pdf_job(job) for job in jobs]
+    else:
+        summarized = [summarize_job(job) for job in jobs]
+    queue = result.get("queue", {})
+    if not isinstance(queue, dict):
+        raise RuntimeError("batch queue must be an object")
+    processed = _nonnegative_batch_count(result.get("processed", 0), field="processed")
+    failed = _nonnegative_batch_count(result.get("failed", 0), field="failed")
+    if failed > processed:
+        raise RuntimeError("batch failed count cannot exceed processed count")
+    ok = result.get("ok")
+    if type(ok) is not bool:
+        raise RuntimeError("batch ok must be an exact boolean")
+
+    if len(jobs) != processed:
+        raise RuntimeError("batch results count must equal processed count")
+    failed_retryable_jobs = sum(
+        1 for item in summarized if item.get("status") == "failed_retryable"
+    )
+    failed_final_jobs = sum(
+        1 for item in summarized if item.get("status") == "failed_final"
+    )
+    if failed_retryable_jobs + failed_final_jobs != failed:
+        raise RuntimeError("batch failed count must match failed job statuses")
+
+    batch_error = not ok and failed == 0
     compact = {
         "at": datetime.now(timezone.utc).isoformat(),
         "job_type": job_type,
-        "ok": result.get("ok"),
-        "processed": result.get("processed", 0),
-        "failed": result.get("failed", 0),
-        "failed_retryable_jobs": sum(
-            1 for item in summarized if item.get("status") == "failed_retryable"
-        ),
-        "failed_final_jobs": sum(1 for item in summarized if item.get("status") == "failed_final"),
+        "ok": ok,
+        "batch_error": batch_error,
+        "processed": processed,
+        "failed": failed,
+        "failed_retryable_jobs": failed_retryable_jobs,
+        "failed_final_jobs": failed_final_jobs,
         "queue": {
             "queued": queue.get("queued"),
             "running": queue.get("running"),
@@ -230,13 +284,21 @@ def compact_batch(result: dict[str, Any], *, job_type: str = METADATA_JOB_FULL_T
         "existing_pdf_ocr_queued": sum(
             1 for item in summarized if item.get("existing_pdf_ocr_job_id")
         ),
-        "translation_queued": sum(1 for item in summarized if item.get("translation_job_id")),
+        "translation_queued": sum(
+            1 for item in summarized if item.get("translation_job_id")
+        ),
         "jobs": summarized,
     }
     if job_type == METADATA_JOB_SCIHUB_PDF:
-        compact["scihub_attached"] = sum(1 for item in summarized if item.get("scihub_attached"))
-        compact["scihub_downloaded"] = sum(1 for item in summarized if item.get("scihub_downloaded"))
-        compact["already_has_pdf"] = sum(1 for item in summarized if item.get("already_has_pdf"))
+        compact["scihub_attached"] = sum(
+            1 for item in summarized if item.get("scihub_attached")
+        )
+        compact["scihub_downloaded"] = sum(
+            1 for item in summarized if item.get("scihub_downloaded")
+        )
+        compact["already_has_pdf"] = sum(
+            1 for item in summarized if item.get("already_has_pdf")
+        )
     if job_type == METADATA_JOB_RESEARCHGATE_PDF:
         compact["researchgate_attached"] = sum(
             1 for item in summarized if item.get("researchgate_attached")
@@ -244,7 +306,9 @@ def compact_batch(result: dict[str, Any], *, job_type: str = METADATA_JOB_FULL_T
         compact["researchgate_downloaded"] = sum(
             1 for item in summarized if item.get("researchgate_downloaded")
         )
-        compact["already_has_pdf"] = sum(1 for item in summarized if item.get("already_has_pdf"))
+        compact["already_has_pdf"] = sum(
+            1 for item in summarized if item.get("already_has_pdf")
+        )
     return compact
 
 
@@ -271,6 +335,7 @@ class ParallelDrainCoordinator:
         self.total_failed_retryable = 0
         self.total_failed_final = 0
         self.total_html_found = 0
+        self.total_batch_errors = 0
         self.total_pdf_found = 0
         self.total_translation_queued = 0
         self.total_researchgate_attached = 0
@@ -295,6 +360,29 @@ class ParallelDrainCoordinator:
             self._reserved += reserved
             return reserved
 
+    def complete_batch(self, *, reserved: int, processed: int) -> None:
+        if type(reserved) is not int or reserved <= 0:
+            raise RuntimeError("reserved batch size must be a positive integer")
+        if type(processed) is not int or not 0 <= processed <= reserved:
+            raise RuntimeError(
+                "processed batch size must be a non-negative integer no greater than reserved"
+            )
+        if self.limit is None:
+            return
+        unused = reserved - processed
+        if unused == 0:
+            return
+        with self._lock:
+            if unused > self._reserved:
+                raise RuntimeError(
+                    "cannot release more drain capacity than is reserved"
+                )
+            self._reserved -= unused
+
+    def limit_reached(self) -> bool:
+        with self._lock:
+            return self.limit is not None and self._reserved >= self.limit
+
     def stop(self) -> None:
         self._stop.set()
 
@@ -305,20 +393,27 @@ class ParallelDrainCoordinator:
         with self._lock:
             self.total_processed += int(compact.get("processed") or 0)
             self.total_failed += int(compact.get("failed") or 0)
-            self.total_failed_retryable += int(compact.get("failed_retryable_jobs") or 0)
+            self.total_failed_retryable += int(
+                compact.get("failed_retryable_jobs") or 0
+            )
             self.total_failed_final += int(compact.get("failed_final_jobs") or 0)
             self.total_html_found += int(compact.get("html_found") or 0)
+            self.total_batch_errors += int(compact.get("batch_error") is True)
             self.total_pdf_found += int(compact.get("pdf_found") or 0)
             self.total_translation_queued += int(compact.get("translation_queued") or 0)
-            self.total_researchgate_attached += int(compact.get("researchgate_attached") or 0)
-            self.total_researchgate_downloaded += int(compact.get("researchgate_downloaded") or 0)
+            self.total_researchgate_attached += int(
+                compact.get("researchgate_attached") or 0
+            )
+            self.total_researchgate_downloaded += int(
+                compact.get("researchgate_downloaded") or 0
+            )
             self.total_scihub_attached += int(compact.get("scihub_attached") or 0)
             self.total_scihub_downloaded += int(compact.get("scihub_downloaded") or 0)
             self.total_already_has_pdf += int(compact.get("already_has_pdf") or 0)
 
             with self.log_path.open("a", encoding="utf-8") as handle:
                 handle.write(json.dumps(compact, ensure_ascii=False) + "\n")
-            print(json.dumps(compact, ensure_ascii=False), flush=True)
+            _print_json(compact)
 
             if self.max_failures > 0 and self.total_failed >= self.max_failures:
                 self._stop.set()
@@ -327,16 +422,16 @@ class ParallelDrainCoordinator:
                 and self.total_failed_retryable >= self.max_retryable_failures
             ):
                 self._stop.set()
+            if self.total_batch_errors > 0:
+                self._stop.set()
 
 
 def _job_label(job_type: str) -> str:
     return job_type.replace("_", "-")
 
 
-def _job_exit_code(job_type: str, *, failed: int, failed_retryable: int) -> int:
-    if job_type in {METADATA_JOB_RESEARCHGATE_PDF, METADATA_JOB_SCIHUB_PDF}:
-        return 1 if failed_retryable else 0
-    return 1 if failed else 0
+def _job_exit_code(*, failed: int, batch_errors: int) -> int:
+    return 1 if failed or batch_errors else 0
 
 
 def _drain_metadata_batch(
@@ -353,16 +448,21 @@ def _drain_metadata_batch(
     return processor.drain_full_text_queue(limit=limit, dry_run=dry_run)
 
 
+def _single_worker_processor() -> ZoteroMetadataProcessor:
+    config = dataclass_replace(from_env(), metadata_drain_max_workers=1)
+    return ZoteroMetadataProcessor(config)
+
+
 def _drain_parallel_worker(
     *,
     worker_index: int,
     args: argparse.Namespace,
     coordinator: ParallelDrainCoordinator,
 ) -> dict[str, Any]:
-    if args.worker_stagger_seconds > 0 and worker_index > 0:
-        time.sleep(args.worker_stagger_seconds * worker_index)
+    if args.worker_stagger_seconds > 0 and worker_index > 1:
+        time.sleep(args.worker_stagger_seconds * (worker_index - 1))
 
-    processor = ZoteroMetadataProcessor(from_env())
+    processor = _single_worker_processor()
     local_processed = 0
     local_failed = 0
 
@@ -371,24 +471,28 @@ def _drain_parallel_worker(
         if batch_limit <= 0:
             break
 
-        result = _drain_metadata_batch(
-            processor,
-            job_type=args.job_type,
-            limit=batch_limit,
-            dry_run=args.dry_run,
-        )
-        compact = compact_batch(result, job_type=args.job_type)
+        try:
+            result = _drain_metadata_batch(
+                processor,
+                job_type=args.job_type,
+                limit=batch_limit,
+                dry_run=args.dry_run,
+            )
+            compact = compact_batch(result, job_type=args.job_type)
+        except BaseException:
+            coordinator.complete_batch(reserved=batch_limit, processed=0)
+            raise
         compact["worker_index"] = worker_index
         compact["worker_name"] = f"{_job_label(args.job_type)}-worker-{worker_index}"
 
         processed = int(compact.get("processed") or 0)
         failed = int(compact.get("failed") or 0)
+        coordinator.complete_batch(reserved=batch_limit, processed=processed)
         local_processed += processed
         local_failed += failed
         coordinator.record(compact)
 
-        if processed == 0 or processed < batch_limit or args.dry_run:
-            coordinator.stop()
+        if processed == 0 or args.dry_run:
             break
         if args.sleep_seconds > 0:
             time.sleep(args.sleep_seconds)
@@ -439,6 +543,7 @@ def _run_parallel(args: argparse.Namespace) -> int:
         "failed_retryable_jobs": coordinator.total_failed_retryable,
         "failed_final_jobs": coordinator.total_failed_final,
         "html_found": coordinator.total_html_found,
+        "batch_errors": coordinator.total_batch_errors,
         "pdf_found": coordinator.total_pdf_found,
         "researchgate_attached": coordinator.total_researchgate_attached,
         "researchgate_downloaded": coordinator.total_researchgate_downloaded,
@@ -451,11 +556,10 @@ def _run_parallel(args: argparse.Namespace) -> int:
     }
     with log_path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(summary, ensure_ascii=False) + "\n")
-    print(json.dumps(summary, ensure_ascii=False), flush=True)
+    _print_json(summary)
     return _job_exit_code(
-        args.job_type,
         failed=coordinator.total_failed,
-        failed_retryable=coordinator.total_failed_retryable,
+        batch_errors=coordinator.total_batch_errors,
     )
 
 
@@ -484,7 +588,9 @@ def _metadata_queue_summary(
 
 
 def _full_text_queue_summary(*, lease_owner: str | None = None) -> dict[str, Any]:
-    return _metadata_queue_summary(job_type=METADATA_JOB_FULL_TEXT, lease_owner=lease_owner)
+    return _metadata_queue_summary(
+        job_type=METADATA_JOB_FULL_TEXT, lease_owner=lease_owner
+    )
 
 
 def _drain_dynamic_batch(
@@ -493,7 +599,7 @@ def _drain_dynamic_batch(
     args: argparse.Namespace,
     batch_limit: int,
 ) -> dict[str, Any]:
-    processor = ZoteroMetadataProcessor(from_env())
+    processor = _single_worker_processor()
     result = _drain_metadata_batch(
         processor,
         job_type=args.job_type,
@@ -513,7 +619,6 @@ def _run_dynamic_parallel(args: argparse.Namespace) -> int:
     limit = None if args.limit <= 0 else args.limit
     max_workers = max(1, int(args.workers))
     poll_seconds = max(0.1, float(args.dynamic_poll_seconds))
-    lease_owner = metadata_job_owner()
 
     coordinator = ParallelDrainCoordinator(
         log_path=log_path,
@@ -522,16 +627,21 @@ def _run_dynamic_parallel(args: argparse.Namespace) -> int:
         max_failures=max(0, int(args.max_failures)),
         max_retryable_failures=max(0, int(args.max_retryable_failures)),
     )
-    inflight: dict[Future[dict[str, Any]], int] = {}
+    inflight: dict[Future[dict[str, Any]], tuple[int, int]] = {}
     worker_summaries: dict[int, dict[str, int]] = {}
     worker_sequence = 0
 
     def record_completed(done: set[Future[dict[str, Any]]]) -> None:
         for future in done:
-            worker_index = inflight.pop(future)
-            compact = future.result()
+            worker_index, batch_limit = inflight.pop(future)
+            try:
+                compact = future.result()
+            except BaseException:
+                coordinator.complete_batch(reserved=batch_limit, processed=0)
+                raise
             processed = int(compact.get("processed") or 0)
             failed = int(compact.get("failed") or 0)
+            coordinator.complete_batch(reserved=batch_limit, processed=processed)
             coordinator.record(compact)
 
             worker_summary = worker_summaries.setdefault(
@@ -549,28 +659,31 @@ def _run_dynamic_parallel(args: argparse.Namespace) -> int:
             finished_now = {future for future in inflight if future.done()}
             record_completed(finished_now)
 
-            queue = _metadata_queue_summary(job_type=args.job_type, lease_owner=lease_owner)
-            queued = int(queue.get("queued") or 0)
-            running = int(queue.get("running") or 0)
-            owned_running = int(queue.get("owned_running") or 0)
-            if queued <= 0 and not inflight:
-                if limit is None and running > 0:
+            queue = _metadata_queue_summary(job_type=args.job_type)
+            queued = _nonnegative_batch_count(
+                queue.get("queued", 0), field="queue.queued"
+            )
+            running = _nonnegative_batch_count(
+                queue.get("running", 0), field="queue.running"
+            )
+            inflight_reserved = sum(batch_limit for _, batch_limit in inflight.values())
+            available_queued = max(0, queued - inflight_reserved)
+            if not inflight:
+                if coordinator.limit_reached():
+                    break
+                if queued <= 0 and running > 0:
                     time.sleep(poll_seconds)
                     continue
-                break
+                if queued <= 0:
+                    break
 
-            unleased_inflight = max(0, len(inflight) - owned_running)
-            active_queue_claim = min(queued, max(running, owned_running))
-            available_queued = max(0, queued - active_queue_claim - unleased_inflight)
-            desired_active = min(max_workers, len(inflight) + available_queued)
             while (
-                queued > 0
-                and len(inflight) < desired_active
+                available_queued > 0
+                and len(inflight) < max_workers
                 and not coordinator.should_stop()
             ):
-                batch_limit = coordinator.reserve_batch(max_batch=queued)
+                batch_limit = coordinator.reserve_batch(max_batch=available_queued)
                 if batch_limit <= 0:
-                    coordinator.stop()
                     break
                 worker_sequence += 1
                 future = executor.submit(
@@ -579,11 +692,11 @@ def _run_dynamic_parallel(args: argparse.Namespace) -> int:
                     args=args,
                     batch_limit=batch_limit,
                 )
-                inflight[future] = worker_sequence
-                queued -= batch_limit
+                inflight[future] = (worker_sequence, batch_limit)
+                available_queued -= batch_limit
 
             if not inflight:
-                if queued <= 0:
+                if coordinator.limit_reached():
                     break
                 time.sleep(poll_seconds)
                 continue
@@ -611,6 +724,7 @@ def _run_dynamic_parallel(args: argparse.Namespace) -> int:
         "failed_retryable_jobs": coordinator.total_failed_retryable,
         "failed_final_jobs": coordinator.total_failed_final,
         "html_found": coordinator.total_html_found,
+        "batch_errors": coordinator.total_batch_errors,
         "pdf_found": coordinator.total_pdf_found,
         "researchgate_attached": coordinator.total_researchgate_attached,
         "researchgate_downloaded": coordinator.total_researchgate_downloaded,
@@ -623,11 +737,10 @@ def _run_dynamic_parallel(args: argparse.Namespace) -> int:
     }
     with log_path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(summary, ensure_ascii=False) + "\n")
-    print(json.dumps(summary, ensure_ascii=False), flush=True)
+    _print_json(summary)
     return _job_exit_code(
-        args.job_type,
         failed=coordinator.total_failed,
-        failed_retryable=coordinator.total_failed_retryable,
+        batch_errors=coordinator.total_batch_errors,
     )
 
 
@@ -637,7 +750,7 @@ def _run_single_job_type(args: argparse.Namespace) -> int:
     if args.workers > 1 and not args.dry_run:
         return _run_parallel(args)
 
-    processor = ZoteroMetadataProcessor(from_env())
+    processor = _single_worker_processor()
     log_path = Path(args.log_path)
     log_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -646,6 +759,7 @@ def _run_single_job_type(args: argparse.Namespace) -> int:
     total_failed_retryable = 0
     total_failed_final = 0
     total_html_found = 0
+    total_batch_errors = 0
     total_pdf_found = 0
     total_translation_queued = 0
     total_researchgate_attached = 0
@@ -674,17 +788,20 @@ def _run_single_job_type(args: argparse.Namespace) -> int:
         total_failed_retryable += int(compact.get("failed_retryable_jobs") or 0)
         total_failed_final += int(compact.get("failed_final_jobs") or 0)
         total_html_found += int(compact.get("html_found") or 0)
+        total_batch_errors += int(compact.get("batch_error") is True)
         total_pdf_found += int(compact.get("pdf_found") or 0)
         total_translation_queued += int(compact.get("translation_queued") or 0)
         total_researchgate_attached += int(compact.get("researchgate_attached") or 0)
-        total_researchgate_downloaded += int(compact.get("researchgate_downloaded") or 0)
+        total_researchgate_downloaded += int(
+            compact.get("researchgate_downloaded") or 0
+        )
         total_scihub_attached += int(compact.get("scihub_attached") or 0)
         total_scihub_downloaded += int(compact.get("scihub_downloaded") or 0)
         total_already_has_pdf += int(compact.get("already_has_pdf") or 0)
 
         with log_path.open("a", encoding="utf-8") as handle:
             handle.write(json.dumps(compact, ensure_ascii=False) + "\n")
-        print(json.dumps(compact, ensure_ascii=False), flush=True)
+        _print_json(compact)
 
         if int(compact.get("processed") or 0) == 0:
             break
@@ -703,6 +820,7 @@ def _run_single_job_type(args: argparse.Namespace) -> int:
         "failed_retryable_jobs": total_failed_retryable,
         "failed_final_jobs": total_failed_final,
         "html_found": total_html_found,
+        "batch_errors": total_batch_errors,
         "pdf_found": total_pdf_found,
         "researchgate_attached": total_researchgate_attached,
         "researchgate_downloaded": total_researchgate_downloaded,
@@ -714,11 +832,10 @@ def _run_single_job_type(args: argparse.Namespace) -> int:
     }
     with log_path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(summary, ensure_ascii=False) + "\n")
-    print(json.dumps(summary, ensure_ascii=False), flush=True)
+    _print_json(summary)
     return _job_exit_code(
-        args.job_type,
         failed=total_failed,
-        failed_retryable=total_failed_retryable,
+        batch_errors=total_batch_errors,
     )
 
 
@@ -727,25 +844,40 @@ def _run_full_text_pdf_cycle(args: argparse.Namespace) -> int:
     stage_results: list[dict[str, Any]] = []
     for job_type in PDF_FALLBACK_CYCLE:
         if job_type == SCIHUB_PDF_BACKLOG_SCAN:
-            processor = ZoteroMetadataProcessor(from_env())
-            result = processor.scihub_pdf_backlog_scan(
-                limit=None if args.limit <= 0 else args.limit,
-                force=False,
-            )
-            compact = {
-                "at": datetime.now(timezone.utc).isoformat(),
-                "job_type": SCIHUB_PDF_BACKLOG_SCAN,
-                "ok": result.get("ok"),
-                "scanned": result.get("scanned"),
-                "queued": result.get("queued"),
-                "skipped": result.get("skipped"),
-                "queue": result.get("queue"),
-            }
+            if args.dry_run:
+                result: dict[str, Any] = {}
+                compact = {
+                    "at": datetime.now(timezone.utc).isoformat(),
+                    "job_type": SCIHUB_PDF_BACKLOG_SCAN,
+                    "ok": True,
+                    "dry_run": True,
+                    "skipped": True,
+                    "reason": "dry_run_intake_disabled",
+                }
+            else:
+                processor = ZoteroMetadataProcessor(from_env())
+                result = processor.scihub_pdf_backlog_scan(
+                    limit=None if args.limit <= 0 else args.limit,
+                    force=False,
+                )
+                compact = {
+                    "at": datetime.now(timezone.utc).isoformat(),
+                    "job_type": SCIHUB_PDF_BACKLOG_SCAN,
+                    "ok": result.get("ok"),
+                }
+                compact.update(
+                    {
+                        "scanned": result.get("scanned"),
+                        "queued": result.get("queued"),
+                        "skipped": result.get("skipped"),
+                        "queue": result.get("queue"),
+                    }
+                )
             log_path = Path(args.log_path)
             log_path.parent.mkdir(parents=True, exist_ok=True)
             with log_path.open("a", encoding="utf-8") as handle:
                 handle.write(json.dumps(compact, ensure_ascii=False) + "\n")
-            print(json.dumps(compact, ensure_ascii=False), flush=True)
+            _print_json(compact)
             stage_results.append(
                 {
                     "job_type": SCIHUB_PDF_BACKLOG_SCAN,
@@ -773,7 +905,7 @@ def _run_full_text_pdf_cycle(args: argparse.Namespace) -> int:
     log_path.parent.mkdir(parents=True, exist_ok=True)
     with log_path.open("a", encoding="utf-8") as handle:
         handle.write(json.dumps(summary, ensure_ascii=False) + "\n")
-    print(json.dumps(summary, ensure_ascii=False), flush=True)
+    _print_json(summary)
     return exit_code
 
 
@@ -796,9 +928,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
             "full_text -> researchgate_pdf -> scihub_pdf."
         ),
     )
-    parser.add_argument("--limit", type=int, default=0, help="Jobs to process; 0 drains until empty.")
-    parser.add_argument("--batch-size", type=int, default=5, help="Jobs per processor call.")
-    parser.add_argument("--sleep-seconds", type=float, default=0.0, help="Pause between batches.")
+    parser.add_argument(
+        "--limit", type=int, default=0, help="Jobs to process; 0 drains until empty."
+    )
+    parser.add_argument(
+        "--batch-size", type=int, default=5, help="Jobs per processor call."
+    )
+    parser.add_argument(
+        "--sleep-seconds", type=float, default=0.0, help="Pause between batches."
+    )
     parser.add_argument(
         "--workers",
         type=int,
@@ -840,7 +978,34 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
         default="/data/ingest/full_text_drain_progress.jsonl",
         help="JSONL progress log path inside the running environment.",
     )
-    return parser.parse_args(argv)
+    args = parser.parse_args(argv)
+    nonnegative_integers = (
+        ("limit", args.limit),
+        ("max-failures", args.max_failures),
+        ("max-retryable-failures", args.max_retryable_failures),
+    )
+    for field, value in nonnegative_integers:
+        if value < 0:
+            parser.error(f"--{field} must be non-negative")
+    positive_integers = (
+        ("batch-size", args.batch_size),
+        ("workers", args.workers),
+    )
+    for field, value in positive_integers:
+        if value <= 0:
+            parser.error(f"--{field} must be positive")
+    nonnegative_floats = (
+        ("sleep-seconds", args.sleep_seconds),
+        ("worker-stagger-seconds", args.worker_stagger_seconds),
+    )
+    for field, value in nonnegative_floats:
+        if not math.isfinite(value) or value < 0:
+            parser.error(f"--{field} must be finite and non-negative")
+    if not math.isfinite(args.dynamic_poll_seconds) or args.dynamic_poll_seconds <= 0:
+        parser.error("--dynamic-poll-seconds must be finite and positive")
+    if not isinstance(args.log_path, str) or not args.log_path.strip():
+        parser.error("--log-path must be a non-empty path")
+    return args
 
 
 if __name__ == "__main__":

@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
+
+import pytest
 
 import zotero_ingest_worker.article_standard as article_standard_module
 from zotero_ingest_worker.article_standard import (
@@ -12,11 +15,15 @@ from zotero_ingest_worker.article_standard import (
     evaluate_article_html,
     standardize_native_html_download,
 )
-from zotero_ingest_worker.full_text_attachment import _html_attachment_source_with_embedded_assets
+from zotero_ingest_worker.full_text_attachment import (
+    _html_attachment_source_with_embedded_assets,
+)
 from zoteropdf2md.html_contract import CANONICAL_HTML_PROFILE
 
 
-def test_standardize_native_html_download_writes_article_package(tmp_path: Path) -> None:
+def test_standardize_native_html_download_writes_article_package(
+    tmp_path: Path,
+) -> None:
     source = tmp_path / "01.publisher.example.html"
     assets = tmp_path / "01.publisher.example_assets"
     assets.mkdir()
@@ -89,19 +96,108 @@ def test_standardize_native_html_download_writes_article_package(tmp_path: Path)
     assert quality["canonical_contract"]["status"] == "passed"
 
 
-def test_standard_article_html_assets_can_be_embedded_for_zotero_attachment(tmp_path: Path) -> None:
+def test_standard_article_html_assets_can_be_embedded_for_zotero_attachment(
+    tmp_path: Path,
+) -> None:
     package_dir = tmp_path / "package"
     assets = package_dir / "assets"
     assets.mkdir(parents=True)
     (assets / "figure.png").write_bytes(b"PNG")
     article = package_dir / "article.html"
-    article.write_text('<html><body><img src="assets/figure.png"></body></html>', encoding="utf-8")
+    article.write_text(
+        '<html><body><img src="assets/figure.png"></body></html>', encoding="utf-8"
+    )
 
     embedded, info = _html_attachment_source_with_embedded_assets(article)
 
     assert info["enabled"] is True
     assert info["asset_count"] == 1
     assert embedded.read_text(encoding="utf-8").count("data:image/png;base64") == 1
+
+
+def test_standard_article_embedding_preserves_sealed_package_payload(
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "article.html"
+    source.write_text(
+        """
+        <html><head><title>Article</title></head><body><article>
+          <h1>Article</h1><p>Accepted article body.</p>
+        </article></body></html>
+        """,
+        encoding="utf-8",
+    )
+    source_download = {
+        "source": "publisher",
+        "output_path": str(source),
+        "article_verdict": {"ok": True, "text_chars": 12_000},
+    }
+    metadata = SimpleNamespace(title="Article")
+    accepted = standardize_native_html_download(
+        source_download,
+        metadata=metadata,
+        package_root=tmp_path / "packages",
+        source_context="test",
+    )
+    assert accepted["ok"] is True
+    package_dir = Path(accepted["package_dir"])
+    article_html = package_dir / "article.html"
+    article_html.write_text(
+        article_html.read_text(encoding="utf-8").replace(
+            "</article>",
+            '<img src="assets/figure.png"></article>',
+        ),
+        encoding="utf-8",
+    )
+    asset = package_dir / "assets" / "figure.png"
+    asset.parent.mkdir(exist_ok=True)
+    asset.write_bytes(b"PNG")
+    quality = evaluate_article_html(
+        article_html=article_html,
+        metadata=metadata,
+        source_download=source_download,
+        article_verdict=source_download["article_verdict"],
+    )
+    quality_path = package_dir / "quality.json"
+    quality_path.write_text(
+        json.dumps(quality, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    asset_record = {
+        "path": "assets/figure.png",
+        "bytes": asset.stat().st_size,
+        "sha256": article_standard_module.hashlib.sha256(
+            asset.read_bytes()
+        ).hexdigest(),
+        "status": "copied",
+    }
+    manifest_path = package_dir / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest["canonical"] = quality["canonical_contract"]
+    manifest["quality"] = {
+        "status": quality["status"],
+        "failures": quality["failures"],
+        "warnings": quality["warnings"],
+    }
+    manifest["assets"] = [asset_record]
+    manifest["integrity"] = article_standard_module._article_package_integrity_manifest(
+        staging_dir=package_dir,
+        article_html=article_html,
+        source_copy=package_dir / manifest["integrity"]["source_copy"]["path"],
+        quality_path=quality_path,
+        assets=[asset_record],
+    )
+    manifest_path.write_text(
+        json.dumps(manifest, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    assert article_standard_module._article_package_tree_complete(package_dir) is True
+
+    embedded, info = _html_attachment_source_with_embedded_assets(article_html)
+
+    assert info["enabled"] is True
+    assert embedded.parent == package_dir / "logs" / "attachment_snapshots"
+    assert article_standard_module._article_package_tree_complete(package_dir) is True
 
 
 def test_standardize_native_html_rejects_symlink_source(
@@ -157,6 +253,24 @@ def test_standardize_native_html_rejects_oversized_source(
     assert result["reason"] == "source_html_too_large"
     assert result["source_bytes"] == 16_000_001
     assert not (tmp_path / "packages").exists()
+
+
+def test_article_asset_scan_bounds_direct_source_read(
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "article.html"
+    source.write_bytes(b"123456789")
+    package_dir = tmp_path / "package"
+    package_dir.mkdir()
+    monkeypatch.setattr(
+        article_standard_module,
+        "ARTICLE_PACKAGE_MAX_SOURCE_BYTES",
+        8,
+    )
+
+    with pytest.raises(OSError, match="exceeds 8 bytes"):
+        _article_html_with_standard_assets(source_html=source, package_dir=package_dir)
 
 
 def test_article_package_rejects_asset_candidate_outside_source_root(
@@ -329,7 +443,9 @@ def test_article_package_removes_stale_generated_assets(tmp_path: Path) -> None:
     assert not copied.exists()
 
 
-def test_standardize_native_html_rejects_non_article_before_creating_package(tmp_path: Path) -> None:
+def test_standardize_native_html_rejects_non_article_before_creating_package(
+    tmp_path: Path,
+) -> None:
     source = tmp_path / "landing.html"
     source.write_text(
         "<html><head><title>Abstract</title></head><body>Download PDF</body></html>",
@@ -354,7 +470,9 @@ def test_standardize_native_html_rejects_non_article_before_creating_package(tmp
     assert not (tmp_path / "packages").exists()
 
 
-def test_article_package_copies_local_srcset_reference_with_iiif_commas(tmp_path: Path) -> None:
+def test_article_package_copies_local_srcset_reference_with_iiif_commas(
+    tmp_path: Path,
+) -> None:
     source = tmp_path / "article.html"
     source_assets = tmp_path / "article_assets"
     nested = source_assets / "iiif" / "full" / "1234," / "0"
@@ -380,7 +498,9 @@ def test_article_package_copies_local_srcset_reference_with_iiif_commas(tmp_path
     assert copied.read_bytes() == b"JPEG"
 
 
-def test_article_quality_rejects_traversal_and_remote_svg_resources(tmp_path: Path) -> None:
+def test_article_quality_rejects_traversal_and_remote_svg_resources(
+    tmp_path: Path,
+) -> None:
     package = tmp_path / "package"
     package.mkdir()
     outside = tmp_path / "outside.png"
@@ -410,7 +530,9 @@ def test_article_quality_rejects_traversal_and_remote_svg_resources(tmp_path: Pa
     assert quality["remote_asset_count"] == 1
 
 
-def test_article_quality_rejects_unsafe_event_and_url_attributes(tmp_path: Path) -> None:
+def test_article_quality_rejects_unsafe_event_and_url_attributes(
+    tmp_path: Path,
+) -> None:
     article = tmp_path / "article.html"
     article.write_text(
         """
@@ -432,12 +554,178 @@ def test_article_quality_rejects_unsafe_event_and_url_attributes(tmp_path: Path)
     assert quality["unsafe_attribute_count"] == 2
 
 
+def test_article_quality_reads_a_bounded_stable_snapshot(tmp_path: Path) -> None:
+    article = tmp_path / "article.html"
+    article.write_text(
+        "<html><head><title>Article</title></head><body>"
+        + "x" * 128
+        + "</body></html>",
+        encoding="utf-8",
+    )
+
+    with pytest.raises(OSError, match="exceeds 64 bytes"):
+        evaluate_article_html(
+            article_html=article,
+            metadata=SimpleNamespace(title="Article"),
+            source_download={},
+            article_verdict={"ok": True, "text_chars": 12_000},
+            max_bytes=64,
+        )
+
+
+def test_bounded_text_writer_removes_partial_file_on_encoding_failure(
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "article.html"
+
+    with pytest.raises(OSError, match="UTF-8"):
+        article_standard_module._write_text_file_bounded(
+            output,
+            "prefix\ud800suffix",
+            max_bytes=128,
+        )
+
+    assert not output.exists()
+
+
+def test_bounded_text_writer_does_not_delete_preexisting_file(
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "article.html"
+    output.write_bytes(b"accepted")
+
+    with pytest.raises(FileExistsError):
+        article_standard_module._write_text_file_bounded(
+            output,
+            "replacement",
+            max_bytes=128,
+        )
+
+    assert output.read_bytes() == b"accepted"
+
+
+def test_bounded_text_writer_does_not_delete_concurrent_replacement(
+    monkeypatch: Any,
+    tmp_path: Path,
+) -> None:
+    output = tmp_path / "article.html"
+    winner = tmp_path / "winner.html"
+    winner.write_bytes(b"accepted concurrent winner")
+
+    def replace_before_validation(
+        path: Path,
+        *,
+        max_bytes: int,
+    ) -> object:
+        assert max_bytes == 128
+        os.replace(winner, path)
+        raise OSError("validation failed")
+
+    monkeypatch.setattr(
+        article_standard_module,
+        "_stable_file_fingerprint",
+        replace_before_validation,
+    )
+
+    with pytest.raises(OSError, match="validation failed"):
+        article_standard_module._write_text_file_bounded(output, "draft", max_bytes=128)
+
+    assert output.read_bytes() == b"accepted concurrent winner"
+
+
+@pytest.mark.parametrize(
+    "reader_name",
+    ["_read_file_snapshot_bounded", "_stable_file_fingerprint"],
+)
+def test_article_snapshot_rejects_descriptor_path_substitution(
+    monkeypatch: Any,
+    tmp_path: Path,
+    reader_name: str,
+) -> None:
+    expected = tmp_path / "expected.html"
+    substitute = tmp_path / "substitute.html"
+    expected.write_bytes(b"A" * 64)
+    substitute.write_bytes(b"B" * 64)
+    original_open = Path.open
+
+    def redirected_open(path: Path, *args: Any, **kwargs: Any) -> Any:
+        mode = str(args[0] if args else kwargs.get("mode") or "r")
+        if path == expected and mode == "rb":
+            return original_open(substitute, *args, **kwargs)
+        return original_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", redirected_open)
+    reader = getattr(article_standard_module, reader_name)
+
+    with pytest.raises(OSError, match="changed"):
+        reader(expected, max_bytes=128)
+
+
+def test_article_json_snapshot_rejects_descriptor_path_substitution(
+    monkeypatch: Any,
+    tmp_path: Path,
+) -> None:
+    expected = tmp_path / "expected.json"
+    substitute = tmp_path / "substitute.json"
+    expected.write_text('{"safe":1}', encoding="utf-8")
+    substitute.write_text('{"evil":1}', encoding="utf-8")
+    original_open = Path.open
+
+    def redirected_open(path: Path, *args: Any, **kwargs: Any) -> Any:
+        mode = str(args[0] if args else kwargs.get("mode") or "r")
+        if path == expected and mode == "rb":
+            return original_open(substitute, *args, **kwargs)
+        return original_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", redirected_open)
+
+    assert (
+        article_standard_module._read_json_object_bounded(
+            expected,
+            max_bytes=128,
+        )
+        is None
+    )
+
+
+def test_article_asset_copy_rejects_descriptor_path_substitution(
+    monkeypatch: Any,
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "source.bin"
+    substitute = tmp_path / "substitute.bin"
+    target = tmp_path / "target.bin"
+    source.write_bytes(b"A" * 64)
+    substitute.write_bytes(b"B" * 64)
+    original_open = Path.open
+
+    def redirected_open(path: Path, *args: Any, **kwargs: Any) -> Any:
+        mode = str(args[0] if args else kwargs.get("mode") or "r")
+        if path == source and mode == "rb":
+            return original_open(substitute, *args, **kwargs)
+        return original_open(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "open", redirected_open)
+
+    copied = article_standard_module._copy_file_bounded(
+        source,
+        target,
+        max_bytes=128,
+    )
+
+    assert copied is None
+    assert not target.exists()
+    assert not list(tmp_path.glob("*.article-asset-tmp-*"))
+
+
 def test_standardize_native_html_reports_package_write_failure(
     monkeypatch: object,
     tmp_path: Path,
 ) -> None:
     source = tmp_path / "article.html"
-    source.write_text("<html><body><article>Article</article></body></html>", encoding="utf-8")
+    source.write_text(
+        "<html><body><article>Article</article></body></html>", encoding="utf-8"
+    )
     monkeypatch.setattr(
         article_standard_module,
         "write_article_package",
@@ -476,16 +764,23 @@ def test_standardize_native_html_preserves_committed_package_when_rebuild_fails(
     previous_manifest = package_dir / "manifest.json"
     previous_article.write_text("previous accepted article", encoding="utf-8")
     previous_manifest.write_text('{"accepted": true}', encoding="utf-8")
-    original_copy2 = article_standard_module.shutil.copy2
+    original_copy = article_standard_module._copy_file_bounded
 
     def fail_source_copy(
-        source_path: object, target_path: object, *args: object, **kwargs: object
-    ) -> object:
+        source_path: Path,
+        target_path: Path,
+        *,
+        max_bytes: int | None,
+    ) -> Any:
         if Path(target_path).parent.name == "source":
             raise OSError("simulated source-copy failure")
-        return original_copy2(source_path, target_path, *args, **kwargs)
+        return original_copy(source_path, target_path, max_bytes=max_bytes)
 
-    monkeypatch.setattr(article_standard_module.shutil, "copy2", fail_source_copy)  # type: ignore[attr-defined]
+    monkeypatch.setattr(
+        article_standard_module,
+        "_copy_file_bounded",
+        fail_source_copy,
+    )  # type: ignore[attr-defined]
 
     result = standardize_native_html_download(
         {
@@ -579,8 +874,8 @@ def test_standardize_native_html_recovers_backup_before_failed_rebuild(
     article_standard_module.os.replace(package_dir, backup_dir)
 
     monkeypatch.setattr(
-        article_standard_module.shutil,
-        "copy2",
+        article_standard_module,
+        "_copy_file_bounded",
         lambda *_args, **_kwargs: (_ for _ in ()).throw(
             OSError("simulated reboot follow-up failure")
         ),
@@ -1002,3 +1297,459 @@ def test_article_package_completeness_hashes_exact_parsed_quality_snapshot(
     )
 
     assert article_standard_module._article_package_tree_complete(package_dir) is False
+
+
+def test_stat_identity_detects_ctime_change() -> None:
+    before = SimpleNamespace(
+        st_dev=1,
+        st_ino=2,
+        st_size=3,
+        st_mtime_ns=4,
+        st_ctime_ns=5,
+    )
+    after = SimpleNamespace(
+        st_dev=1,
+        st_ino=2,
+        st_size=3,
+        st_mtime_ns=4,
+        st_ctime_ns=6,
+    )
+
+    assert article_standard_module._stat_identity(
+        before,  # type: ignore[arg-type]
+    ) != article_standard_module._stat_identity(
+        after,  # type: ignore[arg-type]
+    )
+
+
+def test_article_package_source_copy_uses_bounded_streaming_copy(
+    monkeypatch: Any,
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "article.html"
+    source.write_text(
+        """
+        <html><head><title>Article</title></head><body><article>
+          <h1>Article</h1><p>Accepted article body.</p>
+        </article></body></html>
+        """,
+        encoding="utf-8",
+    )
+
+    def reject_unbounded_copy(*_args: object, **_kwargs: object) -> None:
+        raise OSError("unbounded shutil.copy2 was used")
+
+    monkeypatch.setattr(article_standard_module.shutil, "copy2", reject_unbounded_copy)
+
+    result = standardize_native_html_download(
+        {
+            "source": "publisher",
+            "output_path": str(source),
+            "article_verdict": {"ok": True, "text_chars": 12_000},
+        },
+        metadata=SimpleNamespace(title="Article"),
+        package_root=tmp_path / "packages",
+        source_context="test",
+    )
+
+    assert result["ok"] is True
+    source_copy = Path(result["package_dir"]) / "source" / source.name
+    assert source_copy.read_bytes() == source.read_bytes()
+
+
+def test_article_package_promotion_rejects_post_publish_replacement_without_deleting_winner(
+    monkeypatch: Any,
+    tmp_path: Path,
+) -> None:
+    staging_dir = tmp_path / ".package.staging-owner"
+    package_dir = tmp_path / "package"
+    concurrent_dir = tmp_path / ".package.concurrent-winner"
+    displaced_dir = tmp_path / ".package.displaced-owner"
+    staging_dir.mkdir()
+    concurrent_dir.mkdir()
+    (staging_dir / "owner.txt").write_text("our candidate", encoding="utf-8")
+    (concurrent_dir / "owner.txt").write_text(
+        "concurrent winner",
+        encoding="utf-8",
+    )
+    original_replace = article_standard_module.os.replace
+    swapped = False
+
+    def complete_with_post_publish_replacement(path: Path) -> bool:
+        nonlocal swapped
+        if path == package_dir and not swapped:
+            original_replace(package_dir, displaced_dir)
+            original_replace(concurrent_dir, package_dir)
+            swapped = True
+        return True
+
+    monkeypatch.setattr(
+        article_standard_module,
+        "_article_package_tree_complete",
+        complete_with_post_publish_replacement,
+    )
+
+    with pytest.raises(OSError, match="ownership changed"):
+        article_standard_module._promote_article_package_tree(
+            staging_dir,
+            package_dir,
+        )
+
+    assert swapped is True
+    assert (package_dir / "owner.txt").read_text(encoding="utf-8") == (
+        "concurrent winner"
+    )
+    assert (displaced_dir / "owner.txt").read_text(encoding="utf-8") == (
+        "our candidate"
+    )
+
+
+def test_article_package_recovery_does_not_delete_replaced_backup(
+    monkeypatch: Any,
+    tmp_path: Path,
+) -> None:
+    package_dir = tmp_path / "package"
+    backup_dir = tmp_path / ".package.backup-interrupted"
+    foreign_dir = tmp_path / ".package.foreign"
+    displaced_dir = tmp_path / ".package.displaced-backup"
+    package_dir.mkdir()
+    backup_dir.mkdir()
+    foreign_dir.mkdir()
+    (package_dir / "owner.txt").write_text("accepted package", encoding="utf-8")
+    (backup_dir / "owner.txt").write_text("our old backup", encoding="utf-8")
+    (foreign_dir / "owner.txt").write_text("foreign backup", encoding="utf-8")
+    original_replace = article_standard_module.os.replace
+    swapped = False
+
+    def complete_with_backup_replacement(path: Path) -> bool:
+        nonlocal swapped
+        if path == package_dir and not swapped:
+            original_replace(backup_dir, displaced_dir)
+            original_replace(foreign_dir, backup_dir)
+            swapped = True
+        return True
+
+    monkeypatch.setattr(
+        article_standard_module,
+        "_article_package_tree_complete",
+        complete_with_backup_replacement,
+    )
+
+    article_standard_module._recover_interrupted_article_package(package_dir)
+
+    assert swapped is True
+    assert (backup_dir / "owner.txt").read_text(encoding="utf-8") == ("foreign backup")
+    assert (displaced_dir / "owner.txt").read_text(encoding="utf-8") == (
+        "our old backup"
+    )
+
+
+def test_article_package_recovery_does_not_clobber_concurrent_package(
+    monkeypatch: Any,
+    tmp_path: Path,
+) -> None:
+    package_dir = tmp_path / "package"
+    backup_dir = tmp_path / ".package.backup-interrupted"
+    concurrent_dir = tmp_path / ".package.concurrent-winner"
+    displaced_dir = tmp_path / ".package.displaced-partial"
+    package_dir.mkdir()
+    backup_dir.mkdir()
+    concurrent_dir.mkdir()
+    (package_dir / "owner.txt").write_text("partial package", encoding="utf-8")
+    (backup_dir / "owner.txt").write_text("recovery backup", encoding="utf-8")
+    (concurrent_dir / "owner.txt").write_text(
+        "concurrent winner",
+        encoding="utf-8",
+    )
+    original_replace = article_standard_module.os.replace
+    swapped = False
+
+    def complete_with_package_replacement(path: Path) -> bool:
+        nonlocal swapped
+        if path == package_dir:
+            return False
+        if path == backup_dir and not swapped:
+            original_replace(package_dir, displaced_dir)
+            original_replace(concurrent_dir, package_dir)
+            swapped = True
+        return path == backup_dir
+
+    monkeypatch.setattr(
+        article_standard_module,
+        "_article_package_tree_complete",
+        complete_with_package_replacement,
+    )
+
+    article_standard_module._recover_interrupted_article_package(package_dir)
+
+    assert swapped is True
+    assert (package_dir / "owner.txt").read_text(encoding="utf-8") == (
+        "concurrent winner"
+    )
+    assert (backup_dir / "owner.txt").read_text(encoding="utf-8") == ("recovery backup")
+    assert (displaced_dir / "owner.txt").read_text(encoding="utf-8") == (
+        "partial package"
+    )
+
+
+def test_unlimited_fingerprint_stops_after_initial_size_growth(
+    monkeypatch: Any,
+    tmp_path: Path,
+) -> None:
+    source = tmp_path / "growing.pdf"
+    source.write_bytes(b"PDF0")
+    original_open = Path.open
+    growth_reads = 0
+
+    class GrowingReader:
+        def __init__(self, stream: Any) -> None:
+            self.stream = stream
+
+        def __enter__(self) -> GrowingReader:
+            self.stream.__enter__()
+            return self
+
+        def __exit__(self, *args: object) -> object:
+            return self.stream.__exit__(*args)
+
+        def fileno(self) -> int:
+            return self.stream.fileno()
+
+        def read(self, size: int = -1) -> bytes:
+            nonlocal growth_reads
+            payload = self.stream.read(size)
+            if payload:
+                return payload
+            growth_reads += 1
+            if growth_reads <= 3:
+                return b"X"
+            return b""
+
+    def open_with_growth(
+        path: Path,
+        mode: str = "r",
+        *args: object,
+        **kwargs: object,
+    ) -> Any:
+        stream = original_open(path, mode, *args, **kwargs)
+        if path == source and mode == "rb":
+            return GrowingReader(stream)
+        return stream
+
+    monkeypatch.setattr(Path, "open", open_with_growth)
+
+    with pytest.raises(OSError, match="changed while fingerprinting"):
+        article_standard_module._stable_file_fingerprint(
+            source,
+            max_bytes=None,
+        )
+
+    assert growth_reads == 1
+
+
+def test_owned_article_package_removal_claims_path_before_recursive_delete(
+    monkeypatch: Any,
+    tmp_path: Path,
+) -> None:
+    package_dir = tmp_path / "package"
+    foreign_dir = tmp_path / ".package.foreign"
+    displaced_dir = tmp_path / ".package.displaced-owner"
+    package_dir.mkdir()
+    foreign_dir.mkdir()
+    (package_dir / "owner.txt").write_text("owned package", encoding="utf-8")
+    (foreign_dir / "owner.txt").write_text("foreign package", encoding="utf-8")
+    owner = article_standard_module._path_device_inode(package_dir)
+    assert owner is not None
+    original_replace = article_standard_module.os.replace
+    original_rmtree = article_standard_module.shutil.rmtree
+    swapped = False
+
+    def replace_before_recursive_remove(
+        path: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+        *args: object,
+        **kwargs: object,
+    ) -> None:
+        nonlocal swapped
+        target = Path(path)
+        if target == package_dir:
+            original_replace(package_dir, displaced_dir)
+            original_replace(foreign_dir, package_dir)
+            swapped = True
+        original_rmtree(path, *args, **kwargs)
+
+    monkeypatch.setattr(
+        article_standard_module.shutil,
+        "rmtree",
+        replace_before_recursive_remove,
+    )
+
+    removed = article_standard_module._remove_owned_article_package_path(
+        package_dir,
+        owner=owner,
+    )
+
+    assert removed is True
+    assert swapped is False
+    assert not package_dir.exists()
+    assert not displaced_dir.exists()
+    assert (foreign_dir / "owner.txt").read_text(encoding="utf-8") == (
+        "foreign package"
+    )
+
+
+def test_owned_article_package_removal_restores_replacement_claimed_during_rename(
+    monkeypatch: Any,
+    tmp_path: Path,
+) -> None:
+    package_dir = tmp_path / "package"
+    foreign_dir = tmp_path / ".package.foreign"
+    displaced_dir = tmp_path / ".package.displaced-owner"
+    package_dir.mkdir()
+    foreign_dir.mkdir()
+    (package_dir / "owner.txt").write_text("owned package", encoding="utf-8")
+    (foreign_dir / "owner.txt").write_text("foreign package", encoding="utf-8")
+    owner = article_standard_module._path_device_inode(package_dir)
+    assert owner is not None
+    original_rename = article_standard_module.os.rename
+    original_replace = article_standard_module.os.replace
+    swapped = False
+
+    def replace_before_claim(
+        source: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+        target: str | bytes | os.PathLike[str] | os.PathLike[bytes],
+    ) -> None:
+        nonlocal swapped
+        if Path(source) == package_dir and not swapped:
+            original_replace(package_dir, displaced_dir)
+            original_replace(foreign_dir, package_dir)
+            swapped = True
+        original_rename(source, target)
+
+    monkeypatch.setattr(
+        article_standard_module.os,
+        "rename",
+        replace_before_claim,
+    )
+
+    removed = article_standard_module._remove_owned_article_package_path(
+        package_dir,
+        owner=owner,
+    )
+
+    assert removed is False
+    assert swapped is True
+    assert (package_dir / "owner.txt").read_text(encoding="utf-8") == (
+        "foreign package"
+    )
+    assert (displaced_dir / "owner.txt").read_text(encoding="utf-8") == (
+        "owned package"
+    )
+    assert not list(tmp_path.glob(".*.remove-claim-*"))
+
+
+@pytest.mark.parametrize(
+    "failure",
+    [PermissionError("delete blocked"), KeyboardInterrupt()],
+    ids=["os-error", "base-exception"],
+)
+def test_owned_article_package_removal_restores_claim_when_delete_fails(
+    monkeypatch: Any,
+    tmp_path: Path,
+    failure: BaseException,
+) -> None:
+    package_dir = tmp_path / "package"
+    package_dir.mkdir()
+    (package_dir / "owner.txt").write_text("owned package", encoding="utf-8")
+    owner = article_standard_module._path_device_inode(package_dir)
+    assert owner is not None
+
+    def fail_recursive_remove(*_args: object, **_kwargs: object) -> None:
+        raise failure
+
+    monkeypatch.setattr(
+        article_standard_module.shutil,
+        "rmtree",
+        fail_recursive_remove,
+    )
+
+    with pytest.raises(type(failure)):
+        article_standard_module._remove_owned_article_package_path(
+            package_dir,
+            owner=owner,
+        )
+
+    assert article_standard_module._path_device_inode(package_dir) == owner
+    assert (package_dir / "owner.txt").read_text(encoding="utf-8") == ("owned package")
+    assert not list(tmp_path.glob(".*.remove-claim-*"))
+
+
+def test_owned_article_package_removal_rejects_silent_delete_noop(
+    monkeypatch: Any,
+    tmp_path: Path,
+) -> None:
+    package_dir = tmp_path / "package"
+    package_dir.mkdir()
+    (package_dir / "owner.txt").write_text("owned package", encoding="utf-8")
+    owner = article_standard_module._path_device_inode(package_dir)
+    assert owner is not None
+
+    monkeypatch.setattr(
+        article_standard_module.shutil,
+        "rmtree",
+        lambda *_args, **_kwargs: None,
+    )
+
+    with pytest.raises(OSError, match="did not remove its owned claim"):
+        article_standard_module._remove_owned_article_package_path(
+            package_dir,
+            owner=owner,
+        )
+
+    assert article_standard_module._path_device_inode(package_dir) == owner
+    assert (package_dir / "owner.txt").read_text(encoding="utf-8") == ("owned package")
+    assert not list(tmp_path.glob(".*.remove-claim-*"))
+
+
+def test_owned_article_package_removal_preserves_claim_when_restore_is_occupied(
+    monkeypatch: Any,
+    tmp_path: Path,
+) -> None:
+    package_dir = tmp_path / "package"
+    package_dir.mkdir()
+    (package_dir / "owner.txt").write_text("owned package", encoding="utf-8")
+    owner = article_standard_module._path_device_inode(package_dir)
+    assert owner is not None
+
+    def fail_after_competing_package_appears(
+        *_args: object,
+        **_kwargs: object,
+    ) -> None:
+        package_dir.mkdir()
+        (package_dir / "owner.txt").write_text(
+            "competing package",
+            encoding="utf-8",
+        )
+        raise PermissionError("delete blocked")
+
+    monkeypatch.setattr(
+        article_standard_module.shutil,
+        "rmtree",
+        fail_after_competing_package_appears,
+    )
+
+    with pytest.raises(PermissionError, match="delete blocked") as captured:
+        article_standard_module._remove_owned_article_package_path(
+            package_dir,
+            owner=owner,
+        )
+
+    assert (package_dir / "owner.txt").read_text(encoding="utf-8") == (
+        "competing package"
+    )
+    claims = list(tmp_path.glob(".*.remove-claim-*"))
+    assert len(claims) == 1
+    claim_path = claims[0]
+    assert article_standard_module._path_device_inode(claim_path) == owner
+    assert (claim_path / "owner.txt").read_text(encoding="utf-8") == ("owned package")
+    notes = getattr(captured.value, "__notes__", [])
+    assert any(str(claim_path) in note and str(package_dir) in note for note in notes)

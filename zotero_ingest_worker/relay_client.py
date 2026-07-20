@@ -11,8 +11,10 @@ from typing import Any
 from .local_zotero import LocalAttachment, LocalItemMetadata
 
 
+MAX_RELAY_RESPONSE_BYTES = 8_000_000
 _TRANSIENT_HTTP_STATUSES = {207, 408, 429, 500, 502, 503, 504}
 _TRANSIENT_RELAY_CODES = {
+    "RELAY_RESPONSE_READ_FAILED",
     "WEB_API_REQUEST_FAILED",
     "WEBDAV_REQUEST_FAILED",
 }
@@ -54,7 +56,9 @@ class ZoteroRelayClient:
         if token:
             headers["Authorization"] = f"Bearer {token}"
         timeout = int(getattr(self.config, "request_timeout_seconds", 300) or 300)
-        attempts = max(1, int(getattr(self.config, "zotero_relay_request_attempts", 3) or 3))
+        attempts = max(
+            1, int(getattr(self.config, "zotero_relay_request_attempts", 3) or 3)
+        )
         retry_delay = max(
             0.0,
             float(getattr(self.config, "zotero_relay_retry_delay_seconds", 2.0) or 0.0),
@@ -64,29 +68,27 @@ class ZoteroRelayClient:
         for attempt in range(attempts):
             result: dict[str, Any] | None = None
             for index, url in enumerate(urls):
-                request = urllib.request.Request(url, data=data, headers=headers, method=method)
+                request = urllib.request.Request(
+                    url, data=data, headers=headers, method=method
+                )
                 try:
                     with urllib.request.urlopen(request, timeout=timeout) as response:
-                        result = json.loads(response.read().decode("utf-8"))
+                        result = _read_relay_result(response)
                     break
                 except urllib.error.HTTPError as exc:
-                    raw = exc.read()
-                    try:
-                        result = json.loads(raw.decode("utf-8"))
-                    except Exception:
-                        result = {"ok": False, "error": raw.decode("utf-8", errors="replace")}
+                    result = _read_relay_result(exc, http_status=exc.code)
                     last_error = RuntimeError(f"{error_label} failed: {result}")
                     if exc.code in _TRANSIENT_HTTP_STATUSES and attempt + 1 < attempts:
                         break
                     raise last_error from exc
-                except urllib.error.URLError as exc:
+                except (urllib.error.URLError, TimeoutError) as exc:
                     last_error = RuntimeError(f"{error_label} failed: {exc}")
                     if index + 1 < len(urls):
                         continue
                     if attempt + 1 < attempts:
                         break
                     raise last_error from exc
-            if result is not None and result.get("ok"):
+            if result is not None and result.get("ok") is True:
                 return result
             if result is not None:
                 last_error = RuntimeError(f"{error_label} failed: {result}")
@@ -106,7 +108,21 @@ class ZoteroRelayClient:
         content_type: str,
         probe_attachment_key: str | None,
         dedupe_prefix: str,
+        source_sha256: str | None = None,
     ) -> dict[str, Any]:
+        digest: str | None = None
+        if source_sha256 is None:
+            source_stat = source_path.stat()
+            source_identity = f"{source_stat.st_size}:{source_stat.st_mtime_ns}"
+        else:
+            digest = source_sha256.strip().casefold()
+            if len(digest) != 64 or any(
+                character not in "0123456789abcdef" for character in digest
+            ):
+                raise ValueError(
+                    "source_sha256 must be a 64-character hexadecimal digest"
+                )
+            source_identity = f"sha256:{digest}"
         payload = {
             "sourcePath": str(source_path),
             "filename": filename,
@@ -116,9 +132,11 @@ class ZoteroRelayClient:
             "probeAttachmentKey": probe_attachment_key or "",
             "deduplicationKey": (
                 f"{dedupe_prefix}:{metadata.library_id}:{metadata.key}:"
-                f"{source_path.stat().st_size}:{source_path.stat().st_mtime_ns}"
+                f"{source_identity}"
             ),
         }
+        if digest is not None:
+            payload["sourceSha256"] = digest
         return self.request_json(
             method="POST",
             path=f"/attachments/parents/{urllib.parse.quote(metadata.key, safe='')}/attachments/file",
@@ -139,7 +157,9 @@ class ZoteroRelayClient:
     ) -> dict[str, Any]:
         if deduplication_key is None:
             if arxiv_id is None:
-                raise ValueError("create_html_sibling requires arxiv_id or deduplication_key.")
+                raise ValueError(
+                    "create_html_sibling requires arxiv_id or deduplication_key."
+                )
             deduplication_key = (
                 f"arxiv-html-sibling:{attachment.state_key}:{arxiv_id}:"
                 f"{source_path.stat().st_mtime_ns}"
@@ -276,3 +296,95 @@ def _sleep_before_retry(base_delay: float, attempt: int) -> None:
     if base_delay <= 0:
         return
     time.sleep(base_delay * (2**attempt))
+
+
+def _relay_response_error(
+    code: str,
+    message: str,
+    *,
+    details: dict[str, object],
+) -> dict[str, Any]:
+    return {
+        "ok": False,
+        "error": {
+            "code": code,
+            "message": message,
+            "details": details,
+        },
+    }
+
+
+def _read_relay_result(
+    stream: Any,
+    *,
+    http_status: int | None = None,
+) -> dict[str, Any]:
+    details: dict[str, object] = {}
+    if http_status is not None:
+        details["httpStatus"] = http_status
+    try:
+        raw = stream.read(MAX_RELAY_RESPONSE_BYTES + 1)
+    except Exception as exc:
+        details["type"] = type(exc).__name__
+        return _relay_response_error(
+            "RELAY_RESPONSE_READ_FAILED",
+            "Relay response body could not be read.",
+            details=details,
+        )
+    if not isinstance(raw, (bytes, bytearray)):
+        details["type"] = type(raw).__name__
+        return _relay_response_error(
+            "INVALID_RELAY_RESPONSE",
+            "Relay response body must be bytes.",
+            details=details,
+        )
+    body = bytes(raw)
+    if len(body) > MAX_RELAY_RESPONSE_BYTES:
+        details.update(
+            {
+                "maxBytes": MAX_RELAY_RESPONSE_BYTES,
+                "receivedAtLeast": len(body),
+            }
+        )
+        return _relay_response_error(
+            "RELAY_RESPONSE_TOO_LARGE",
+            "Relay response body exceeds the configured safety limit.",
+            details=details,
+        )
+    return _decoded_relay_result(body, http_status=http_status)
+
+
+def _decoded_relay_result(
+    raw: bytes,
+    *,
+    http_status: int | None = None,
+) -> dict[str, Any]:
+    try:
+        value = json.loads(raw.decode("utf-8"))
+    except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as exc:
+        details: dict[str, object] = {"type": type(exc).__name__}
+        if http_status is not None:
+            details["httpStatus"] = http_status
+        return _relay_response_error(
+            "INVALID_RELAY_RESPONSE",
+            "Relay response body is not valid UTF-8 JSON.",
+            details=details,
+        )
+    return _normalized_relay_result(value)
+
+
+def _normalized_relay_result(value: object) -> dict[str, Any]:
+    if isinstance(value, dict) and (
+        value.get("ok") is True or value.get("ok") is False
+    ):
+        return value
+    return {
+        "ok": False,
+        "error": {
+            "code": "INVALID_RELAY_RESPONSE",
+            "message": "Relay response must be a mapping with a boolean ok field.",
+            "details": {
+                "type": type(value).__name__,
+            },
+        },
+    }
